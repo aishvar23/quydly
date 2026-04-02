@@ -1,6 +1,6 @@
 import "react-native-url-polyfill/auto";
-import { useState, useEffect, Platform } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { useState, useEffect } from "react";
+import { View, Text, StyleSheet, Platform } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, PlayfairDisplay_900Black } from "@expo-google-fonts/playfair-display";
 import { JetBrainsMono_700Bold, JetBrainsMono_400Regular } from "@expo-google-fonts/jetbrains-mono";
