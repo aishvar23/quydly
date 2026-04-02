@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Quydly",
+    "slug": "quydly",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "backgroundColor": "#0c0b09",
+    "statusBar": {
+      "style": "light",
+      "backgroundColor": "#0c0b09"
+    },
+    "web": {
+      "bundler": "metro",
+      "backgroundColor": "#0c0b09"
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}

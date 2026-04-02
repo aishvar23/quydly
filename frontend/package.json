@@ -1,0 +1,28 @@
+{
+  "name": "quydly-frontend",
+  "version": "1.0.0",
+  "main": "App.jsx",
+  "scripts": {
+    "start":   "expo start",
+    "android": "expo start --android",
+    "ios":     "expo start --ios",
+    "web":     "expo start --web"
+  },
+  "dependencies": {
+    "@expo-google-fonts/jetbrains-mono":  "^0.2.2",
+    "@expo-google-fonts/lato":            "^0.2.2",
+    "@expo-google-fonts/playfair-display":"^0.2.2",
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "@supabase/supabase-js":              "^2.39.0",
+    "expo":                               "~51.0.28",
+    "expo-font":                          "~12.0.10",
+    "expo-splash-screen":                 "~0.27.5",
+    "expo-status-bar":                    "~1.12.1",
+    "react":                              "18.2.0",
+    "react-native":                       "0.74.5",
+    "react-native-url-polyfill":          "^2.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  }
+}
