@@ -1,12 +1,14 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
 
 const express = require("express");
+const cors = require("cors");
 
 const questionsRouter = require("./routes/questions");
 const completeRouter = require("./routes/complete");
 const stripeRouter = require("./routes/stripe");
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 app.use("/api/questions", questionsRouter);
