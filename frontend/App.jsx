@@ -1,8 +1,7 @@
 import "react-native-url-polyfill/auto";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, Platform } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import * as SplashScreen from "expo-splash-screen";
 import { useFonts, PlayfairDisplay_900Black } from "@expo-google-fonts/playfair-display";
 import { JetBrainsMono_700Bold, JetBrainsMono_400Regular } from "@expo-google-fonts/jetbrains-mono";
 import { Lato_400Regular, Lato_300Light } from "@expo-google-fonts/lato";
@@ -14,13 +13,14 @@ import QuestionScreen from "./screens/QuestionScreen";
 import { getActiveStrategy } from "./services/contentStrategy";
 import FLAGS from "../config/flags";
 
-SplashScreen.preventAutoHideAsync();
-
 // ── Supabase client ───────────────────────────────────────────────────────────
+// AsyncStorage works on native; web falls back to localStorage via Supabase's default
 const supabase = createClient(
   process.env.EXPO_PUBLIC_SUPABASE_URL,
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
-  { auth: { storage: AsyncStorage, autoRefreshToken: true, persistSession: true } }
+  Platform.OS === "web"
+    ? {}
+    : { auth: { storage: AsyncStorage, autoRefreshToken: true, persistSession: true } }
 );
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:3000";
@@ -35,10 +35,6 @@ export default function App() {
     "Lato-Regular":           Lato_400Regular,
     "Lato-Light":             Lato_300Light,
   });
-
-  const onLayoutRootView = useCallback(async () => {
-    if (fontsLoaded || fontError) await SplashScreen.hideAsync();
-  }, [fontsLoaded, fontError]);
 
   // Auth
   const [session, setSession] = useState(null);
@@ -159,10 +155,9 @@ export default function App() {
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  if (!fontsLoaded && !fontError) return null;
-
+  // Render immediately — fonts swap in once loaded, no blank screen
   return (
-    <View style={styles.root} onLayout={onLayoutRootView}>
+    <View style={styles.root}>
       <StatusBar style="light" backgroundColor="#0c0b09" />
 
       {screen === "loading" && (
