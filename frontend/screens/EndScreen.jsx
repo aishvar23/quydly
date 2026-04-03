@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
+import SaveStreakModal from "../components/SaveStreakModal";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -115,7 +116,7 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, results, strategy, streak, rank, onPlayAgain }) {
+export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -202,5 +203,13 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
         </TouchableOpacity>
       </View>
     </ScrollView>
+
+    <SaveStreakModal
+      visible={!!promptSaveStreak}
+      streak={streak}
+      supabase={supabase}
+      onSuccess={onStreakSaved}
+      onDismiss={onStreakSaved}
+    />
   );
 }

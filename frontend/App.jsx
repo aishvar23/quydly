@@ -49,8 +49,9 @@ export default function App() {
   const [streak,      setStreak]      = useState(0);
   const [results,     setResults]     = useState([]);
   const [credits,     setCredits]     = useState(FLAGS.freeQuestionsPerDay);
-  const [loadError,   setLoadError]   = useState(null);
-  const [endRank,     setEndRank]     = useState(null);
+  const [loadError,        setLoadError]        = useState(null);
+  const [endRank,          setEndRank]          = useState(null);
+  const [promptSaveStreak, setPromptSaveStreak] = useState(false);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -134,7 +135,7 @@ export default function App() {
           if (data.streak !== undefined) setStreak(data.streak);
           if (data.totalPoints !== undefined) setPoints(data.totalPoints);
           if (data.rank !== undefined) setEndRank(data.rank);
-          // TODO: data.promptSaveStreak → "Save your streak" modal once Google OAuth is enabled
+          if (data.promptSaveStreak) setPromptSaveStreak(true);
         } catch {
           // non-fatal
         }
@@ -180,6 +181,9 @@ export default function App() {
       {screen === "gate" && (
         <GateScreen
           onReset={() => { setCredits(FLAGS.freeQuestionsPerDay); setScreen("home"); }}
+          promptSaveStreak={promptSaveStreak}
+          supabase={supabase}
+          onStreakSaved={() => setPromptSaveStreak(false)}
         />
       )}
 
@@ -191,7 +195,10 @@ export default function App() {
           strategy={strategy}
           streak={streak}
           rank={endRank}
-          onPlayAgain={() => { setScreen("home"); setResults([]); setEndRank(null); }}
+          promptSaveStreak={promptSaveStreak}
+          supabase={supabase}
+          onStreakSaved={() => setPromptSaveStreak(false)}
+          onPlayAgain={() => { setScreen("home"); setResults([]); setEndRank(null); setPromptSaveStreak(false); }}
         />
       )}
 
