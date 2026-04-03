@@ -39,7 +39,7 @@ function makeStyles(scale) {
   const s = (v) => v * scale;
   return {
     container: { flex: 1, backgroundColor: T.ink },
-    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingBottom: s(80) },
+    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(22), paddingBottom: s(80) },
 
     // ProgressBar
     progressWrap:   { marginBottom: s(22) },
