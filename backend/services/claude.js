@@ -1,4 +1,4 @@
-const Anthropic = require("@anthropic-ai/sdk");
+import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -10,7 +10,7 @@ const REQUIRED_KEYS = ["question", "options", "correctIndex", "tldr", "categoryI
  * @param {string} categoryId  — e.g. "world", "tech"
  * @returns {Promise<{ question, options, correctIndex, tldr, categoryId }>}
  */
-async function generateQuestion(headline, categoryId) {
+export async function generateQuestion(headline, categoryId) {
   const prompt = `You are a witty news quiz writer for Quydly, a daily news game.
 
 Generate ONE multiple-choice question about this real news story:
@@ -46,7 +46,6 @@ Respond ONLY with valid JSON, no markdown:
     throw new Error(`Claude returned invalid JSON for category "${categoryId}": ${raw}`);
   }
 
-  // Validate shape
   for (const key of REQUIRED_KEYS) {
     if (parsed[key] === undefined) {
       throw new Error(`Claude response missing field "${key}" for category "${categoryId}"`);
@@ -61,5 +60,3 @@ Respond ONLY with valid JSON, no markdown:
 
   return parsed;
 }
-
-module.exports = { generateQuestion };

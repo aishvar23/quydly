@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "crons": [
+    {
+      "path": "/api/cron/generate",
+      "schedule": "0 7 * * *"
+    }
+  ]
+}

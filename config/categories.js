@@ -8,4 +8,4 @@ const CATEGORIES = [
 
 const EDITORIAL_MIX = { world: 2, tech: 1, finance: 1, culture: 1 };
 
-module.exports = { CATEGORIES, EDITORIAL_MIX };
+export { CATEGORIES, EDITORIAL_MIX };

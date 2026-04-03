@@ -1,11 +1,14 @@
-require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
 
-const express = require("express");
-const cors = require("cors");
+dotenv.config({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
 
-const questionsRouter = require("./routes/questions");
-const completeRouter = require("./routes/complete");
-const stripeRouter = require("./routes/stripe");
+import express from "express";
+import cors from "cors";
+import questionsRouter from "./routes/questions.js";
+import completeRouter from "./routes/complete.js";
+import stripeRouter from "./routes/stripe.js";
 
 const app = express();
 app.use(cors());
@@ -20,4 +23,4 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 const PORT = process.env.PORT ?? 3000;
 app.listen(PORT, () => console.log(`[quydly] server running on port ${PORT}`));
 
-module.exports = app;
+export default app;

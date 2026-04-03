@@ -7,4 +7,4 @@ const FLAGS = {
   freeQuestionsPerDay:    5,
   premiumQuestionsPerDay: 10,
 };
-module.exports = FLAGS;
+export default FLAGS;

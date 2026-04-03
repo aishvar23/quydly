@@ -1,16 +1,13 @@
-import { Router } from "express";
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { generateDaily } from "../jobs/generateDaily.js";
+import { generateDaily } from "../backend/jobs/generateDaily.js";
 
-const router = Router();
+function todayDate() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+}
 
 function redisKey(date) {
   return `questions:${date}`;
-}
-
-function todayDate() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function buildRedis() {
@@ -24,10 +21,13 @@ function buildSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 }
 
-// GET /api/questions
-router.get("/", async (req, res) => {
-  const date = todayDate();
-  const redis = buildRedis();
+export default async function handler(req, res) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const date     = todayDate();
+  const redis    = buildRedis();
   const supabase = buildSupabase();
 
   try {
@@ -54,17 +54,20 @@ router.get("/", async (req, res) => {
       .single();
 
     if (!error && data) {
-      return res.json({ date, questions: data.questions, generatedAt: data.generated_at, source: "supabase" });
+      return res.json({
+        date,
+        questions:   data.questions,
+        generatedAt: data.generated_at,
+        source:      "supabase",
+      });
     }
 
-    // 3. Generate on-demand (shouldn't happen in normal flow)
+    // 3. Generate on-demand (cache miss — shouldn't happen in normal flow)
     console.warn("[GET /api/questions] cache miss — generating on demand");
     const questions = await generateDaily();
     return res.json({ date, questions, generatedAt: new Date().toISOString(), source: "generated" });
   } catch (err) {
-    console.error("[GET /api/questions]", err);
-    res.status(500).json({ error: "Failed to retrieve questions" });
+    console.error("[GET /api/questions]", err.message);
+    return res.status(500).json({ error: "Failed to retrieve questions" });
   }
-});
-
-export default router;
+}
