@@ -9,7 +9,6 @@ async function fetchHeadline(newsDataTag) {
   url.searchParams.set("apikey", process.env.NEWSDATA_API_KEY);
   url.searchParams.set("language", "en");
   url.searchParams.set("category", newsDataTag);
-  url.searchParams.set("timeframe", "24");
 
   const res = await fetch(url.toString());
   if (!res.ok) {
