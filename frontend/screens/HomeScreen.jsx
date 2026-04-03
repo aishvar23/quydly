@@ -25,7 +25,7 @@ const FONT = {
 };
 
 const MAX_WIDTH = 900;
-const BASE_WIDTH = 480;
+const BASE_WIDTH = 600;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getEditionNumber() {

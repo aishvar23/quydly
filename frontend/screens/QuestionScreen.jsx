@@ -32,7 +32,7 @@ const FONT = {
 const LETTERS   = ["A", "B", "C", "D"];
 const WAGERS    = [10, 25, 50, 100];
 const MAX_WIDTH  = 900;
-const BASE_WIDTH = 480;
+const BASE_WIDTH = 600;
 
 // ── Scaled styles ─────────────────────────────────────────────────────────────
 function makeStyles(scale) {
