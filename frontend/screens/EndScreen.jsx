@@ -1,7 +1,7 @@
-import { useRef, useEffect, useMemo } from "react";
+import { useRef, useEffect, useMemo, useState } from "react";
 import {
   View, Text, TouchableOpacity, ScrollView,
-  Animated, useWindowDimensions, Clipboard,
+  Animated, useWindowDimensions,
 } from "react-native";
 import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
@@ -81,8 +81,9 @@ function makeStyles(scale) {
     streakNote: { textAlign: "center", marginBottom: s(14), fontFamily: FONT.body, fontSize: s(13), color: T.amber },
 
     // Buttons
-    shareBtn:     { width: "100%", paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(11), alignItems: "center", marginBottom: s(10) },
-    shareBtnText: { fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
+    shareBtn:         { width: "100%", paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(11), alignItems: "center", marginBottom: s(10) },
+    shareBtnCopied:   { width: "100%", paddingVertical: s(14), backgroundColor: T.green, borderRadius: s(11), alignItems: "center", marginBottom: s(10) },
+    shareBtnText:     { fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
     playAgainBtn:     { width: "100%", paddingVertical: s(12), backgroundColor: "transparent", borderWidth: 1, borderColor: T.border2, borderRadius: s(11), alignItems: "center" },
     playAgainBtnText: { fontFamily: FONT.mono, fontSize: s(11), fontWeight: "700", color: T.muted, letterSpacing: s(0.5) },
   };
@@ -119,6 +120,7 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
   const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
+  const [copied, setCopied] = useState(false);
   const grade   = getGrade(score, maxScore);
   const mix     = strategy.getCategoryMix();
   const total   = Object.values(mix).reduce((a, b) => a + b, 0);
@@ -131,11 +133,19 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
   const handleShare = () => {
     const emoji = results.map((r) => (r.correct ? "🟨" : "⬛")).join("");
     const text  = `Quydly — Edition #${getEditionNumber()}\n${grade.emoji} ${grade.label} | ${score} pts\n${emoji}\nBeaten ${beatenPct}% of readers today`;
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(text).catch(() => {});
-    } else {
-      Clipboard.setString(text);
-    }
+
+    // Fallback that works on http://localhost and all browsers
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "absolute";
+    el.style.left = "-9999px";
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -184,8 +194,8 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
         )}
 
         {/* Buttons */}
-        <TouchableOpacity style={styles.shareBtn} onPress={handleShare} activeOpacity={0.85}>
-          <Text style={styles.shareBtnText}>Share My Score →</Text>
+        <TouchableOpacity style={copied ? styles.shareBtnCopied : styles.shareBtn} onPress={handleShare} activeOpacity={0.85}>
+          <Text style={styles.shareBtnText}>{copied ? "Copied! ✓" : "Share My Score →"}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.playAgainBtn} onPress={onPlayAgain} activeOpacity={0.7}>
           <Text style={styles.playAgainBtnText}>↺ Play Again</Text>
