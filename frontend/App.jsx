@@ -11,6 +11,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import HomeScreen from "./screens/HomeScreen";
 import QuestionScreen from "./screens/QuestionScreen";
 import EndScreen from "./screens/EndScreen";
+import GateScreen from "./screens/GateScreen";
 import { getActiveStrategy } from "./services/contentStrategy";
 import FLAGS from "../config/flags";
 
@@ -84,7 +85,7 @@ export default function App() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
   const handleStart = async () => {
-    if (credits <= 0) return; // TODO: GateScreen
+    if (credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
@@ -173,6 +174,12 @@ export default function App() {
           streak={streak}
           points={points}
           answered={results.length}
+        />
+      )}
+
+      {screen === "gate" && (
+        <GateScreen
+          onReset={() => { setCredits(FLAGS.freeQuestionsPerDay); setScreen("home"); }}
         />
       )}
 
