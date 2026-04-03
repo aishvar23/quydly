@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
     backgroundColor: T.ink,
   },
   content: {
-    maxWidth: 600,
+    maxWidth: 900,
     alignSelf: "center",
     width: "100%",
     paddingHorizontal: 20,
