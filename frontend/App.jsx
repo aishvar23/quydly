@@ -10,6 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import HomeScreen from "./screens/HomeScreen";
 import QuestionScreen from "./screens/QuestionScreen";
+import EndScreen from "./screens/EndScreen";
 import { getActiveStrategy } from "./services/contentStrategy";
 import FLAGS from "../config/flags";
 
@@ -48,6 +49,7 @@ export default function App() {
   const [results,     setResults]     = useState([]);
   const [credits,     setCredits]     = useState(FLAGS.freeQuestionsPerDay);
   const [loadError,   setLoadError]   = useState(null);
+  const [endRank,     setEndRank]     = useState(null);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -130,13 +132,13 @@ export default function App() {
           const data = await resp.json();
           if (data.streak !== undefined) setStreak(data.streak);
           if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+          if (data.rank !== undefined) setEndRank(data.rank);
           // TODO: data.promptSaveStreak → "Save your streak" modal once Google OAuth is enabled
-          // TODO: navigate to EndScreen
         } catch {
           // non-fatal
         }
       }
-      setScreen("home"); // temporary until EndScreen is built
+      setScreen("end");
     } else {
       setCurrentQ((q) => q + 1);
       setAnswered(false);
@@ -171,6 +173,18 @@ export default function App() {
           streak={streak}
           points={points}
           answered={results.length}
+        />
+      )}
+
+      {screen === "end" && (
+        <EndScreen
+          score={results.reduce((acc, r) => acc + Math.max(0, r.delta), 0)}
+          maxScore={FLAGS.freeQuestionsPerDay * 100}
+          results={results}
+          strategy={strategy}
+          streak={streak}
+          rank={endRank}
+          onPlayAgain={() => { setScreen("home"); setResults([]); setEndRank(null); }}
         />
       )}
 
