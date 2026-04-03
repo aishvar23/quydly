@@ -271,7 +271,7 @@ export default function QuestionScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: T.ink },
   content: {
-    maxWidth: 480,
+    maxWidth: 600,
     alignSelf: "center",
     width: "100%",
     paddingHorizontal: 20,
