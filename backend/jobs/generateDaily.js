@@ -7,7 +7,7 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { CATEGORIES, EDITORIAL_MIX } from "../../config/categories.js";
+import { CATEGORIES, SESSION_MIX, TOTAL_SESSIONS } from "../../config/categories.js";
 import { fetchHeadline } from "../services/newsdata.js";
 import { generateQuestion } from "../services/claude.js";
 
@@ -26,12 +26,16 @@ function buildSupabaseClient() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Interleave by session so every slice of SESSION_SIZE matches SESSION_MIX.
+// e.g. [world, world, tech, finance, culture] × TOTAL_SESSIONS
 function buildCategoryQueue() {
   const byId = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
   const queue = [];
-  for (const [id, count] of Object.entries(EDITORIAL_MIX)) {
-    for (let i = 0; i < count; i++) {
-      queue.push(byId[id]);
+  for (let s = 0; s < TOTAL_SESSIONS; s++) {
+    for (const [id, count] of Object.entries(SESSION_MIX)) {
+      for (let i = 0; i < count; i++) {
+        queue.push(byId[id]);
+      }
     }
   }
   return queue;

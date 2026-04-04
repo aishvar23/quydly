@@ -68,3 +68,5 @@ quydly/
 - Scaffold full structure first, implement second
 - Run `npm run lint` and fix all errors before marking any task done
 - All env vars via `.env` — never hardcode keys
+- **Never assume** — if anything is unclear or ambiguous, ask before proceeding
+- **Fail loudly** — if anything fails or errors during a task, stop and report it before doing anything beyond what was asked
