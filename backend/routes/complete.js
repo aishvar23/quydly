@@ -77,8 +77,8 @@ router.post("/", async (req, res) => {
       return res.json({ allCaughtUp: true });
     }
 
-    const sessionIndex        = sessionsCompleted;
-    const newTotalScore       = prevTotalScore + score;
+    const sessionIndex         = sessionsCompleted;
+    const newTotalScore        = prevTotalScore + score;
     const newSessionsCompleted = sessionsCompleted + 1;
 
     // Store session details
@@ -88,29 +88,31 @@ router.post("/", async (req, res) => {
     );
     if (compErr) return res.status(500).json({ error: "Failed to record session" });
 
-    // Update daily progress
+    // Update daily progress — do this before touching the users table so the
+    // session index always advances even if the user row lookup below fails.
     const { error: progressErr } = await supabase.from("user_daily_progress").upsert(
       { user_id: userId, date: today, sessions_completed: newSessionsCompleted, total_score: newTotalScore },
       { onConflict: "user_id,date" }
     );
     if (progressErr) return res.status(500).json({ error: "Failed to update progress" });
 
-    // Update streak + lifetime points on users table (streak is idempotent per day)
-    const { data: user, error: userErr } = await supabase
+    // Update streak + lifetime points. Use upsert so new users (where the DB
+    // trigger hasn't fired yet) are created rather than silently dropped.
+    const { data: user } = await supabase
       .from("users")
       .select("streak, last_played, total_points")
       .eq("id", userId)
       .single();
 
-    if (userErr || !user) return res.status(404).json({ error: "User not found" });
-
-    const newStreak     = updateStreak(user, today);
-    const lifetimePoints = user.total_points + score;
+    const newStreak      = user ? updateStreak(user, today) : 1;
+    const lifetimePoints = (user?.total_points ?? 0) + score;
 
     await supabase
       .from("users")
-      .update({ streak: newStreak, last_played: today, total_points: lifetimePoints })
-      .eq("id", userId);
+      .upsert(
+        { id: userId, streak: newStreak, last_played: today, total_points: lifetimePoints },
+        { onConflict: "id" }
+      );
 
     // Global rank by lifetime points
     const { count, error: rankErr } = await supabase

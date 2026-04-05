@@ -125,9 +125,9 @@ export default function App() {
   const [showLoginModal,   setShowLoginModal]   = useState(false);
   const [authBanner,       setAuthBanner]       = useState(null); // first name string
 
-  // Ref so auth state change callback can read the latest results without stale closure
-  const resultsRef = useRef([]);
-  useEffect(() => { resultsRef.current = results; }, [results]);
+  // Captures the results from the session that triggered "Play more" sign-in.
+  // Set synchronously (not via useEffect) so it's ready before any auth callback fires.
+  const pendingSessionResultsRef = useRef([]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -148,7 +148,12 @@ export default function App() {
           if (s) setScreen(s);
           if (Array.isArray(r) && r.length) setResults(r);
           if (er != null) setEndRank(er);
-          if (ppa) setPendingPlayAgain(true);
+          if (ppa) {
+            setPendingPlayAgain(true);
+            // Populate ref synchronously so the auth callback can read it immediately,
+            // before React has committed the setResults(r) state update above.
+            pendingSessionResultsRef.current = Array.isArray(r) ? r : [];
+          }
         } catch {}
       }
     }
@@ -188,7 +193,9 @@ export default function App() {
           if (ppa) {
             setEndRank(null);
             setPromptSaveStreak(false);
-            handleSignInAndContinue(resultsRef.current, s);
+            const prevResults = pendingSessionResultsRef.current;
+            pendingSessionResultsRef.current = [];
+            handleSignInAndContinue(prevResults, s);
             return false;
           }
           return ppa;
@@ -234,24 +241,23 @@ export default function App() {
   // Records the just-completed session for the new authenticated user, then
   // immediately fetches the next session of questions.
   const handleSignInAndContinue = async (prevResults, authSession) => {
-    // 1. Backfill the completed session for the new authenticated user
-    if (prevResults.length > 0) {
-      const sessionScore = prevResults.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
-      try {
-        const resp = await fetch(`${API_BASE}/api/complete`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${authSession.access_token}`,
-          },
-          body: JSON.stringify({ score: sessionScore, results: prevResults }),
-        });
-        const data = await resp.json();
-        if (data.streak !== undefined) setStreak(data.streak);
-        if (data.totalPoints !== undefined) setPoints(data.totalPoints);
-      } catch {
-        // non-fatal — proceed anyway
-      }
+    // 1. Record session 0 for the new authenticated user to advance their session index.
+    //    Always call this — even if prevResults is empty — so sessions_completed increments.
+    const sessionScore = prevResults.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
+    try {
+      const resp = await fetch(`${API_BASE}/api/complete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authSession.access_token}`,
+        },
+        body: JSON.stringify({ score: sessionScore, results: prevResults }),
+      });
+      const data = await resp.json();
+      if (data.streak !== undefined) setStreak(data.streak);
+      if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+    } catch {
+      // non-fatal — proceed anyway
     }
 
     // 2. Reload user data (credits, streak, points) for the new user
@@ -428,9 +434,10 @@ export default function App() {
             if (pendingPlayAgain) {
               setPendingPlayAgain(false);
               setEndRank(null);
-              // session is now the authenticated session; loadUserData + fetch next session
+              const prevResults = pendingSessionResultsRef.current;
+              pendingSessionResultsRef.current = [];
               if (session) {
-                handleSignInAndContinue(resultsRef.current, session);
+                handleSignInAndContinue(prevResults, session);
               } else {
                 setScreen("home"); setResults([]);
               }
@@ -444,10 +451,15 @@ export default function App() {
           onPlayAgain={() => {
             const isAnon = session?.user?.is_anonymous ?? true;
             if (isAnon) {
+              // Capture results NOW, synchronously, before any async/redirect happens
+              pendingSessionResultsRef.current = results;
               setPendingPlayAgain(true);
               setPromptSaveStreak(true);
             } else {
-              setScreen("home"); setResults([]); setEndRank(null); setPromptSaveStreak(false);
+              // Already signed in — fetch the next session directly
+              handleSignInAndContinue([], session);
+              setEndRank(null);
+              setPromptSaveStreak(false);
             }
           }}
         />
