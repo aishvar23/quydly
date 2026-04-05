@@ -95,7 +95,7 @@ export default async function handler(req, res) {
     const rank = rankErr ? null : (count ?? 0) + 1;
 
     // promptSaveStreak: true → frontend shows "Save your streak — sign in with Google"
-    const promptSaveStreak = isAnonymous && newStreak >= 3;
+    const promptSaveStreak = isAnonymous && newStreak >= 1;
 
     return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
   } catch (err) {
