@@ -22,7 +22,7 @@ const FONT = {
 };
 
 const MAX_WIDTH  = 900;
-const BASE_WIDTH = 600;
+const BASE_WIDTH = 390;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getCountdown() {
@@ -39,7 +39,7 @@ function makeStyles(scale) {
   const s = (v) => v * scale;
   return {
     container: { flex: 1, backgroundColor: T.ink },
-    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(22), paddingBottom: s(80) },
+    content:   { flexGrow: 1, maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(16), paddingBottom: s(24) },
 
     card: { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), paddingVertical: s(32), paddingHorizontal: s(24), alignItems: "center" },
 
@@ -66,7 +66,7 @@ function makeStyles(scale) {
 //   onReset — () => void  (resets credits for demo)
 export default function GateScreen({ onReset, promptSaveStreak, supabase, onStreakSaved }) {
   const { width } = useWindowDimensions();
-  const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
+  const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
   const s = (v) => v * scale;
 

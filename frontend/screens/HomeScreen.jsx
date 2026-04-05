@@ -25,7 +25,7 @@ const FONT = {
 };
 
 const MAX_WIDTH = 900;
-const BASE_WIDTH = 600;
+const BASE_WIDTH = 390;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getEditionNumber() {
@@ -41,37 +41,37 @@ function makeStyles(scale) {
   const s = (v) => v * scale;
   return {
     container: { flex: 1, backgroundColor: T.ink },
-    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingBottom: s(80) },
+    content:   { flexGrow: 1, maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingBottom: s(24) },
 
     // Masthead
-    masthead:            { paddingTop: s(22), paddingBottom: s(16), borderBottomWidth: 1, borderBottomColor: T.border2, marginBottom: s(22), flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" },
+    masthead:            { paddingTop: s(16), paddingBottom: s(12), borderBottomWidth: 1, borderBottomColor: T.border2, marginBottom: s(14), flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" },
     mastheadEyebrow:     { fontFamily: FONT.mono,    fontSize: s(9),  letterSpacing: s(2),    textTransform: "uppercase", color: T.amber, marginBottom: s(4) },
-    mastheadTitle:       { fontFamily: FONT.display,  fontSize: s(28), lineHeight: s(28),      letterSpacing: -0.5 },
-    mastheadTitleAccent: { fontFamily: FONT.display,  fontSize: s(28), color: T.amber },
+    mastheadTitle:       { fontFamily: FONT.display,  fontSize: s(26), lineHeight: s(26),      letterSpacing: -0.5 },
+    mastheadTitleAccent: { fontFamily: FONT.display,  fontSize: s(26), color: T.amber },
     mastheadTagline:     { fontFamily: FONT.mono,    fontSize: s(9),  letterSpacing: s(1),    textTransform: "uppercase", color: T.muted, marginTop: s(2) },
-    streakBadge:         { backgroundColor: T.amber,  borderRadius: s(20), paddingHorizontal: s(11), paddingVertical: s(6) },
+    streakBadge:         { backgroundColor: T.amber,  borderRadius: s(20), paddingHorizontal: s(11), paddingVertical: s(5) },
     streakBadgeText:     { fontFamily: FONT.mono,    fontSize: s(11), fontWeight: "700", color: T.ink },
 
     // StatsBar
-    statsBar: { flexDirection: "row", gap: s(8), marginBottom: s(22) },
-    statChip: { flex: 1, backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(10), paddingVertical: s(12), paddingHorizontal: s(8), alignItems: "center" },
-    statVal:  { fontFamily: FONT.mono, fontSize: s(22), fontWeight: "700", color: T.amber, lineHeight: s(24) },
-    statLbl:  { fontFamily: FONT.body, fontSize: s(9),  textTransform: "uppercase", letterSpacing: s(1), color: T.muted, marginTop: s(4), fontWeight: "600" },
+    statsBar: { flexDirection: "row", gap: s(8), marginBottom: s(14) },
+    statChip: { flex: 1, backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(10), paddingVertical: s(10), paddingHorizontal: s(8), alignItems: "center" },
+    statVal:  { fontFamily: FONT.mono, fontSize: s(20), fontWeight: "700", color: T.amber, lineHeight: s(22) },
+    statLbl:  { fontFamily: FONT.body, fontSize: s(9),  textTransform: "uppercase", letterSpacing: s(1), color: T.muted, marginTop: s(3), fontWeight: "600" },
 
     // HomeCard
-    homeCard:     { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), paddingVertical: s(28), paddingHorizontal: s(24), alignItems: "center" },
-    homeEdition:  { fontFamily: FONT.mono,    fontSize: s(10), fontWeight: "600", letterSpacing: s(2), textTransform: "uppercase", color: T.amber, marginBottom: s(10) },
-    homeHeadline: { fontFamily: FONT.display,  fontSize: s(26), fontWeight: "900", lineHeight: s(33), color: T.cream, textAlign: "center", marginBottom: s(8) },
-    homeSub:      { fontFamily: FONT.body,    fontSize: s(13), color: T.muted, fontWeight: "300", textAlign: "center", lineHeight: s(20), marginBottom: s(24) },
+    homeCard:     { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), paddingVertical: s(22), paddingHorizontal: s(20), alignItems: "center" },
+    homeEdition:  { fontFamily: FONT.mono,    fontSize: s(10), fontWeight: "600", letterSpacing: s(2), textTransform: "uppercase", color: T.amber, marginBottom: s(8) },
+    homeHeadline: { fontFamily: FONT.display,  fontSize: s(24), fontWeight: "900", lineHeight: s(30), color: T.cream, textAlign: "center", marginBottom: s(6) },
+    homeSub:      { fontFamily: FONT.body,    fontSize: s(13), color: T.muted, fontWeight: "300", textAlign: "center", lineHeight: s(19), marginBottom: s(16) },
 
     // Mix pills
-    mixPreview:  { flexDirection: "row", flexWrap: "wrap", gap: s(7), justifyContent: "center", marginBottom: s(24) },
-    mixPill:     { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(5), paddingHorizontal: s(12) },
-    mixPillText: { fontFamily: FONT.body, fontSize: s(12), color: T.cream2 },
+    mixPreview:  { flexDirection: "row", flexWrap: "wrap", gap: s(6), justifyContent: "center", marginBottom: s(16) },
+    mixPill:     { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(4), paddingHorizontal: s(10) },
+    mixPillText: { fontFamily: FONT.body, fontSize: s(11), color: T.cream2 },
 
     // Start button
-    startBtn:     { width: "100%", paddingVertical: s(16), backgroundColor: T.amber, borderRadius: s(12), alignItems: "center", marginBottom: s(12) },
-    startBtnText: { fontFamily: FONT.mono, fontSize: s(14), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
+    startBtn:     { width: "100%", paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(12), alignItems: "center", marginBottom: s(10) },
+    startBtnText: { fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
 
     // Credits note
     creditsNote: { fontFamily: FONT.mono, fontSize: s(11), color: T.muted },
@@ -119,7 +119,7 @@ function StatsBar({ points, credits, answered, styles }) {
 // ── HomeScreen ────────────────────────────────────────────────────────────────
 export default function HomeScreen({ onStart, credits, strategy, streak = 0, points = 0, answered = 0 }) {
   const { width } = useWindowDimensions();
-  const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
+  const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
   const mix = strategy.getCategoryMix();
