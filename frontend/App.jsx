@@ -1,5 +1,5 @@
 import "react-native-url-polyfill/auto";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, PlayfairDisplay_900Black } from "@expo-google-fonts/playfair-display";
@@ -125,6 +125,10 @@ export default function App() {
   const [showLoginModal,   setShowLoginModal]   = useState(false);
   const [authBanner,       setAuthBanner]       = useState(null); // first name string
 
+  // Ref so auth state change callback can read the latest results without stale closure
+  const resultsRef = useRef([]);
+  useEffect(() => { resultsRef.current = results; }, [results]);
+
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     // If this is an OAuth redirect (hash contains access_token), skip the
@@ -179,10 +183,12 @@ export default function App() {
           setTimeout(() => setAuthBanner(null), 3000);
           setShowLoginModal(false);
         }
-        // If the user signed in via the "play again" prompt, navigate home now
+        // If the user signed in via the "play again" prompt, continue to the next session
         setPendingPlayAgain((ppa) => {
           if (ppa) {
-            setScreen("home"); setResults([]); setEndRank(null);
+            setEndRank(null);
+            setPromptSaveStreak(false);
+            handleSignInAndContinue(resultsRef.current, s);
             return false;
           }
           return ppa;
@@ -220,6 +226,60 @@ export default function App() {
       sessionStorage.setItem("quydly_oauth_resume", JSON.stringify({
         screen, results, endRank, pendingPlayAgain,
       }));
+    }
+  };
+
+  // ── After sign-in "play more" continuation ──────────────────────────────────
+  // Called when an anonymous user signs in after clicking "Play more".
+  // Records the just-completed session for the new authenticated user, then
+  // immediately fetches the next session of questions.
+  const handleSignInAndContinue = async (prevResults, authSession) => {
+    // 1. Backfill the completed session for the new authenticated user
+    if (prevResults.length > 0) {
+      const sessionScore = prevResults.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
+      try {
+        const resp = await fetch(`${API_BASE}/api/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${authSession.access_token}`,
+          },
+          body: JSON.stringify({ score: sessionScore, results: prevResults }),
+        });
+        const data = await resp.json();
+        if (data.streak !== undefined) setStreak(data.streak);
+        if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+      } catch {
+        // non-fatal — proceed anyway
+      }
+    }
+
+    // 2. Reload user data (credits, streak, points) for the new user
+    await loadUserData(authSession.user.id);
+
+    // 3. Fetch the next session of questions
+    setLoadError(null);
+    setScreen("loading");
+    try {
+      const res = await fetch(`${API_BASE}/api/questions`, {
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authSession.access_token}`,
+        },
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = await res.json();
+      if (data.allCaughtUp) { setScreen("gate"); return; }
+      setQuestions(data.questions);
+      setCurrentQ(0);
+      setAnswered(false);
+      setSelectedIdx(null);
+      setWager(25);
+      setResults([]);
+      setScreen("quiz");
+    } catch {
+      setLoadError("Couldn't load today's questions. Check your connection and try again.");
+      setScreen("home");
     }
   };
 
@@ -367,7 +427,13 @@ export default function App() {
             setPromptSaveStreak(false);
             if (pendingPlayAgain) {
               setPendingPlayAgain(false);
-              setScreen("home"); setResults([]); setEndRank(null);
+              setEndRank(null);
+              // session is now the authenticated session; loadUserData + fetch next session
+              if (session) {
+                handleSignInAndContinue(resultsRef.current, session);
+              } else {
+                setScreen("home"); setResults([]);
+              }
             }
           }}
           onStreakDismiss={() => {
