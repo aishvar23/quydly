@@ -15,6 +15,7 @@ import EndScreen from "./screens/EndScreen";
 import GateScreen from "./screens/GateScreen";
 import { getActiveStrategy } from "./services/contentStrategy";
 import FLAGS from "../config/flags";
+import { SESSION_SIZE, TOTAL_SESSIONS } from "../config/categories";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
 const supabase = createClient(
@@ -192,15 +193,17 @@ export default function App() {
   }, []);
 
   const loadUserData = async (userId) => {
-    const { data } = await supabase
-      .from("users")
-      .select("streak, total_points")
-      .eq("id", userId)
-      .single();
-    if (data) {
-      setStreak(data.streak ?? 0);
-      setPoints(data.total_points ?? 0);
+    const today = new Date().toISOString().slice(0, 10);
+    const [{ data: userData }, { data: progress }] = await Promise.all([
+      supabase.from("users").select("streak, total_points").eq("id", userId).single(),
+      supabase.from("user_daily_progress").select("sessions_completed").eq("user_id", userId).eq("date", today).single(),
+    ]);
+    if (userData) {
+      setStreak(userData.streak ?? 0);
+      setPoints(userData.total_points ?? 0);
     }
+    const sessionsCompleted = progress?.sessions_completed ?? 0;
+    setCredits((TOTAL_SESSIONS - sessionsCompleted) * SESSION_SIZE);
   };
 
   const handleLogout = async () => {
@@ -209,6 +212,7 @@ export default function App() {
     if (data?.session) setSession(data.session);
     setStreak(0);
     setPoints(0);
+    setCredits(FLAGS.freeQuestionsPerDay);
   };
 
   const handleBeforeOAuth = () => {
@@ -221,14 +225,22 @@ export default function App() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
   const handleStart = async () => {
-    if (credits <= 0) { setScreen("gate"); return; }
+    const isAnon = session?.user?.is_anonymous ?? true;
+    // For anonymous users only, use the local credits counter as the gate.
+    // For logged-in users the backend is the source of truth (allCaughtUp).
+    if (isAnon && credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
-      const res = await fetch(`${API_BASE}/api/questions`);
+      const headers = { "Content-Type": "application/json" };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`${API_BASE}/api/questions`, { headers });
       if (!res.ok) throw new Error(`${res.status}`);
-      const { questions: qs } = await res.json();
-      setQuestions(qs);
+      const data = await res.json();
+      if (data.allCaughtUp) { setScreen("gate"); return; }
+      setQuestions(data.questions);
       setCurrentQ(0);
       setAnswered(false);
       setSelectedIdx(null);
