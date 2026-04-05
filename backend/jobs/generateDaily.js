@@ -7,7 +7,7 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { CATEGORIES, EDITORIAL_MIX, SESSION_FIXED, SESSION_ROTATING, TOTAL_SESSIONS } from "../../config/categories.js";
+import { CATEGORIES, FETCH_COUNTS, EDITORIAL_MIX, SESSION_ROTATING, TOTAL_SESSIONS } from "../../config/categories.js";
 import { fetchHeadlines } from "../services/newsdata.js";
 import { generateQuestion } from "../services/claude.js";
 
@@ -31,9 +31,9 @@ function todayKey() {
 }
 
 /**
- * Given pools of generated questions keyed by categoryId, build the ordered
- * 50-question array: 10 sessions × [world, world, tech, rotating, business].
- * Rotating slot cycles: sports → entertainment → science → repeat.
+ * Build the ordered 50-question array from per-category pools.
+ * Each session: world(1) + politics(1) + sports(1) + business(1) + rotating(1)
+ * Rotating cycles: entertainment → science → technology → repeat
  */
 function interleaveIntoSessions(pools) {
   const ordered = [];
@@ -41,17 +41,14 @@ function interleaveIntoSessions(pools) {
   for (let i = 0; i < TOTAL_SESSIONS; i++) {
     const rotatingId = SESSION_ROTATING[i % SESSION_ROTATING.length];
 
-    // Fixed slots
     ordered.push(pools.world.shift());
-    ordered.push(pools.world.shift());
-    ordered.push(pools.tech.shift());
-    // Rotating slot
-    ordered.push(pools[rotatingId].shift());
-    // Business
+    ordered.push(pools.politics.shift());
+    ordered.push(pools.sports.shift());
     ordered.push(pools.business.shift());
+    ordered.push(pools[rotatingId].shift());
   }
 
-  return ordered.filter(Boolean); // drop any undefineds if a pool ran short
+  return ordered.filter(Boolean);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -87,28 +84,42 @@ export async function generateDaily() {
   console.log("[generateDaily] fetching headlines...");
   const headlinesByCategory = {};
 
-  for (const [categoryId, count] of Object.entries(EDITORIAL_MIX)) {
+  for (const [categoryId, fetchCount] of Object.entries(FETCH_COUNTS)) {
     const { newsDataTag } = categoryMeta[categoryId];
-    console.log(`[generateDaily] fetching ${count} headlines for "${categoryId}" (tag: ${newsDataTag})`);
-    headlinesByCategory[categoryId] = await fetchHeadlines(newsDataTag, count);
+    console.log(`[generateDaily] fetching ${fetchCount} headlines for "${categoryId}" (tag: ${newsDataTag})`);
+    headlinesByCategory[categoryId] = await fetchHeadlines(newsDataTag, fetchCount);
     console.log(`[generateDaily] got ${headlinesByCategory[categoryId].length} headlines for "${categoryId}"`);
   }
 
-  // ── Step 2: Generate questions for every headline ─────────────────────────
-  console.log("[generateDaily] generating questions...");
+  // ── Step 2: Generate questions, filtering for hard news ───────────────────
+  // For each category, iterate through headlines until the target question
+  // count is reached. Rejected or malformed responses are skipped.
+  console.log("[generateDaily] generating questions (hard-news filter active)...");
   const pools = {};
 
-  for (const [categoryId, headlines] of Object.entries(headlinesByCategory)) {
+  for (const [categoryId, targetCount] of Object.entries(EDITORIAL_MIX)) {
     const { label } = categoryMeta[categoryId];
+    const headlines = headlinesByCategory[categoryId];
     pools[categoryId] = [];
 
     for (const headline of headlines) {
-      console.log(`[generateDaily] generating question for "${categoryId}": ${headline.title.slice(0, 60)}...`);
+      if (pools[categoryId].length >= targetCount) break;
+
       const question = await generateQuestion(headline, categoryId, label);
-      pools[categoryId].push(question);
+
+      if (question !== null) {
+        pools[categoryId].push(question);
+        console.log(`[generateDaily] "${categoryId}" ${pools[categoryId].length}/${targetCount} — accepted: ${headline.title.slice(0, 60)}`);
+      }
     }
 
-    console.log(`[generateDaily] pool "${categoryId}" has ${pools[categoryId].length} questions`);
+    if (pools[categoryId].length < targetCount) {
+      console.warn(
+        `[generateDaily] "${categoryId}" only reached ${pools[categoryId].length}/${targetCount} after exhausting all ${headlines.length} headlines`
+      );
+    } else {
+      console.log(`[generateDaily] "${categoryId}" complete — ${pools[categoryId].length} questions`);
+    }
   }
 
   // ── Step 3: Interleave into session order ─────────────────────────────────
