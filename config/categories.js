@@ -1,17 +1,27 @@
 const CATEGORIES = [
-  { id: "world",   label: "World",   emoji: "🌍", newsDataTag: "world"         },
-  { id: "tech",    label: "Tech",    emoji: "💻", newsDataTag: "technology"    },
-  { id: "finance", label: "Finance", emoji: "💰", newsDataTag: "business"      },
-  { id: "culture", label: "Culture", emoji: "🎭", newsDataTag: "entertainment" },
-  { id: "science", label: "Science", emoji: "⚡", newsDataTag: "science"       },
+  { id: "world",         label: "World News",    emoji: "🌍", newsDataTag: "top"           },
+  { id: "tech",          label: "Technology",    emoji: "💻", newsDataTag: "technology"    },
+  { id: "sports",        label: "Sports",        emoji: "🏆", newsDataTag: "sports"        },
+  { id: "entertainment", label: "Entertainment", emoji: "🎭", newsDataTag: "entertainment" },
+  { id: "science",       label: "Science",       emoji: "⚡", newsDataTag: "science"       },
+  { id: "business",      label: "Business",      emoji: "💼", newsDataTag: "business"      },
 ];
 
-// Full daily pool — 50 questions
-const EDITORIAL_MIX = { world: 20, tech: 10, finance: 10, culture: 10 };
+// Full daily generation pool — 55 questions (5 leftover after 50 are delivered)
+const EDITORIAL_MIX = {
+  world:         20,
+  tech:          10,
+  sports:         5,
+  entertainment:  5,
+  science:        5,
+  business:      10,
+};
 
-// Per-session breakdown — 5 questions, always this mix
-const SESSION_MIX = { world: 2, tech: 1, finance: 1, culture: 1 };
+// Per-session composition: 2 world + 1 tech + 1 rotating + 1 business
+// Rotating slot cycles through sports → entertainment → science across 10 sessions
+const SESSION_FIXED = { world: 2, tech: 1, business: 1 };
+const SESSION_ROTATING = ["sports", "entertainment", "science"];
 const SESSION_SIZE = 5;
-const TOTAL_SESSIONS = 10; // 50 total / 5 per session
+const TOTAL_SESSIONS = 10;
 
-export { CATEGORIES, EDITORIAL_MIX, SESSION_MIX, SESSION_SIZE, TOTAL_SESSIONS };
+export { CATEGORIES, EDITORIAL_MIX, SESSION_FIXED, SESSION_ROTATING, SESSION_SIZE, TOTAL_SESSIONS };

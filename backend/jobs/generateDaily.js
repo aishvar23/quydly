@@ -7,8 +7,8 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { CATEGORIES, SESSION_MIX, TOTAL_SESSIONS } from "../../config/categories.js";
-import { fetchHeadline } from "../services/newsdata.js";
+import { CATEGORIES, EDITORIAL_MIX, SESSION_FIXED, SESSION_ROTATING, TOTAL_SESSIONS } from "../../config/categories.js";
+import { fetchHeadlines } from "../services/newsdata.js";
 import { generateQuestion } from "../services/claude.js";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
@@ -26,23 +26,32 @@ function buildSupabaseClient() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Interleave by session so every slice of SESSION_SIZE matches SESSION_MIX.
-// e.g. [world, world, tech, finance, culture] × TOTAL_SESSIONS
-function buildCategoryQueue() {
-  const byId = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
-  const queue = [];
-  for (let s = 0; s < TOTAL_SESSIONS; s++) {
-    for (const [id, count] of Object.entries(SESSION_MIX)) {
-      for (let i = 0; i < count; i++) {
-        queue.push(byId[id]);
-      }
-    }
-  }
-  return queue;
-}
-
 function todayKey() {
   return `questions:${new Date().toISOString().slice(0, 10)}`;
+}
+
+/**
+ * Given pools of generated questions keyed by categoryId, build the ordered
+ * 50-question array: 10 sessions × [world, world, tech, rotating, business].
+ * Rotating slot cycles: sports → entertainment → science → repeat.
+ */
+function interleaveIntoSessions(pools) {
+  const ordered = [];
+
+  for (let i = 0; i < TOTAL_SESSIONS; i++) {
+    const rotatingId = SESSION_ROTATING[i % SESSION_ROTATING.length];
+
+    // Fixed slots
+    ordered.push(pools.world.shift());
+    ordered.push(pools.world.shift());
+    ordered.push(pools.tech.shift());
+    // Rotating slot
+    ordered.push(pools[rotatingId].shift());
+    // Business
+    ordered.push(pools.business.shift());
+  }
+
+  return ordered.filter(Boolean); // drop any undefineds if a pool ran short
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -67,35 +76,58 @@ export async function generateDaily() {
 
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
-  const categoryQueue = buildCategoryQueue();
   const date = new Date().toISOString().slice(0, 10);
 
-  const questions = [];
-  for (const category of categoryQueue) {
-    console.log(`[generateDaily] processing category "${category.id}"`);
-    const headline = await fetchHeadline(category.newsDataTag);
-    const question = await generateQuestion(headline, category.id);
-    questions.push(question);
+  // Build a lookup: categoryId → { label, newsDataTag }
+  const categoryMeta = Object.fromEntries(
+    CATEGORIES.map((c) => [c.id, { label: c.label, newsDataTag: c.newsDataTag }])
+  );
+
+  // ── Step 1: Fetch all headlines per category ──────────────────────────────
+  console.log("[generateDaily] fetching headlines...");
+  const headlinesByCategory = {};
+
+  for (const [categoryId, count] of Object.entries(EDITORIAL_MIX)) {
+    const { newsDataTag } = categoryMeta[categoryId];
+    console.log(`[generateDaily] fetching ${count} headlines for "${categoryId}" (tag: ${newsDataTag})`);
+    headlinesByCategory[categoryId] = await fetchHeadlines(newsDataTag, count);
+    console.log(`[generateDaily] got ${headlinesByCategory[categoryId].length} headlines for "${categoryId}"`);
   }
 
-  console.log(`[generateDaily] generated ${questions.length} questions`);
+  // ── Step 2: Generate questions for every headline ─────────────────────────
+  console.log("[generateDaily] generating questions...");
+  const pools = {};
 
-  let redisOk = false;
+  for (const [categoryId, headlines] of Object.entries(headlinesByCategory)) {
+    const { label } = categoryMeta[categoryId];
+    pools[categoryId] = [];
+
+    for (const headline of headlines) {
+      console.log(`[generateDaily] generating question for "${categoryId}": ${headline.title.slice(0, 60)}...`);
+      const question = await generateQuestion(headline, categoryId, label);
+      pools[categoryId].push(question);
+    }
+
+    console.log(`[generateDaily] pool "${categoryId}" has ${pools[categoryId].length} questions`);
+  }
+
+  // ── Step 3: Interleave into session order ─────────────────────────────────
+  const questions = interleaveIntoSessions(pools);
+  console.log(`[generateDaily] interleaved ${questions.length} questions across ${TOTAL_SESSIONS} sessions`);
+
+  // ── Step 4: Persist to Redis + Supabase ───────────────────────────────────
   if (redis) {
     try {
       await redis.connect();
       await cacheInRedis(redis, todayKey(), questions);
-      redisOk = true;
     } catch (err) {
-      console.warn("[generateDaily] Redis unavailable, falling back to Supabase:", err.message);
+      console.warn("[generateDaily] Redis write failed:", err.message);
     } finally {
       redis.disconnect();
     }
   }
 
-  if (!redisOk) {
-    await saveToSupabase(supabase, date, questions);
-  }
+  await saveToSupabase(supabase, date, questions);
 
   console.log("[generateDaily] done");
   return questions;
