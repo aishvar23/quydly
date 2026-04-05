@@ -7,7 +7,7 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { CATEGORIES, FETCH_COUNTS, EDITORIAL_MIX, SESSION_ROTATING, TOTAL_SESSIONS } from "../../config/categories.js";
+import { CATEGORIES, FETCH_COUNTS, EDITORIAL_MIX, SESSION_ROTATING, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
 import { fetchHeadlines } from "../services/newsdata.js";
 import { generateQuestion } from "../services/claude.js";
 
@@ -122,11 +122,37 @@ export async function generateDaily() {
     }
   }
 
-  // ── Step 3: Interleave into session order ─────────────────────────────────
-  const questions = interleaveIntoSessions(pools);
-  console.log(`[generateDaily] interleaved ${questions.length} questions across ${TOTAL_SESSIONS} sessions`);
+  // ── Step 3: Validate pools before interleaving ───────────────────────────
+  const REQUIRED_TOTAL = SESSION_SIZE * TOTAL_SESSIONS;
+  let poolTotal = 0;
+  let poolShort = false;
+  for (const [categoryId, targetCount] of Object.entries(EDITORIAL_MIX)) {
+    const got = pools[categoryId]?.length ?? 0;
+    poolTotal += got;
+    if (got < targetCount) {
+      console.error(`[generateDaily] POOL SHORT: "${categoryId}" has ${got}/${targetCount} questions`);
+      poolShort = true;
+    }
+  }
+  console.log(`[generateDaily] total questions in pools: ${poolTotal} (need ${REQUIRED_TOTAL})`);
+  if (poolShort) {
+    throw new Error(
+      `[generateDaily] Cannot build ${REQUIRED_TOTAL}-question set — one or more category pools are short. ` +
+      `Increase FETCH_COUNTS or loosen the hard-news filter.`
+    );
+  }
 
-  // ── Step 4: Persist to Redis + Supabase ───────────────────────────────────
+  // ── Step 4: Interleave into session order ─────────────────────────────────
+  const questions = interleaveIntoSessions(pools);
+  if (questions.length !== REQUIRED_TOTAL) {
+    throw new Error(
+      `[generateDaily] Interleaving produced ${questions.length} questions, expected ${REQUIRED_TOTAL}. ` +
+      `Check interleaveIntoSessions logic.`
+    );
+  }
+  console.log(`[generateDaily] ✓ ${questions.length} questions across ${TOTAL_SESSIONS} sessions`);
+
+  // ── Step 5: Persist to Redis + Supabase ───────────────────────────────────
   if (redis) {
     try {
       await redis.connect();

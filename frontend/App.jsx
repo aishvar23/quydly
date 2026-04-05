@@ -456,10 +456,11 @@ export default function App() {
               setPendingPlayAgain(true);
               setPromptSaveStreak(true);
             } else {
-              // Already signed in — fetch the next session directly
-              handleSignInAndContinue([], session);
+              // Already signed in — handleNext already called /api/complete and
+              // incremented sessions_completed. Just fetch the next session.
               setEndRank(null);
               setPromptSaveStreak(false);
+              handleStart();
             }
           }}
         />
