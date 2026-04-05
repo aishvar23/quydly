@@ -89,7 +89,7 @@ router.post("/", async (req, res) => {
       .gt("total_points", totalPoints);
 
     const rank = rankErr ? null : (count ?? 0) + 1;
-    const promptSaveStreak = isAnonymous && newStreak >= 3;
+    const promptSaveStreak = isAnonymous && newStreak >= 1;
 
     return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
   } catch (err) {
