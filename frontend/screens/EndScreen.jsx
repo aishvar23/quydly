@@ -133,7 +133,7 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
 
   const handleShare = () => {
     const emoji = results.map((r) => (r.correct ? "🟨" : "⬛")).join("");
-    const text  = `Quydly — Edition #${getEditionNumber()}\n${grade.emoji} ${grade.label} | ${score} pts\n${emoji}\nBeaten ${beatenPct}% of readers today`;
+    const text  = `Quydly — Edition #${getEditionNumber()}\n${grade.emoji} ${grade.label} | ${score} pts\n${emoji}\nBeaten ${beatenPct}% of readers today\nquydly.com`;
 
     // Fallback that works on http://localhost and all browsers
     const el = document.createElement("textarea");
