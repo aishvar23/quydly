@@ -116,7 +116,7 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth }) {
+export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onStreakDismiss, onPlayAgain, onBeforeOAuth }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -209,7 +209,7 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
       streak={streak}
       supabase={supabase}
       onSuccess={onStreakSaved}
-      onDismiss={onStreakSaved}
+      onDismiss={onStreakDismiss ?? onStreakSaved}
       onBeforeOAuth={onBeforeOAuth}
     />
   </>);

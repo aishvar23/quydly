@@ -370,6 +370,11 @@ export default function App() {
               setScreen("home"); setResults([]); setEndRank(null);
             }
           }}
+          onStreakDismiss={() => {
+            // User tapped "Maybe later" — hide the modal but stay on EndScreen
+            setPromptSaveStreak(false);
+            setPendingPlayAgain(false);
+          }}
           onPlayAgain={() => {
             const isAnon = session?.user?.is_anonymous ?? true;
             if (isAnon) {
