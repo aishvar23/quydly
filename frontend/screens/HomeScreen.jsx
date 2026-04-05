@@ -46,7 +46,7 @@ function makeStyles(scale) {
     // Masthead
     masthead:        { paddingTop: s(16), paddingBottom: s(12), borderBottomWidth: 1, borderBottomColor: T.border2, marginBottom: s(14), flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
     mastheadEyebrow: { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(2), textTransform: "uppercase", color: T.amber, marginBottom: s(4) },
-    mastheadLogo:    { width: s(130), height: s(36), resizeMode: "contain" },
+    mastheadLogo:    { width: s(180), height: s(56), resizeMode: "contain" },
     mastheadTagline: { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(1), textTransform: "uppercase", color: T.muted, marginTop: s(2) },
     streakBadge:         { backgroundColor: T.amber,  borderRadius: s(20), paddingHorizontal: s(11), paddingVertical: s(5) },
     streakBadgeText:     { fontFamily: FONT.mono,    fontSize: s(11), fontWeight: "700", color: T.ink },

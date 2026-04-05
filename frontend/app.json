@@ -11,7 +11,8 @@
     },
     "web": {
       "bundler": "metro",
-      "backgroundColor": "#0c0b09"
+      "backgroundColor": "#0c0b09",
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-font"
