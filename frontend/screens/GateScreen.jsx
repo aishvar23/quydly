@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { View, Text, TouchableOpacity, ScrollView, useWindowDimensions } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView, useWindowDimensions, ActivityIndicator } from "react-native";
 import FLAGS from "../../config/flags";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@ const FONT = {
 };
 
 const MAX_WIDTH  = 900;
-const BASE_WIDTH = 600;
+const BASE_WIDTH = 390;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getCountdown() {
@@ -39,7 +39,7 @@ function makeStyles(scale) {
   const s = (v) => v * scale;
   return {
     container: { flex: 1, backgroundColor: T.ink },
-    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(22), paddingBottom: s(80) },
+    content:   { flexGrow: 1, maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(16), paddingBottom: s(24) },
 
     card: { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), paddingVertical: s(32), paddingHorizontal: s(24), alignItems: "center" },
 
@@ -64,18 +64,35 @@ function makeStyles(scale) {
 // ── GateScreen ────────────────────────────────────────────────────────────────
 // Props:
 //   onReset — () => void  (resets credits for demo)
-export default function GateScreen({ onReset }) {
+export default function GateScreen({ onReset, promptSaveStreak, supabase, onStreakSaved }) {
   const { width } = useWindowDimensions();
-  const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
+  const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
+  const s = (v) => v * scale;
 
-  const [countdown, setCountdown] = useState(getCountdown());
+  const [countdown,     setCountdown]     = useState(getCountdown());
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError,   setGoogleError]   = useState(null);
 
   // Update countdown every minute
   useEffect(() => {
     const t = setInterval(() => setCountdown(getCountdown()), 60000);
     return () => clearInterval(t);
   }, []);
+
+  const handleGoogle = async () => {
+    setGoogleLoading(true);
+    setGoogleError(null);
+    try {
+      const { error } = await supabase.auth.linkIdentity({ provider: "google" });
+      if (error) throw error;
+      onStreakSaved();
+    } catch (err) {
+      setGoogleError(err.message ?? "Sign-in failed. Please try again.");
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -93,6 +110,48 @@ export default function GateScreen({ onReset }) {
         <TouchableOpacity style={styles.resetBtn} onPress={onReset} activeOpacity={0.7}>
           <Text style={styles.resetBtnText}>↺ Reset for demo</Text>
         </TouchableOpacity>
+
+        {/* Save streak banner — shown when promptSaveStreak is true */}
+        {promptSaveStreak && (
+          <View style={{
+            width: "100%",
+            backgroundColor: "rgba(232,160,32,0.08)",
+            borderWidth: 1,
+            borderColor: "rgba(232,160,32,0.30)",
+            borderRadius: s(11),
+            padding: s(16),
+            marginBottom: s(10),
+          }}>
+            <Text style={{ fontFamily: FONT.mono, fontSize: s(13), color: T.amber, marginBottom: s(4) }}>
+              🔥 Save your streak
+            </Text>
+            <Text style={{ fontFamily: FONT.body, fontSize: s(12), color: T.cream2, lineHeight: s(18), marginBottom: s(12) }}>
+              Sign in so you don't lose it when you come back tomorrow.
+            </Text>
+            <TouchableOpacity
+              onPress={handleGoogle}
+              disabled={googleLoading}
+              activeOpacity={0.85}
+              style={{
+                paddingVertical: s(12),
+                backgroundColor: T.amber,
+                borderRadius: s(8),
+                alignItems: "center",
+                opacity: googleLoading ? 0.7 : 1,
+              }}
+            >
+              {googleLoading
+                ? <ActivityIndicator color={T.ink} />
+                : <Text style={{ fontFamily: FONT.mono, fontSize: s(12), fontWeight: "700", color: T.ink }}>G  Continue with Google</Text>
+              }
+            </TouchableOpacity>
+            {googleError && (
+              <Text style={{ fontFamily: FONT.body, fontSize: s(11), color: "#d94040", marginTop: s(8), textAlign: "center" }}>
+                {googleError}
+              </Text>
+            )}
+          </View>
+        )}
 
         {/* Premium button — always rendered, disabled in pilot per SPEC.md
             In v2: flip FLAGS.premiumEnabled = true → wire to Stripe checkout */}

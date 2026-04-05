@@ -32,46 +32,46 @@ const FONT = {
 const LETTERS   = ["A", "B", "C", "D"];
 const WAGERS    = [10, 25, 50, 100];
 const MAX_WIDTH  = 900;
-const BASE_WIDTH = 600;
+const BASE_WIDTH = 390;
 
 // ── Scaled styles ─────────────────────────────────────────────────────────────
 function makeStyles(scale) {
   const s = (v) => v * scale;
   return {
     container: { flex: 1, backgroundColor: T.ink },
-    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(22), paddingBottom: s(80) },
+    content:   { flexGrow: 1, maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(16), paddingTop: s(16), paddingBottom: s(24) },
 
     // ProgressBar
-    progressWrap:   { marginBottom: s(22) },
-    progressHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: s(8) },
+    progressWrap:   { marginBottom: s(14) },
+    progressHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: s(6) },
     progressLabel:  { fontFamily: FONT.monoReg, fontSize: s(11), color: T.muted, letterSpacing: s(0.5) },
     progressTrack:  { height: s(3), backgroundColor: T.card2, borderRadius: s(3), overflow: "hidden" },
     progressFill:   { height: "100%", backgroundColor: T.amber, borderRadius: s(3) },
 
     // Card
-    card: { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), padding: s(24) },
+    card: { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), padding: s(18) },
 
     // Topic tag
-    topicTag:     { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", backgroundColor: "rgba(232,160,32,0.10)", borderWidth: 1, borderColor: "rgba(232,160,32,0.25)", borderRadius: s(20), paddingVertical: s(4), paddingHorizontal: s(10), marginBottom: s(16) },
+    topicTag:     { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", backgroundColor: "rgba(232,160,32,0.10)", borderWidth: 1, borderColor: "rgba(232,160,32,0.25)", borderRadius: s(20), paddingVertical: s(4), paddingHorizontal: s(10), marginBottom: s(12) },
     topicTagText: { fontFamily: FONT.mono, fontSize: s(10), fontWeight: "700", color: T.amber, letterSpacing: s(0.5), textTransform: "uppercase" },
 
     // Question
-    questionText: { fontFamily: FONT.display, fontSize: s(19), fontWeight: "700", lineHeight: s(28), color: T.cream, marginBottom: s(24) },
+    questionText: { fontFamily: FONT.display, fontSize: s(17), fontWeight: "700", lineHeight: s(25), color: T.cream, marginBottom: s(16) },
 
     // Wager
-    sectionLabel:      { fontFamily: FONT.mono, fontSize: s(9), textTransform: "uppercase", letterSpacing: s(1.5), color: T.muted, fontWeight: "700", marginBottom: s(10) },
-    wagerRow:          { flexDirection: "row", gap: s(7), marginBottom: s(22) },
-    wagerBtn:          { flex: 1, paddingVertical: s(9), backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(8), alignItems: "center" },
+    sectionLabel:      { fontFamily: FONT.mono, fontSize: s(9), textTransform: "uppercase", letterSpacing: s(1.5), color: T.muted, fontWeight: "700", marginBottom: s(8) },
+    wagerRow:          { flexDirection: "row", gap: s(6), marginBottom: s(14) },
+    wagerBtn:          { flex: 1, paddingVertical: s(8), backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(8), alignItems: "center" },
     wagerBtnActive:    { backgroundColor: "rgba(232,160,32,0.12)", borderColor: T.amber },
-    wagerBtnText:      { fontFamily: FONT.mono, fontSize: s(12), fontWeight: "700", color: T.muted },
+    wagerBtnText:      { fontFamily: FONT.mono, fontSize: s(11), fontWeight: "700", color: T.muted },
     wagerBtnTextActive:{ color: T.amber2 },
 
     // Answers
-    answers:             { gap: s(9) },
-    answerBtn:           { flexDirection: "row", alignItems: "center", gap: s(12), paddingVertical: s(13), paddingHorizontal: s(16), backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(11) },
+    answers:             { gap: s(8) },
+    answerBtn:           { flexDirection: "row", alignItems: "center", gap: s(10), paddingVertical: s(11), paddingHorizontal: s(14), backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(11) },
     answerCorrect:       { backgroundColor: "rgba(58,170,114,0.12)", borderColor: T.green },
     answerWrong:         { backgroundColor: "rgba(217,64,64,0.10)",  borderColor: T.red  },
-    answerLetter:        { width: s(26), height: s(26), borderRadius: s(6), backgroundColor: T.card, borderWidth: 1, borderColor: T.border, alignItems: "center", justifyContent: "center" },
+    answerLetter:        { width: s(24), height: s(24), borderRadius: s(6), backgroundColor: T.card, borderWidth: 1, borderColor: T.border, alignItems: "center", justifyContent: "center" },
     answerLetterCorrect: { backgroundColor: T.green, borderColor: T.green },
     answerLetterWrong:   { backgroundColor: T.red,   borderColor: T.red   },
     answerLetterText:    { fontFamily: FONT.mono, fontSize: s(11), fontWeight: "700", color: T.muted },
@@ -79,15 +79,15 @@ function makeStyles(scale) {
     answerTextRevealed:  { color: T.cream, fontWeight: "700" },
 
     // Points flash + reveal
-    pointsFlash:  { textAlign: "center", fontFamily: FONT.mono, fontSize: s(26), fontWeight: "700", marginTop: s(14), marginBottom: s(4) },
+    pointsFlash:  { textAlign: "center", fontFamily: FONT.mono, fontSize: s(24), fontWeight: "700", marginTop: s(12), marginBottom: s(4) },
     pointsGain:   { color: T.green },
     pointsLoss:   { color: T.red   },
-    revealPanel:  { marginTop: s(18), padding: s(16), backgroundColor: T.card2, borderRadius: s(10), borderLeftWidth: 3, borderLeftColor: T.amber },
-    revealLabel:  { fontFamily: FONT.mono, fontSize: s(9),  fontWeight: "700", textTransform: "uppercase", letterSpacing: s(1.5), color: T.amber, marginBottom: s(7) },
-    revealText:   { fontFamily: FONT.body, fontSize: s(13), lineHeight: s(21), color: T.cream2, fontWeight: "300" },
+    revealPanel:  { marginTop: s(14), padding: s(14), backgroundColor: T.card2, borderRadius: s(10), borderLeftWidth: 3, borderLeftColor: T.amber },
+    revealLabel:  { fontFamily: FONT.mono, fontSize: s(9),  fontWeight: "700", textTransform: "uppercase", letterSpacing: s(1.5), color: T.amber, marginBottom: s(6) },
+    revealText:   { fontFamily: FONT.body, fontSize: s(13), lineHeight: s(20), color: T.cream2, fontWeight: "300" },
 
     // Next button
-    nextBtn:     { width: "100%", marginTop: s(18), paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(11), alignItems: "center" },
+    nextBtn:     { width: "100%", marginTop: s(14), paddingVertical: s(13), backgroundColor: T.amber, borderRadius: s(11), alignItems: "center" },
     nextBtnText: { fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
   };
 }
@@ -225,7 +225,7 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
 // ── QuestionScreen ────────────────────────────────────────────────────────────
 export default function QuestionScreen({ question, onAnswer, onNext, answered, selectedIndex, wager, setWager, currentQ, strategyLabel }) {
   const { width } = useWindowDimensions();
-  const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
+  const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
   const total  = FLAGS.freeQuestionsPerDay;

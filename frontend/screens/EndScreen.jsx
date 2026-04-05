@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
+import SaveStreakModal from "../components/SaveStreakModal";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -29,7 +30,7 @@ const FONT = {
 };
 
 const MAX_WIDTH  = 900;
-const BASE_WIDTH = 600;
+const BASE_WIDTH = 390;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getEditionNumber() {
@@ -50,7 +51,7 @@ function makeStyles(scale) {
   const s = (v) => v * scale;
   return {
     container: { flex: 1, backgroundColor: T.ink },
-    content:   { maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(22), paddingBottom: s(80) },
+    content:   { flexGrow: 1, maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingTop: s(16), paddingBottom: s(24) },
 
     card: { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), padding: s(28) },
 
@@ -115,9 +116,9 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, results, strategy, streak, rank, onPlayAgain }) {
+export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth }) {
   const { width } = useWindowDimensions();
-  const scale  = Math.min(width, MAX_WIDTH) / BASE_WIDTH;
+  const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
   const [copied, setCopied] = useState(false);
@@ -148,7 +149,7 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  return (
+  return (<>
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.card}>
         {/* Grade */}
@@ -198,9 +199,18 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
           <Text style={styles.shareBtnText}>{copied ? "Copied! ✓" : "Share My Score →"}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.playAgainBtn} onPress={onPlayAgain} activeOpacity={0.7}>
-          <Text style={styles.playAgainBtnText}>↺ Play Again</Text>
+          <Text style={styles.playAgainBtnText}>↺ Play more?</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
-  );
+
+    <SaveStreakModal
+      visible={!!promptSaveStreak}
+      streak={streak}
+      supabase={supabase}
+      onSuccess={onStreakSaved}
+      onDismiss={onStreakSaved}
+      onBeforeOAuth={onBeforeOAuth}
+    />
+  </>);
 }
