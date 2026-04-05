@@ -10,6 +10,7 @@ import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, EDITORIAL_MIX } from "../../config/categories.js";
 import { fetchHeadline } from "../services/newsdata.js";
 import { generateQuestion } from "../services/claude.js";
+import { sendDailyNotification } from "../services/email.js";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,19 @@ export async function generateDaily() {
 
   if (!redisOk) {
     await saveToSupabase(supabase, date, questions);
+  }
+
+  // Notify all subscribed users
+  try {
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("email")
+      .not("email", "is", null);
+    if (error) throw error;
+    const emails = users.map((u) => u.email).filter(Boolean);
+    await sendDailyNotification(emails);
+  } catch (err) {
+    console.error("[generateDaily] email notification failed:", err.message);
   }
 
   console.log("[generateDaily] done");
