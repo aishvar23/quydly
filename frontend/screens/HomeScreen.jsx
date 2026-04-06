@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { View, Text, TouchableOpacity, ScrollView, useWindowDimensions } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView, Image, useWindowDimensions } from "react-native";
 import { CATEGORIES } from "../../config/categories";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
@@ -44,11 +44,10 @@ function makeStyles(scale) {
     content:   { flexGrow: 1, maxWidth: MAX_WIDTH, alignSelf: "center", width: "100%", paddingHorizontal: s(20), paddingBottom: s(24) },
 
     // Masthead
-    masthead:            { paddingTop: s(16), paddingBottom: s(12), borderBottomWidth: 1, borderBottomColor: T.border2, marginBottom: s(14), flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" },
-    mastheadEyebrow:     { fontFamily: FONT.mono,    fontSize: s(9),  letterSpacing: s(2),    textTransform: "uppercase", color: T.amber, marginBottom: s(4) },
-    mastheadTitle:       { fontFamily: FONT.display,  fontSize: s(26), lineHeight: s(26),      letterSpacing: -0.5 },
-    mastheadTitleAccent: { fontFamily: FONT.display,  fontSize: s(26), color: T.amber },
-    mastheadTagline:     { fontFamily: FONT.mono,    fontSize: s(9),  letterSpacing: s(1),    textTransform: "uppercase", color: T.muted, marginTop: s(2) },
+    masthead:        { paddingTop: s(16), paddingBottom: s(12), borderBottomWidth: 1, borderBottomColor: T.border2, marginBottom: s(14), flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    mastheadEyebrow: { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(2), textTransform: "uppercase", color: T.amber, marginBottom: s(4) },
+    mastheadLogo:    { width: s(240), height: s(75), resizeMode: "contain" },
+    mastheadTagline: { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(1), textTransform: "uppercase", color: T.muted, marginTop: s(2) },
     streakBadge:         { backgroundColor: T.amber,  borderRadius: s(20), paddingHorizontal: s(11), paddingVertical: s(5) },
     streakBadgeText:     { fontFamily: FONT.mono,    fontSize: s(11), fontWeight: "700", color: T.ink },
 
@@ -79,14 +78,14 @@ function makeStyles(scale) {
 }
 
 // ── Masthead ──────────────────────────────────────────────────────────────────
+const LOGO = require("../assets/logo.png");
+
 function Masthead({ streak, styles }) {
   return (
     <View style={styles.masthead}>
       <View>
         <Text style={styles.mastheadEyebrow}>{formatDate()} · Edition #{getEditionNumber()}</Text>
-        <Text style={styles.mastheadTitle}>
-          <Text style={styles.mastheadTitleAccent}>Quydly</Text>
-        </Text>
+        <Image source={LOGO} style={styles.mastheadLogo} />
         <Text style={styles.mastheadTagline}>The daily news game · kwid-lee</Text>
       </View>
       {streak > 0 && (
