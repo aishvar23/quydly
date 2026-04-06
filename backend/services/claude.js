@@ -1,6 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Lazy client — initialized on first call so that dotenv has already been
+// loaded by the time this runs (ES module imports are hoisted above any
+// dotenv.config() call in the importing file).
+let _client = null;
+function getClient() {
+  if (!_client) _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _client;
+}
 
 const REQUIRED_KEYS = ["question", "options", "correctIndex", "tldr", "categoryId"];
 const MAX_RETRIES = 3;
@@ -68,7 +75,7 @@ If accepted:
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     let raw;
     try {
-      const message = await client.messages.create({
+      const message = await getClient().messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 512,
         messages: [{ role: "user", content: prompt }],
