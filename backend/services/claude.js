@@ -9,66 +9,53 @@ function getClient() {
   return _client;
 }
 
-const REQUIRED_KEYS = ["question", "options", "correctIndex", "tldr", "categoryId"];
+const REQUIRED_KEYS = ["question", "options", "correctIndex", "insight_tldr", "categoryId"];
 const MAX_RETRIES = 3;
 
 /**
- * Generate one multiple-choice question from a headline.
- * Returns null if the story fails the hard-news filter or exhausts retries.
+ * Generate one Level-4 multiple-choice question from an enriched article.
+ * Returns null if the story is rejected or exhausts retries.
  *
- * @param {{ title: string, description: string }} headline
+ * @param {{ title: string, enrichedContext: string, signalScore: number }} article
  * @param {string} categoryId     — e.g. "world", "politics"
  * @param {string} categoryLabel  — e.g. "World News", "Politics"
- * @returns {Promise<{ question, options, correctIndex, tldr, categoryId } | null>}
+ * @returns {Promise<{ question, options, correctIndex, insight_tldr, categoryId } | null>}
  */
-export async function generateQuestion(headline, categoryId, categoryLabel) {
+export async function generateQuestion(article, categoryId, categoryLabel) {
   const prompt = `# Role
-You are a rigorous, elite news analyst for Quydly. Your audience is composed of "smart-curious" adults who hate superficial trivia and demand substance.
-
-# The "Signal vs. Noise" Filter — Apply First
-**REJECT all non-consequential content.** Immediately discard stories regarding lifestyle trends, cultural "fluff," office sociology, celebrity activity, or individual human-interest pieces. If the story describes a "vibe," a "trend," or a "feeling" rather than a structural change, it is ineligible.
-
-# The "Hard News" Mandate
-Only proceed if the news documents a concrete shift in:
-1. **Institutional Power:** New laws, treaties, election outcomes, or geopolitical realignments.
-2. **Macro-Economics:** Central bank actions, supply chain disruptions, or multi-billion dollar market pivots.
-3. **Strategic Tech:** Infrastructure-level changes in AI, semiconductors, energy, or cybersecurity.
-4. **Verified Science:** Peer-reviewed breakthroughs that challenge existing models.
-
-# The Objective Truth Test
-- **Discard:** Subjective opinions, "expert" predictions, or soft cultural observations.
-- **Accept:** Demonstrable facts, legislative milestones, or documented strategic pivots by major global actors.
-- **The Question:** Must test the user's understanding of *why* this specific event changes the status quo.
+You are a Senior Intelligence Analyst generating a 'Level 4' depth question for the Quydly platform. Your audience demands systemic insight, not surface recall.
 
 # Input Data
 - Category: ${categoryLabel}
-- Headline: ${headline.title}
-- Context: ${headline.description}
+- Headline: ${article.title}
+- Full Scraped Text: ${article.enrichedContext}
+- Signal Score: ${article.signalScore}
 
-# Decision
-**Step 1 — Filter:** Does this story meet the Hard News Mandate above?
-- If NO → respond with exactly: {"rejected": true, "reason": "<one-line reason>"}
-- If YES → proceed to Step 2.
+# The Synthesis Mandate
+1. **Locate the 'Invisible Lever':** Do not ask about the headline. Read the Full Scraped Text to find a specific causal mechanism, a secondary economic constraint, or a geopolitical tension that is not obvious from the headline alone.
+2. **Avoid 'What'—Ask 'Why' or 'How':** The question must require the user to understand the *logic* of the event, not just the *fact* of the event.
+3. **The Distractor Logic:**
+   - Option index 0 — Correct Strategic Insight: the non-obvious answer found only by reading the full text.
+   - Option index 1 — The 'Half-Truth': something true in a different context, plausible to a casual reader.
+   - Option index 2 — The 'Surface Fact': the obvious thing a lazy reader would guess from the headline.
+   - Option index 3 — The 'Logical Misconception': an intuitive but incorrect deduction from the facts.
+4. **Tone:** Sharp, professional, high-information density. No corporate fluff, no vague generalities.
 
-**Step 2 — Generate Question** using the Quydly Framework:
-1. **The "Non-Obvious" Rule:** The answer must NOT be found simply by glancing at the headline. Require synthesis of the Context.
-2. **Focus on "Second-Order Effects":** Ask "What does this signal for the industry/region?" not "What happened?"
-3. **Plausible Distractors:** Use half-truths or related current events — never joke answers.
-4. **Tone:** The Economist style — sharp, intellectual, slightly witty, never dry or academic.
+# Rejection Rule
+If the Full Scraped Text contains no causal mechanism, structural shift, or systemic implication worth a Level-4 question, respond with exactly:
+{"rejected": true, "reason": "<one-line reason>"}
 
-# Response Format (strict JSON, no markdown, no extra text)
-If accepted:
+# Output (strict JSON, no markdown, no extra text)
 {
-  "question": "A punchy, analytical question (max 120 chars).",
+  "question": "Max 120 chars. Focus on the systemic shift, not the surface event.",
   "options": [
-    "Correct Answer (The Insight)",
-    "Plausible Alternative 1 (The Trap)",
-    "Plausible Alternative 2 (The Related Event)",
-    "Plausible Alternative 3 (The Logical Misconception)"
+    "Correct Strategic Insight",
+    "Half-Truth (Plausible Trap)",
+    "Surface Fact (The Obvious Answer)",
+    "Logical Misconception (Intuitive but Wrong)"
   ],
   "correctIndex": 0,
-  "tldr": "Sentence 1: The Big Picture takeaway. Sentence 2: The long-term implication or So What?",
-  "depthScore": 7,
+  "insight_tldr": "Explain the So What — why does this specific detail change the status quo? Two sentences max.",
   "categoryId": "${categoryId}"
 }`;
 
@@ -77,7 +64,7 @@ If accepted:
     try {
       const message = await getClient().messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 512,
+        max_tokens: 600,
         messages: [{ role: "user", content: prompt }],
       });
       raw = message.content[0].text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
@@ -96,9 +83,9 @@ If accepted:
       continue;
     }
 
-    // Content rejected by the hard-news filter — no point retrying
+    // No causal mechanism worth a Level-4 question — no point retrying
     if (parsed.rejected === true) {
-      console.log(`[claude] rejected "${categoryId}" — ${parsed.reason ?? "failed hard-news filter"}: ${headline.title.slice(0, 60)}`);
+      console.log(`[claude] rejected "${categoryId}" — ${parsed.reason ?? "no systemic lever found"}: ${article.title.slice(0, 60)}`);
       return null;
     }
 

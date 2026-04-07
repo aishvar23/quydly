@@ -1,19 +1,12 @@
-import { CATEGORIES, EDITORIAL_MIX } from "../../config/categories";
 import FLAGS from "../../config/flags";
 
 // ── EditorialStrategy — ACTIVE FOR PILOT ─────────────────────────────────────
+// Category mix is determined dynamically by backend scoring — no fixed quotas.
 const EditorialStrategy = {
   getLabel: () => "Today's Edition",
-  getCategoryMix: () => EDITORIAL_MIX,
+  getCategoryMix: () => ({}),
   isConfigurable: () => false,
-  buildPromptCategories: () => {
-    const cats = [];
-    Object.entries(EDITORIAL_MIX).forEach(([id, count]) => {
-      const cat = CATEGORIES.find((c) => c.id === id);
-      for (let i = 0; i < count; i++) cats.push(cat);
-    });
-    return cats.sort(() => Math.random() - 0.5);
-  },
+  buildPromptCategories: () => [],
 };
 
 // ── BeatStrategy — V2 STUB ────────────────────────────────────────────────────

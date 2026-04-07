@@ -1,62 +1,51 @@
 const API_BASE = "https://newsdata.io/api/1/latest";
 
-/**
- * Fetch a single page of headlines from NewsData.io.
- */
-async function fetchPage(newsDataTag, size, nextPageToken = null) {
+async function fetchPage(size, nextPageToken = null) {
   const url = new URL(API_BASE);
   url.searchParams.set("apikey", process.env.NEWSDATA_API_KEY);
   url.searchParams.set("language", "en");
   url.searchParams.set("prioritydomain", "top");
   url.searchParams.set("removeduplicate", "1");
   url.searchParams.set("size", String(size));
-  url.searchParams.set("category", newsDataTag);
+  url.searchParams.set("category", "top");
   if (nextPageToken) url.searchParams.set("page", nextPageToken);
 
   const res = await fetch(url.toString());
-  if (!res.ok) {
-    throw new Error(`NewsData API error ${res.status} for category "${newsDataTag}"`);
-  }
-
+  if (!res.ok) throw new Error(`NewsData API error ${res.status}`);
   const json = await res.json();
-  return {
-    results: json.results ?? [],
-    nextPage: json.nextPage ?? null,
-  };
+  return { results: json.results ?? [], nextPage: json.nextPage ?? null };
 }
 
 /**
- * Fetch `count` headlines for a given NewsData.io category tag.
- * Makes multiple requests (max 10 per call) as needed.
- * Returns an array of { title, description } objects.
- *
- * @param {string} newsDataTag  — e.g. "top", "technology", "sports"
- * @param {number} count        — total headlines to fetch (≥1)
- * @returns {Promise<Array<{ title: string, description: string }>>}
+ * Fetch up to `totalCount` articles using pagination.
+ * Returns an array of { title, description, categories } objects,
+ * where `categories` is the raw category array from the API response.
  */
-export async function fetchHeadlines(newsDataTag, count) {
-  const headlines = [];
+export async function fetchAllHeadlines(totalCount = 100) {
+  const articles = [];
   let nextPageToken = null;
 
-  while (headlines.length < count) {
-    const batchSize = Math.min(10, count - headlines.length);
-    const { results, nextPage } = await fetchPage(newsDataTag, batchSize, nextPageToken);
+  while (articles.length < totalCount) {
+    const batchSize = Math.min(10, totalCount - articles.length);
+    const { results, nextPage } = await fetchPage(batchSize, nextPageToken);
 
     const valid = results
       .filter((a) => a.title && a.description)
-      .map((a) => ({ title: a.title, description: a.description }));
+      .map((a) => ({
+        title: a.title,
+        description: a.description,
+        link: a.link ?? null,
+        categories: Array.isArray(a.category) ? a.category : [],
+      }));
 
-    headlines.push(...valid);
+    articles.push(...valid);
     nextPageToken = nextPage;
-
     if (!nextPageToken) break;
   }
 
-  if (headlines.length < count) {
-    console.warn(
-      `[newsdata] Only ${headlines.length}/${count} headlines available for category "${newsDataTag}"`
-    );
+  if (articles.length < totalCount) {
+    console.warn(`[newsdata] Only ${articles.length}/${totalCount} articles fetched`);
   }
 
-  return headlines.slice(0, count);
+  return articles.slice(0, totalCount);
 }
