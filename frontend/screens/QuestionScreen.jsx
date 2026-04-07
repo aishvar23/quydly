@@ -214,7 +214,7 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
           <Text style={[styles.pointsFlash, isGain ? styles.pointsGain : styles.pointsLoss]}>{delta} pts</Text>
           <View style={styles.revealPanel}>
             <Text style={styles.revealLabel}>📰 TL;DR</Text>
-            <Text style={styles.revealText}>{question.tldr || "No context available for this question."}</Text>
+            <Text style={styles.revealText}>{question.tldr || question.insight_tldr || "No context available for this question."}</Text>
           </View>
         </>
       )}
