@@ -21,20 +21,33 @@ const SCRAPE_DELAY_MS = 300;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Enrich a single article with its scraped body text.
+ * Enrich a single article with the richest available context, in priority order:
+ *   1. NewsData `content` field  — full text, available on paid plans
+ *   2. Scraped article body      — fallback if content is absent/short
+ *   3. NewsData `description`    — last resort (short summary)
  *
- * @param {object} article — Must have `link`, `description`, and `title` fields.
+ * @param {object} article — Must have `title`, `description`, `content`, `link` fields.
  * @returns {Promise<object>} Article with `enrichedContext` and `isLowDetail` attached.
  */
 export async function enrichArticle(article) {
-  const scraped = await scrapeArticleBody(article.link ?? null);
+  // Priority 1: NewsData content field (paid plan — no network cost, no bot detection)
+  if (article.content && article.content.length >= 100) {
+    return {
+      ...article,
+      enrichedContext: article.content.slice(0, ENRICHED_CONTEXT_MAX_CHARS),
+      isLowDetail: false,
+    };
+  }
 
+  // Priority 2: Scrape the article URL
+  const scraped = await scrapeArticleBody(article.link ?? null);
   if (scraped && scraped.length >= 100) {
     return { ...article, enrichedContext: scraped, isLowDetail: false };
   }
 
+  // Priority 3: Fall back to description
   console.warn(
-    `[enricher] scrape failed — falling back to description for: ${(article.title ?? "").slice(0, 60)}`
+    `[enricher] no rich content available — falling back to description for: ${(article.title ?? "").slice(0, 60)}`
   );
 
   return {
@@ -65,10 +78,10 @@ export async function enrichArticles(rankedArticles) {
     if (result.isLowDetail) fallbacks++;
     else scraped++;
 
+    const source = result.isLowDetail ? "FALLBACK" : rankedArticles[i].content ? "content " : "scraped ";
     console.log(
       `[enricher] ${i + 1}/${rankedArticles.length} — ` +
-      `${result.isLowDetail ? "FALLBACK" : "scraped  "} ` +
-      `[signal=${rankedArticles[i].signalScore}] ${(rankedArticles[i].title ?? "").slice(0, 55)}`
+      `${source} [signal=${rankedArticles[i].signalScore}] ${(rankedArticles[i].title ?? "").slice(0, 55)}`
     );
 
     if (i < rankedArticles.length - 1) await sleep(SCRAPE_DELAY_MS);

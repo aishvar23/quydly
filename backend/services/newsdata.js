@@ -34,6 +34,8 @@ export async function fetchAllHeadlines(totalCount = 100) {
       .map((a) => ({
         title: a.title,
         description: a.description,
+        // content is the full article text — available on paid NewsData plans, null on free
+        content: a.content ?? null,
         link: a.link ?? null,
         categories: Array.isArray(a.category) ? a.category : [],
       }));
