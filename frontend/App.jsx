@@ -344,13 +344,17 @@ export default function App() {
             },
             body: JSON.stringify({ score: sessionScore, results }),
           });
-          const data = await resp.json();
-          if (data.streak !== undefined) setStreak(data.streak);
-          if (data.totalPoints !== undefined) setPoints(data.totalPoints);
-          if (data.rank !== undefined) setEndRank(data.rank);
-          if (data.promptSaveStreak) setPromptSaveStreak(true);
-        } catch {
-          // non-fatal
+          if (!resp.ok) {
+            console.error(`[handleNext] POST /api/complete failed: ${resp.status}`);
+          } else {
+            const data = await resp.json();
+            if (data.streak !== undefined) setStreak(data.streak);
+            if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+            if (data.rank !== undefined) setEndRank(data.rank);
+            if (data.promptSaveStreak) setPromptSaveStreak(true);
+          }
+        } catch (err) {
+          console.error("[handleNext] POST /api/complete threw:", err.message);
         }
       }
       setScreen("end");

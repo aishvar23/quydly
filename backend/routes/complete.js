@@ -81,20 +81,22 @@ router.post("/", async (req, res) => {
     const newTotalScore        = prevTotalScore + score;
     const newSessionsCompleted = sessionsCompleted + 1;
 
-    // Store session details
-    const { error: compErr } = await supabase.from("completions").upsert(
-      { user_id: userId, date: today, session_index: sessionIndex, score, results },
-      { onConflict: "user_id,date,session_index" }
-    );
-    if (compErr) return res.status(500).json({ error: "Failed to record session" });
-
-    // Update daily progress — do this before touching the users table so the
-    // session index always advances even if the user row lookup below fails.
+    // Update daily progress FIRST — this is the critical gate for session advancement.
+    // Must succeed before anything else so that play-more always gets the next session.
     const { error: progressErr } = await supabase.from("user_daily_progress").upsert(
       { user_id: userId, date: today, sessions_completed: newSessionsCompleted, total_score: newTotalScore },
       { onConflict: "user_id,date" }
     );
     if (progressErr) return res.status(500).json({ error: "Failed to update progress" });
+
+    // Record session details — non-critical for session advancement (analytics only).
+    const { error: compErr } = await supabase.from("completions").upsert(
+      { user_id: userId, date: today, session_index: sessionIndex, score, results },
+      { onConflict: "user_id,date,session_index" }
+    );
+    if (compErr) {
+      console.error(`[POST /api/complete] completions upsert failed (non-fatal):`, compErr.message);
+    }
 
     // Update streak + lifetime points. Use upsert so new users (where the DB
     // trigger hasn't fired yet) are created rather than silently dropped.
