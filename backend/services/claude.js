@@ -47,8 +47,8 @@ Respond ONLY with valid JSON, no markdown:
   }
 
   for (const key of REQUIRED_KEYS) {
-    if (parsed[key] === undefined) {
-      throw new Error(`Claude response missing field "${key}" for category "${categoryId}"`);
+    if (parsed[key] === undefined || parsed[key] === null || parsed[key] === "") {
+      throw new Error(`Claude response missing or empty field "${key}" for category "${categoryId}"`);
     }
   }
   if (!Array.isArray(parsed.options) || parsed.options.length !== 4) {
