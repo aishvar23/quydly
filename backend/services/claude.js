@@ -46,9 +46,15 @@ Respond ONLY with valid JSON, no markdown:
     throw new Error(`Claude returned invalid JSON for category "${categoryId}": ${raw}`);
   }
 
+  // Claude sometimes renames the field (e.g. "insight_tldr") — normalise it
+  if (!parsed.tldr && parsed.insight_tldr) {
+    parsed.tldr = parsed.insight_tldr;
+    delete parsed.insight_tldr;
+  }
+
   for (const key of REQUIRED_KEYS) {
-    if (parsed[key] === undefined) {
-      throw new Error(`Claude response missing field "${key}" for category "${categoryId}"`);
+    if (parsed[key] === undefined || parsed[key] === null || parsed[key] === "") {
+      throw new Error(`Claude response missing or empty field "${key}" for category "${categoryId}"`);
     }
   }
   if (!Array.isArray(parsed.options) || parsed.options.length !== 4) {
