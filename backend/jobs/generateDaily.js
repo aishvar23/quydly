@@ -89,12 +89,11 @@ export async function generateDaily() {
 
   // ── Step 2: Score and rank all 100 articles ───────────────────────────────
   const ranked = rankArticles(rawArticles);
-  const qualified = ranked.filter((a) => a.signalScore > 15);
   const SCRAPE_POOL = 80;
-  const top80 = (qualified.length > 0 ? qualified : ranked).slice(0, SCRAPE_POOL);
+  const top80 = ranked.slice(0, SCRAPE_POOL);
   console.log(
     `[generateDaily] scored ${ranked.length} articles — ` +
-    `${qualified.length} cleared threshold, selecting top ${top80.length} for scraping`
+    `selecting top ${top80.length} by signal score for scraping`
   );
   console.log(
     `[generateDaily] signal score range: ${top80.at(-1)?.signalScore ?? 0}–${top80[0]?.signalScore ?? 0}`
