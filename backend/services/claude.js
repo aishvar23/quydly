@@ -44,21 +44,37 @@ Generate ONE crisp, high-information-density question based ONLY on the provided
 
 # Examples for Calibration
 
-[BAD QUESTION (Philosophical/Vague)]:
+[BAD (Philosophical/Vague)]:
 "How will the new EU AI Act impact the future of innovation in the tech sector?"
 (Reason: Too broad, no data points, common sense answers.)
 
-[GOOD QUESTION (Directed/Crisp)]:
+[GOOD (Directed/Crisp)]:
 "Under the EU AI Act, what is the specific Euro fine for providers failing to comply with Article 52 transparency rules?"
 (Reason: Anchored on a specific Article and a specific penalty.)
 
-[BAD QUESTION (Philosophical/Vague)]:
+[BAD (Philosophical/Vague)]:
 "Why are central banks concerned about the potential for rising global inflation?"
 (Reason: General knowledge, lacks technical specificity.)
 
-[GOOD QUESTION (Directed/Crisp)]:
+[GOOD (Directed/Crisp)]:
 "Which specific 10-year Treasury yield threshold did the Fed cite as the primary trigger for the Q3 liquidity injection?"
 (Reason: Anchored on a specific asset class, a timeframe, and an operational action.)
+
+[BAD (Trivial/Static)]:
+"What is the battery capacity of the new Motorola Moto Pad 2026?"
+(Reason: This is a product spec, not an intelligence briefing.)
+
+[GOOD (Systemic/Actionable)]:
+"What specific SoC architecture did the US export ban target to halt Motorola's mid-range production?"
+(Reason: Focuses on the constraint and the impact.)
+
+[BAD (Trivial/Static)]:
+"What edition number is the HMG Strategy Dallas Summit on April 8?"
+(Reason: This is calendar fluff.)
+
+[GOOD (Systemic/Actionable)]:
+"According to the Dallas Summit briefing, what is the primary security vulnerability cited in 2026 C-Level budget allocations?"
+(Reason: Focuses on resource allocation and risk.)
 
 # Question Format
 - **Anchor:** Start with a specific entity, number, or data point.
