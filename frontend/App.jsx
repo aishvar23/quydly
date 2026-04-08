@@ -221,8 +221,8 @@ export default function App() {
   };
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-  const handleStart = async (offset = 0) => {
-    if (credits <= 0) { setScreen("gate"); return; }
+  const handleStart = async (offset = 0, skipCreditCheck = false) => {
+    if (!skipCreditCheck && credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
@@ -231,6 +231,7 @@ export default function App() {
       const { questions: qs } = await res.json();
       setQuestions(qs);
       setQuestionOffset(offset);
+      setCredits(FLAGS.freeQuestionsPerDay);
       setCurrentQ(0);
       setAnswered(false);
       setSelectedIdx(null);
@@ -368,7 +369,7 @@ export default function App() {
             } else {
               const nextOffset = questionOffset + FLAGS.freeQuestionsPerDay;
               setResults([]); setEndRank(null); setPromptSaveStreak(false);
-              handleStart(nextOffset);
+              handleStart(nextOffset, true);
             }
           }}
         />
