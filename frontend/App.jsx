@@ -324,7 +324,7 @@ export default function App() {
 
       {screen === "home" && (
         <HomeScreen
-          onStart={handleStart}
+          onStart={() => handleStart(0)}
           credits={credits}
           strategy={strategy}
           streak={streak}
