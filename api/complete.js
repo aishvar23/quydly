@@ -97,6 +97,29 @@ export default async function handler(req, res) {
     // promptSaveStreak: true → frontend shows "Save your streak — sign in with Google"
     const promptSaveStreak = isAnonymous && newStreak >= 1;
 
+    // Advance session counter so next GET /api/questions serves the next batch.
+    // Non-fatal — streak and points are already saved above.
+    if (!isAnonymous) {
+      try {
+        const { data: progress } = await supabase
+          .from("user_daily_progress")
+          .select("sessions_completed")
+          .eq("user_id", userId)
+          .eq("date", today)
+          .single();
+
+        const next = (progress?.sessions_completed ?? 0) + 1;
+        await supabase
+          .from("user_daily_progress")
+          .upsert(
+            { user_id: userId, date: today, sessions_completed: next, total_score: totalPoints },
+            { onConflict: "user_id,date" }
+          );
+      } catch {
+        // Non-fatal
+      }
+    }
+
     return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
   } catch (err) {
     console.error("[POST /api/complete]", err.message);
