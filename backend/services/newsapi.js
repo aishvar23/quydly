@@ -21,12 +21,27 @@ const API_URL =
  * @returns {Promise<object[]>}
  */
 export async function fetchNewsApiHeadlines(pageSize = 100) {
-  const url = `${API_URL}&pageSize=${pageSize}&apiKey=${process.env.NEWSAPI_KEY}`;
+  const key = process.env.NEWSAPI_KEY;
+  console.log(`[newsapi] NEWSAPI_KEY present: ${!!key}, length: ${key?.length ?? 0}, preview: ${key ? key.slice(0, 6) + "..." : "MISSING"}`);
+  console.log(`[newsapi] process.env keys available: ${Object.keys(process.env).filter(k => k.startsWith("NEWS")).join(", ") || "(none matching NEWS*)"}`);
+  console.log(`[newsapi] cwd: ${process.cwd()}`);
+
+  if (!key) {
+    console.warn("[newsapi] NEWSAPI_KEY is not set — skipping NewsAPI fetch");
+    return [];
+  }
+
+  const url = `${API_URL}&pageSize=${pageSize}&apiKey=${key}`;
 
   let json;
   try {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`NewsAPI error ${res.status}`);
+    console.log(`[newsapi] response status: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "(unreadable)");
+      console.warn(`[newsapi] fetch failed — HTTP ${res.status}: ${body.slice(0, 200)}`);
+      return [];
+    }
     json = await res.json();
   } catch (err) {
     console.warn(`[newsapi] fetch failed — ${err.message}`);
