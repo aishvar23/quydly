@@ -106,10 +106,11 @@ export default function App() {
 
   const strategy = getActiveStrategy();
 
-  const [session,     setSession]     = useState(null);
-  const [screen,      setScreen]      = useState("home");
-  const [questions,   setQuestions]   = useState([]);
-  const [currentQ,    setCurrentQ]    = useState(0);
+  const [session,         setSession]         = useState(null);
+  const [screen,          setScreen]          = useState("home");
+  const [questions,       setQuestions]       = useState([]);
+  const [currentQ,        setCurrentQ]        = useState(0);
+  const [questionOffset,  setQuestionOffset]  = useState(0);
   const [answered,    setAnswered]    = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [wager,       setWager]       = useState(25);
@@ -220,15 +221,16 @@ export default function App() {
   };
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-  const handleStart = async () => {
+  const handleStart = async (offset = 0) => {
     if (credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
-      const res = await fetch(`${API_BASE}/api/questions`);
+      const res = await fetch(`${API_BASE}/api/questions?offset=${offset}`);
       if (!res.ok) throw new Error(`${res.status}`);
       const { questions: qs } = await res.json();
       setQuestions(qs);
+      setQuestionOffset(offset);
       setCurrentQ(0);
       setAnswered(false);
       setSelectedIdx(null);
@@ -364,7 +366,9 @@ export default function App() {
               setPendingPlayAgain(true);
               setPromptSaveStreak(true);
             } else {
-              setScreen("home"); setResults([]); setEndRank(null); setPromptSaveStreak(false);
+              const nextOffset = questionOffset + FLAGS.freeQuestionsPerDay;
+              setResults([]); setEndRank(null); setPromptSaveStreak(false);
+              handleStart(nextOffset);
             }
           }}
         />
