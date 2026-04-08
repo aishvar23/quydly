@@ -55,17 +55,14 @@ function resolveCategoryId(categories) {
 function hasEnoughSubstance(article) {
   const text = `${article.title} ${article.enrichedContext}`;
 
-  if (text.length < 200) return false;
+  // Must have at least some content
+  if (text.length < 100) return false;
 
-  // Quantitative data: digits, percentages, currency symbols, common units
+  // Must contain at least one number or named entity (capitalized word)
   const hasNumbers = /\d/.test(text);
-  const hasQuantData = /[\d%$€£¥]|\b\d+(\.\d+)?\s*(billion|million|trillion|percent|bps|mph|km|kg|GW|MW|GHz|TB|GB)\b/i.test(text);
+  const hasNamedEntity = /[A-Z][a-z]{2,}/.test(text);
 
-  // Proper nouns: capitalized words not at the start of a sentence
-  // Match words that are uppercase after a non-sentence-boundary character
-  const properNouns = text.match(/(?<=[a-z,;:\-\(]\s)[A-Z][a-z]+/g) ?? [];
-
-  return (hasNumbers || hasQuantData) && properNouns.length >= 2;
+  return hasNumbers || hasNamedEntity;
 }
 
 /**
@@ -120,21 +117,15 @@ export async function generateDaily() {
     `(newsdata=${newsdataArticles.length}, newsapi=${newsapiArticles.length})`
   );
 
-  // ── Step 2: Score and rank all 100 articles ───────────────────────────────
+  // ── Step 2: Score and rank all articles ──────────────────────────────────
   const ranked = rankArticles(rawArticles);
-  const SCRAPE_POOL = 80;
-  const top80 = ranked.slice(0, SCRAPE_POOL);
   console.log(
     `[generateDaily] scored ${ranked.length} articles — ` +
-    `selecting top ${top80.length} by signal score for scraping`
-  );
-  console.log(
-    `[generateDaily] signal score range: ${top80.at(-1)?.signalScore ?? 0}–${top80[0]?.signalScore ?? 0}`
+    `signal score range: ${ranked.at(-1)?.signalScore ?? 0}–${ranked[0]?.signalScore ?? 0}`
   );
 
-  // ── Step 3: Enrich top 80 — scrape full article bodies ────────────────────
-  // Provides a 30-article buffer: scraper → 80, LLM accepts → 50
-  const enrichedArticles = await enrichArticles(top80);
+  // ── Step 3: Enrich all ranked articles ───────────────────────────────────
+  const enrichedArticles = await enrichArticles(ranked);
 
   // ── Step 4: Generate questions, iterating best-first until 50 accepted ────
   console.log("[generateDaily] generating questions (hard-news filter active)...");
@@ -181,9 +172,9 @@ export async function generateDaily() {
   );
 
   if (questions.length < REQUIRED_TOTAL) {
-    throw new Error(
-      `[generateDaily] Only ${questions.length}/${REQUIRED_TOTAL} questions generated. ` +
-      `Consider fetching more than 100 articles or adjusting the signal threshold.`
+    console.warn(
+      `[generateDaily] Only ${questions.length}/${REQUIRED_TOTAL} questions generated — ` +
+      `proceeding with what we have.`
     );
   }
 
