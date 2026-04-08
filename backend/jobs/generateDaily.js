@@ -44,6 +44,31 @@ function resolveCategoryId(categories) {
 }
 
 /**
+ * Pre-LLM quality gate — mirrors the LLM's own rejection criteria.
+ * Returns true if the article has enough substance to generate a directed question:
+ *   - Minimum enrichedContext length (200 chars)
+ *   - At least one quantitative data point (number, %, $, unit)
+ *   - At least two proper nouns (capitalized mid-sentence words)
+ *
+ * Articles that fail here are skipped before any Claude API call is made.
+ */
+function hasEnoughSubstance(article) {
+  const text = `${article.title} ${article.enrichedContext}`;
+
+  if (text.length < 200) return false;
+
+  // Quantitative data: digits, percentages, currency symbols, common units
+  const hasNumbers = /\d/.test(text);
+  const hasQuantData = /[\d%$€£¥]|\b\d+(\.\d+)?\s*(billion|million|trillion|percent|bps|mph|km|kg|GW|MW|GHz|TB|GB)\b/i.test(text);
+
+  // Proper nouns: capitalized words not at the start of a sentence
+  // Match words that are uppercase after a non-sentence-boundary character
+  const properNouns = text.match(/(?<=[a-z,;:\-\(]\s)[A-Z][a-z]+/g) ?? [];
+
+  return (hasNumbers || hasQuantData) && properNouns.length >= 2;
+}
+
+/**
  * Chunk a flat array into groups of `size`.
  */
 function chunkIntoSessions(questions, size) {
@@ -115,8 +140,16 @@ export async function generateDaily() {
   console.log("[generateDaily] generating questions (hard-news filter active)...");
   const questions = [];
 
+  let prefilterDropped = 0;
+
   for (const article of enrichedArticles) {
     if (questions.length >= REQUIRED_TOTAL) break;
+
+    if (!hasEnoughSubstance(article)) {
+      prefilterDropped++;
+      console.log(`[generateDaily] pre-filter drop — insufficient substance: ${article.title.slice(0, 60)}`);
+      continue;
+    }
 
     const categoryId = resolveCategoryId(article.categories);
     const label = categoryLabel[categoryId] ?? "News";
@@ -142,7 +175,10 @@ export async function generateDaily() {
     }
   }
 
-  console.log(`[generateDaily] ${questions.length} questions generated from ${enrichedArticles.length} enriched articles`);
+  console.log(
+    `[generateDaily] ${questions.length} questions generated from ${enrichedArticles.length} enriched articles ` +
+    `(${prefilterDropped} dropped by pre-filter)`
+  );
 
   if (questions.length < REQUIRED_TOTAL) {
     throw new Error(
