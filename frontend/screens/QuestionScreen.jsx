@@ -119,6 +119,16 @@ function ProgressBar({ current, total, label, styles }) {
 function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setWager, styles }) {
   const cat = CATEGORIES.find((c) => c.id === question.categoryId) || CATEGORIES[0];
 
+  // Shuffle options once per question, keeping correctIndex in sync
+  const { shuffledOptions, shuffledCorrectIndex, indexMap } = useMemo(() => {
+    const indices = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+    return {
+      shuffledOptions:      indices.map((i) => question.options[i]),
+      shuffledCorrectIndex: indices.indexOf(question.correctIndex),
+      indexMap:             indices, // shuffledPos → originalIndex
+    };
+  }, [question]);
+
   const slideAnim   = useRef(new Animated.Value(24)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim   = useRef(new Animated.Value(0.96)).current;
@@ -133,8 +143,11 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
     ]).start();
   }, [question]);
 
+  // selectedIndex from parent is the original (pre-shuffle) index; map to shuffled position for display
+  const shuffledSelectedIndex = selectedIndex != null ? indexMap.indexOf(selectedIndex) : -1;
+
   const handleAnswer = (i) => {
-    if (i === question.correctIndex) {
+    if (i === shuffledCorrectIndex) {
       Animated.sequence([
         Animated.timing(popAnim, { toValue: 1.04, duration: 150, useNativeDriver: true }),
         Animated.timing(popAnim, { toValue: 1,    duration: 150, useNativeDriver: true }),
@@ -148,11 +161,11 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
         Animated.timing(shakeAnim, { toValue:  0, duration: 80, useNativeDriver: true }),
       ]).start();
     }
-    onAnswer(i);
+    onAnswer(indexMap[i]); // pass original index so App.jsx scoring stays correct
   };
 
-  const delta  = answered ? (selectedIndex === question.correctIndex ? `+${wager}` : `-${Math.floor(wager / 2)}`) : null;
-  const isGain = answered && selectedIndex === question.correctIndex;
+  const delta  = answered ? (shuffledSelectedIndex === shuffledCorrectIndex ? `+${wager}` : `-${Math.floor(wager / 2)}`) : null;
+  const isGain = answered && shuffledSelectedIndex === shuffledCorrectIndex;
 
   return (
     <Animated.View style={[styles.card, { opacity: opacityAnim, transform: [{ translateY: slideAnim }, { scale: scaleAnim }, { translateX: shakeAnim }] }]}>
@@ -176,18 +189,18 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
       )}
 
       <View style={styles.answers}>
-        {question.options.map((opt, i) => {
+        {shuffledOptions.map((opt, i) => {
           let btnStyle  = styles.answerBtn;
           let letStyle  = styles.answerLetter;
           let textStyle = styles.answerText;
           let opacity   = 1;
 
           if (answered) {
-            if (i === question.correctIndex) {
+            if (i === shuffledCorrectIndex) {
               btnStyle  = [styles.answerBtn,  styles.answerCorrect];
               letStyle  = [styles.answerLetter, styles.answerLetterCorrect];
               textStyle = [styles.answerText,  styles.answerTextRevealed];
-            } else if (i === selectedIndex) {
+            } else if (i === shuffledSelectedIndex) {
               btnStyle  = [styles.answerBtn,  styles.answerWrong];
               letStyle  = [styles.answerLetter, styles.answerLetterWrong];
               textStyle = [styles.answerText,  styles.answerTextRevealed];
@@ -197,7 +210,7 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
           }
 
           return (
-            <Animated.View key={i} style={[{ opacity }, answered && i === question.correctIndex ? { transform: [{ scale: popAnim }] } : {}]}>
+            <Animated.View key={i} style={[{ opacity }, answered && i === shuffledCorrectIndex ? { transform: [{ scale: popAnim }] } : {}]}>
               <TouchableOpacity style={btnStyle} onPress={() => !answered && handleAnswer(i)} disabled={answered} activeOpacity={0.7}>
                 <View style={letStyle}>
                   <Text style={styles.answerLetterText}>{LETTERS[i]}</Text>
