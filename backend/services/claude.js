@@ -13,49 +13,80 @@ const REQUIRED_KEYS = ["question", "options", "correctIndex", "insight_tldr", "c
 const MAX_RETRIES = 3;
 
 /**
- * Generate one Level-4 multiple-choice question from an enriched article.
+ * Generate one crisp, high-information-density question from an enriched article.
  * Returns null if the story is rejected or exhausts retries.
  *
- * @param {{ title: string, enrichedContext: string, signalScore: number }} article
+ * @param {{ title: string, description?: string, enrichedContext: string, signalScore: number }} article
  * @param {string} categoryId     — e.g. "world", "politics"
  * @param {string} categoryLabel  — e.g. "World News", "Politics"
  * @returns {Promise<{ question, options, correctIndex, insight_tldr, categoryId } | null>}
  */
 export async function generateQuestion(article, categoryId, categoryLabel) {
+  const descriptionLine = article.description
+    ? `\nDescription: ${article.description}`
+    : "";
+
   const prompt = `# Role
-You are a Senior Intelligence Analyst generating a 'Level 4' depth question for the Quydly platform. Your audience demands systemic insight, not surface recall.
+You are a Technical Auditor and Intelligence Briefing Officer.
+
+# Task
+Generate ONE crisp, high-information-density question based ONLY on the provided enriched text.
+
+# Technical Directives
+- **Zero Philosophy:** No questions about 'societal impact', 'ethical considerations', or 'the future of...'.
+- **The 50% Rule:** At least 50% of the question must consist of technical terms, proper nouns, or quantitative data points found in the text.
+- **The 'Directed' Test:** The question must be so specific to the provided text that even a general expert would need to read this article to answer correctly.
+- **Crispness:** The question must be under 125 characters.
+
+# Examples for Calibration
+
+[BAD QUESTION (Philosophical/Vague)]:
+"How will the new EU AI Act impact the future of innovation in the tech sector?"
+(Reason: Too broad, no data points, common sense answers.)
+
+[GOOD QUESTION (Directed/Crisp)]:
+"Under the EU AI Act, what is the specific Euro fine for providers failing to comply with Article 52 transparency rules?"
+(Reason: Anchored on a specific Article and a specific penalty.)
+
+[BAD QUESTION (Philosophical/Vague)]:
+"Why are central banks concerned about the potential for rising global inflation?"
+(Reason: General knowledge, lacks technical specificity.)
+
+[GOOD QUESTION (Directed/Crisp)]:
+"Which specific 10-year Treasury yield threshold did the Fed cite as the primary trigger for the Q3 liquidity injection?"
+(Reason: Anchored on a specific asset class, a timeframe, and an operational action.)
+
+# Question Format
+- **Anchor:** Start with a specific entity, number, or data point.
+- **Action:** Ask about a specific mechanism, threshold, or result.
+- **Target:** The correct answer must be a hard fact, not an interpretation.
+
+# Distractor Logic
+- Option index 0 — Correct Answer: the hard fact from the text.
+- Option index 1 — The 'Half-Truth': something true in a different context, plausible to a casual reader.
+- Option index 2 — The 'Surface Fact': the obvious thing a lazy reader would guess from the headline.
+- Option index 3 — The 'Logical Misconception': an intuitive but incorrect deduction from the facts.
+
+# Rejection Rule
+If the text contains no specific technical terms, proper nouns, or quantitative data points that support a directed question, respond with exactly:
+{"rejected": true, "reason": "<one-line reason>"}
 
 # Input Data
 - Category: ${categoryLabel}
-- Headline: ${article.title}
-- Full Scraped Text: ${article.enrichedContext}
-- Signal Score: ${article.signalScore}
-
-# The Synthesis Mandate
-1. **Locate the 'Invisible Lever':** Do not ask about the headline. Read the Full Scraped Text to find a specific causal mechanism, a secondary economic constraint, or a geopolitical tension that is not obvious from the headline alone.
-2. **Avoid 'What'—Ask 'Why' or 'How':** The question must require the user to understand the *logic* of the event, not just the *fact* of the event.
-3. **The Distractor Logic:**
-   - Option index 0 — Correct Strategic Insight: the non-obvious answer found only by reading the full text.
-   - Option index 1 — The 'Half-Truth': something true in a different context, plausible to a casual reader.
-   - Option index 2 — The 'Surface Fact': the obvious thing a lazy reader would guess from the headline.
-   - Option index 3 — The 'Logical Misconception': an intuitive but incorrect deduction from the facts.
-4. **Tone:** Sharp, professional, high-information density. No corporate fluff, no vague generalities.
-
-# Rejection Rule
-If the Full Scraped Text contains no causal mechanism, structural shift, or systemic implication worth a Level-4 question, respond with exactly:
-{"rejected": true, "reason": "<one-line reason>"}
+- Headline: ${article.title}${descriptionLine}
+- Text: ${article.enrichedContext}
 
 # Output (strict JSON, no markdown, no extra text)
 {
-  "question": "Max 120 chars. Focus on the systemic shift, not the surface event.",
+  "question": "Under 125 chars. Anchor on a specific entity, number, or data point.",
   "options": [
-    "Correct Strategic Insight",
+    "Correct Hard Fact",
     "Half-Truth (Plausible Trap)",
     "Surface Fact (The Obvious Answer)",
     "Logical Misconception (Intuitive but Wrong)"
   ],
   "correctIndex": 0,
-  "insight_tldr": "Explain the So What — why does this specific detail change the status quo? Two sentences max.",
+  "insight_tldr": "One or two sentences: what is the specific fact and why does it matter?",
   "categoryId": "${categoryId}"
 }`;
 

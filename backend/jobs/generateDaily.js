@@ -122,7 +122,12 @@ export async function generateDaily() {
     const label = categoryLabel[categoryId] ?? "News";
 
     const question = await generateQuestion(
-      { title: article.title, enrichedContext: article.enrichedContext, signalScore: article.signalScore },
+      {
+        title: article.title,
+        description: article.description ?? null,
+        enrichedContext: article.enrichedContext,
+        signalScore: article.signalScore,
+      },
       categoryId,
       label
     );
