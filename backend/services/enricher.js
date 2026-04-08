@@ -14,23 +14,19 @@
  *     Returns the same array with `enrichedContext` and `isLowDetail` attached.
  */
 
-import { scrapeArticleBody, ENRICHED_CONTEXT_MAX_CHARS } from "./scraper.js";
-
-const SCRAPE_DELAY_MS = 300;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+import { ENRICHED_CONTEXT_MAX_CHARS } from "./scraper.js";
 
 /**
  * Enrich a single article with the richest available context, in priority order:
  *   1. NewsData `content` field  — full text, available on paid plans
- *   2. Scraped article body      — fallback if content is absent/short
- *   3. NewsData `description`    — last resort (short summary)
+ *   2. NewsData `description`   — short summary
+ *   3. Article `title`          — last resort
  *
- * @param {object} article — Must have `title`, `description`, `content`, `link` fields.
- * @returns {Promise<object>} Article with `enrichedContext` and `isLowDetail` attached.
+ * @param {object} article — Must have `title`, `description`, `content` fields.
+ * @returns {object} Article with `enrichedContext` and `isLowDetail` attached.
  */
-export async function enrichArticle(article) {
-  // Priority 1: NewsData content field (paid plan — no network cost, no bot detection)
+export function enrichArticle(article) {
+  // Priority 1: NewsData content field (paid plan — full text)
   if (article.content && article.content.length >= 100) {
     return {
       ...article,
@@ -39,20 +35,22 @@ export async function enrichArticle(article) {
     };
   }
 
-  // Priority 2: Scrape the article URL
-  const scraped = await scrapeArticleBody(article.link ?? null);
-  if (scraped && scraped.length >= 100) {
-    return { ...article, enrichedContext: scraped, isLowDetail: false };
+  // Priority 2: description
+  if (article.description && article.description.length >= 30) {
+    return {
+      ...article,
+      enrichedContext: article.description.slice(0, ENRICHED_CONTEXT_MAX_CHARS),
+      isLowDetail: true,
+    };
   }
 
-  // Priority 3: Fall back to description
+  // Priority 3: title only
   console.warn(
-    `[enricher] no rich content available — falling back to description for: ${(article.title ?? "").slice(0, 60)}`
+    `[enricher] no description available — using title only for: ${(article.title ?? "").slice(0, 60)}`
   );
-
   return {
     ...article,
-    enrichedContext: (article.description ?? "").slice(0, ENRICHED_CONTEXT_MAX_CHARS),
+    enrichedContext: article.title ?? "",
     isLowDetail: true,
   };
 }
@@ -62,34 +60,32 @@ export async function enrichArticle(article) {
  * Applies a 300ms delay between requests (good-citizen policy).
  *
  * @param {object[]} rankedArticles — Already scored and sliced by generateDaily.
- * @returns {Promise<object[]>} Same articles with `enrichedContext` + `isLowDetail`.
+ * @returns {object[]} Same articles with `enrichedContext` + `isLowDetail`.
  */
-export async function enrichArticles(rankedArticles) {
-  console.log(`[enricher] enriching ${rankedArticles.length} articles (${SCRAPE_DELAY_MS}ms delay between requests)...`);
+export function enrichArticles(rankedArticles) {
+  console.log(`[enricher] enriching ${rankedArticles.length} articles...`);
 
-  const enriched = [];
-  let scraped = 0;
+  let rich = 0;
   let fallbacks = 0;
 
-  for (let i = 0; i < rankedArticles.length; i++) {
-    const result = await enrichArticle(rankedArticles[i]);
-    enriched.push(result);
+  const enriched = rankedArticles.map((article, i) => {
+    const result = enrichArticle(article);
 
     if (result.isLowDetail) fallbacks++;
-    else scraped++;
+    else rich++;
 
-    const source = result.isLowDetail ? "FALLBACK" : rankedArticles[i].content ? "content " : "scraped ";
+    const source = result.isLowDetail ? "FALLBACK" : "content ";
     console.log(
       `[enricher] ${i + 1}/${rankedArticles.length} — ` +
-      `${source} [signal=${rankedArticles[i].signalScore}] ${(rankedArticles[i].title ?? "").slice(0, 55)}`
+      `${source} [signal=${article.signalScore}] ${(article.title ?? "").slice(0, 55)}`
     );
 
-    if (i < rankedArticles.length - 1) await sleep(SCRAPE_DELAY_MS);
-  }
+    return result;
+  });
 
   console.log(
-    `[enricher] done — ${scraped} scraped, ${fallbacks} fallbacks ` +
-    `(${Math.round((scraped / enriched.length) * 100)}% enrichment rate)`
+    `[enricher] done — ${rich} rich, ${fallbacks} fallbacks ` +
+    `(${Math.round((rich / enriched.length) * 100)}% rich rate)`
   );
 
   return enriched;
