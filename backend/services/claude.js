@@ -37,6 +37,10 @@ Generate ONE crisp, high-information-density question based ONLY on the provided
 - **The 50% Rule:** At least 50% of the question must consist of technical terms, proper nouns, or quantitative data points found in the text.
 - **The 'Directed' Test:** The question must be so specific to the provided text that even a general expert would need to read this article to answer correctly.
 - **Crispness:** The question must be under 125 characters.
+- **PRIORITIZE Systemic Levers:** Focus on data that changes the status quo:
+    - **Economic:** Interest rates, debt-to-GDP, valuation shifts, trade tariffs.
+    - **Political:** Legislative vote margins, treaty deadlines, jurisdictional shifts.
+    - **Technical:** Model parameters, compute clusters, architectural bottlenecks, regulatory thresholds.
 
 # Examples for Calibration
 
