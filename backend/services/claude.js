@@ -67,10 +67,6 @@ Generate ONE crisp, high-information-density question based ONLY on the provided
 - Option index 2 — The 'Surface Fact': the obvious thing a lazy reader would guess from the headline.
 - Option index 3 — The 'Logical Misconception': an intuitive but incorrect deduction from the facts.
 
-# Rejection Rule
-If the text contains no specific technical terms, proper nouns, or quantitative data points that support a directed question, respond with exactly:
-{"rejected": true, "reason": "<one-line reason>"}
-
 # Input Data
 - Category: ${categoryLabel}
 - Headline: ${article.title}${descriptionLine}
