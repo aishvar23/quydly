@@ -9,6 +9,7 @@ import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
 import { fetchAllHeadlines } from "../services/newsdata.js";
+import { fetchNewsApiHeadlines } from "../services/newsapi.js";
 import { rankArticles } from "../services/scorer.js";
 import { enrichArticles } from "../services/enricher.js";
 import { generateQuestion } from "../services/claude.js";
@@ -82,10 +83,17 @@ export async function generateDaily() {
   // Build label lookup: categoryId → label
   const categoryLabel = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.label]));
 
-  // ── Step 1: Fetch 100 raw articles ────────────────────────────────────────
-  console.log("[generateDaily] fetching 130 articles...");
-  const rawArticles = await fetchAllHeadlines(130);
-  console.log(`[generateDaily] fetched ${rawArticles.length} articles`);
+  // ── Step 1: Fetch articles from both sources ──────────────────────────────
+  console.log("[generateDaily] fetching articles from NewsData + NewsAPI...");
+  const [newsdataArticles, newsapiArticles] = await Promise.all([
+    fetchAllHeadlines(130),
+    fetchNewsApiHeadlines(100),
+  ]);
+  const rawArticles = [...newsdataArticles, ...newsapiArticles];
+  console.log(
+    `[generateDaily] fetched ${rawArticles.length} articles ` +
+    `(newsdata=${newsdataArticles.length}, newsapi=${newsapiArticles.length})`
+  );
 
   // ── Step 2: Score and rank all 100 articles ───────────────────────────────
   const ranked = rankArticles(rawArticles);
