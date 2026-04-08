@@ -17,7 +17,10 @@ import * as cheerio from "cheerio";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TIMEOUT_MS = 5_000;
+const TIMEOUT_MS = 10_000;
+
+/** Jina Reader base URL — prepend to any article URL for clean markdown output */
+const JINA_BASE = "https://r.jina.ai/";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -115,6 +118,31 @@ function extractText($) {
 export async function scrapeArticleBody(url) {
   if (!url || typeof url !== "string") return null;
 
+  // ── Primary: Jina Reader ──────────────────────────────────────────────────
+  // r.jina.ai returns clean markdown of the article — no HTML parsing needed.
+  try {
+    const jinaUrl = `${JINA_BASE}${url}`;
+    const response = await axios.get(jinaUrl, {
+      timeout: TIMEOUT_MS,
+      headers: {
+        "Accept": "text/plain,text/markdown,*/*;q=0.8",
+        "User-Agent": USER_AGENT,
+      },
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 300,
+    });
+
+    const text = (response.data ?? "").toString().trim();
+    if (text.length >= 100) {
+      return text.slice(0, ENRICHED_CONTEXT_MAX_CHARS);
+    }
+    console.warn(`[scraper] jina returned insufficient content for ${url} — falling back`);
+  } catch (err) {
+    const reason = err.code ?? err.response?.status ?? err.message ?? "unknown";
+    console.warn(`[scraper] jina fetch failed for ${url} (${reason}) — falling back`);
+  }
+
+  // ── Fallback: direct fetch + cheerio ─────────────────────────────────────
   let html;
   try {
     const response = await axios.get(url, {
@@ -139,7 +167,7 @@ export async function scrapeArticleBody(url) {
     html = response.data;
   } catch (err) {
     const reason = err.code ?? err.response?.status ?? err.message ?? "unknown";
-    console.warn(`[scraper] fetch failed for ${url} — ${reason}`);
+    console.warn(`[scraper] direct fetch failed for ${url} — ${reason}`);
     return null;
   }
 
