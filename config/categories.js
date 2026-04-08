@@ -8,4 +8,7 @@ const CATEGORIES = [
 
 const EDITORIAL_MIX = { world: 2, tech: 1, finance: 1, culture: 1 };
 
-export { CATEGORIES, EDITORIAL_MIX };
+const SESSION_SIZE   = 5;
+const TOTAL_SESSIONS = 10;
+
+export { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE, TOTAL_SESSIONS };

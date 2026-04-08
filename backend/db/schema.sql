@@ -33,6 +33,15 @@ create table if not exists daily_questions (
   generated_at   timestamptz default now()
 );
 
+-- Per-user daily session progress (tracks how many 5-question sessions completed)
+create table if not exists user_daily_progress (
+  user_id            uuid references users(id),
+  date               date not null,
+  sessions_completed int default 0,
+  total_score        int default 0,
+  primary key (user_id, date)
+);
+
 -- Completions
 create table if not exists completions (
   id         uuid primary key default gen_random_uuid(),

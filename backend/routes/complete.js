@@ -91,6 +91,24 @@ router.post("/", async (req, res) => {
     const rank = rankErr ? null : (count ?? 0) + 1;
     const promptSaveStreak = isAnonymous && newStreak >= 1;
 
+    // Advance the user's session counter so the next GET /api/questions
+    // serves the next batch. Non-fatal — streak/points already saved above.
+    try {
+      const { data: progress } = await supabase
+        .from("user_daily_progress")
+        .select("sessions_completed")
+        .eq("user_id", userId)
+        .eq("date", today)
+        .single();
+
+      const next = (progress?.sessions_completed ?? 0) + 1;
+      await supabase
+        .from("user_daily_progress")
+        .upsert({ user_id: userId, date: today, sessions_completed: next, total_score: totalPoints }, { onConflict: "user_id,date" });
+    } catch {
+      // Non-fatal — "play more" will just re-serve the same session
+    }
+
     return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
   } catch (err) {
     console.error("[POST /api/complete]", err);

@@ -106,11 +106,11 @@ export default function App() {
 
   const strategy = getActiveStrategy();
 
-  const [session,         setSession]         = useState(null);
-  const [screen,          setScreen]          = useState("home");
-  const [questions,       setQuestions]       = useState([]);
-  const [currentQ,        setCurrentQ]        = useState(0);
-  const [questionOffset,  setQuestionOffset]  = useState(0);
+  const [session,     setSession]     = useState(null);
+  const [screen,      setScreen]      = useState("home");
+  const [questions,   setQuestions]   = useState([]);
+  const [currentQ,    setCurrentQ]    = useState(0);
+  const [allCaughtUp, setAllCaughtUp] = useState(false);
   const [answered,    setAnswered]    = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [wager,       setWager]       = useState(25);
@@ -221,17 +221,26 @@ export default function App() {
   };
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-  const handleStart = async (offset = 0, skipCreditCheck = false) => {
+  const handleStart = async (skipCreditCheck = false) => {
     if (!skipCreditCheck && credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
-      const res = await fetch(`${API_BASE}/api/questions?offset=${offset}`);
+      const headers = {};
+      if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
+      const res = await fetch(`${API_BASE}/api/questions`, { headers });
       if (!res.ok) throw new Error(`${res.status}`);
-      const { questions: qs } = await res.json();
-      setQuestions(qs);
-      setQuestionOffset(offset);
+      const data = await res.json();
+
+      if (data.allCaughtUp) {
+        setAllCaughtUp(true);
+        setScreen("end");
+        return;
+      }
+
+      setQuestions(data.questions);
       setCredits(FLAGS.freeQuestionsPerDay);
+      setAllCaughtUp(false);
       setCurrentQ(0);
       setAnswered(false);
       setSelectedIdx(null);
@@ -367,11 +376,11 @@ export default function App() {
               setPendingPlayAgain(true);
               setPromptSaveStreak(true);
             } else {
-              const nextOffset = questionOffset + FLAGS.freeQuestionsPerDay;
               setResults([]); setEndRank(null); setPromptSaveStreak(false);
-              handleStart(nextOffset, true);
+              handleStart(true);
             }
           }}
+          allCaughtUp={allCaughtUp}
         />
       )}
 

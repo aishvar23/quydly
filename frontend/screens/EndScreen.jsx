@@ -116,7 +116,7 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth }) {
+export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -198,9 +198,15 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
         <TouchableOpacity style={copied ? styles.shareBtnCopied : styles.shareBtn} onPress={handleShare} activeOpacity={0.85}>
           <Text style={styles.shareBtnText}>{copied ? "Copied! ✓" : "Share My Score →"}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.playAgainBtn} onPress={onPlayAgain} activeOpacity={0.7}>
-          <Text style={styles.playAgainBtnText}>↺ Play more?</Text>
-        </TouchableOpacity>
+        {allCaughtUp ? (
+          <View style={styles.playAgainBtn}>
+            <Text style={styles.playAgainBtnText}>✓ You're all caught up — come back tomorrow</Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.playAgainBtn} onPress={onPlayAgain} activeOpacity={0.7}>
+            <Text style={styles.playAgainBtnText}>↺ Play more?</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </ScrollView>
 
