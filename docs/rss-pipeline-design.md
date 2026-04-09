@@ -2,7 +2,7 @@
 
 **Feature:** Replace NewsData.io API with a self-hosted RSS crawl + article scrape pipeline
 **Branch:** `feature/rss-crawl-pipeline`
-**Status:** Design approved, implementation not started
+**Status:** Design v2 — revised per architecture review
 **Authors:** Aishvarya Suhane
 
 ---
@@ -15,8 +15,11 @@
 4. [Tech Stack](#4-tech-stack)
 5. [Data Model](#5-data-model)
 6. [Component Design](#6-component-design)
-7. [Drawbacks & Concerns](#7-drawbacks--concerns)
-8. [Open Questions](#8-open-questions)
+7. [Observability](#7-observability)
+8. [Product Safety](#8-product-safety)
+9. [Drawbacks & Concerns](#9-drawbacks--concerns)
+10. [Out of Scope for MVP](#10-out-of-scope-for-mvp)
+11. [Open Questions](#11-open-questions)
 
 ---
 
@@ -32,7 +35,7 @@ A daily news quiz. 5 questions per session, resets at 7AM UTC. Wordle-style ritu
 7:00 AM UTC
      │
      ▼
-generateDaily.js (Vercel Cron)
+generateDaily.js  (Vercel Cron)
      │
      ├─ for each category in EDITORIAL_MIX (world×2, tech×1, finance×1, culture×1)
      │         │
@@ -43,353 +46,520 @@ generateDaily.js (Vercel Cron)
      │         │
      │         ▼
      │   claude.js → claude-sonnet-4-20250514
-     │               Prompt: title + description → quiz question
      │               Returns: { question, options[4], correctIndex, tldr, categoryId }
      │
      ▼
-Redis (primary cache, key: "questions:YYYY-MM-DD", TTL: 24h)
-     │
-     ▼  (fallback if Redis unavailable)
-Supabase → daily_questions table (date, questions jsonb)
+Redis (primary cache)  →  Supabase daily_questions (fallback)
      │
      ▼
-GET /api/questions → serves today's 5 questions to app
+GET /api/questions → app
 ```
-
-### Current Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React Native (Expo) |
-| Backend API | Node.js + Express (Vercel Functions via `api/`) |
-| News source | **NewsData.io REST API** (paid, categorised) |
-| AI | Anthropic Claude API (`claude-sonnet-4-20250514`) |
-| Database | Supabase (PostgreSQL) |
-| Cache | Redis (ioredis) |
-| Auth | Supabase Auth |
-| Email | Resend |
-| Payments | Stripe (stub only) |
-| Deploy | Vercel |
-
-### What NewsData.io Gives Us Today
-
-- Single API call per category → returns top article with `title` + `description`
-- Pre-categorised (world, technology, business, entertainment, science)
-- Rate-limited, no full article body
-- Paid tier required for production volume
 
 ### Current Limitations
 
 | Limitation | Impact |
 |-----------|--------|
-| Paid API — cost scales with usage | Adds ongoing cost, rate limit risk |
-| Only returns headline + 1-sentence snippet | Claude gets thin context → quiz questions are generic |
-| No source verification | One API decides what's "top news" — no triangulation |
-| Single point of failure | If NewsData.io is down at 7AM, quiz generation fails |
-| No story deduplication | Same event could appear across different category tags |
-| No control over source quality | Can't curate which publishers we trust |
+| Paid API — cost scales with usage | Ongoing cost, rate limit risk |
+| Headline + 1-sentence snippet only | Claude gets thin context → generic questions |
+| No source verification | Single API decides what's "top news" |
+| Single point of failure | NewsData.io down at 7AM = quiz fails |
+| No content quality control | No way to filter low-quality or partial articles |
 
 ---
 
 ## 2. Problem Statement
 
-NewsData.io gives us a headline and a snippet. That's it. The quiz quality ceiling is set by how much context Claude gets — and a 1-sentence RSS description isn't much.
-
-More importantly, we have no way to know if a story is actually significant. A story that BBC, Reuters, AP, and the Guardian are all covering independently is objectively more newsworthy than one only a single outlet filed. We want that signal.
-
-We also want to stop paying for data that is freely available via public RSS feeds.
+NewsData.io gives us a headline and a snippet. Claude can only write as good a question as the context it receives. A 1-sentence RSS description isn't much. We also have no control over source quality, no deduplication, and an ongoing API cost for data that is freely available.
 
 **Goals:**
 
 1. **Zero cost** — replace paid API with free public RSS feeds
-2. **Richer context** — give Claude the full article body, not just a headline
-3. **Triangulation** — only quiz on stories covered by ≥3 independent sources
-4. **Source control** — we curate the publisher registry; bad/fringe sources never enter
+2. **Richer context** — give Claude full cleaned article body, not just a headline
+3. **Source control** — we curate the publisher registry with authority scores
+4. **Idempotent pipeline** — safe to retry any step without duplicate data
 5. **Resilience** — no single API dependency for 7AM generation
+6. **Quality gate** — only verified, non-partial, above-threshold articles reach quiz generation
 
 ---
 
 ## 3. Proposed Architecture
 
-### High-Level Flow
+### Overview: Two-Phase Queue Model
+
+The pipeline splits into two independent phases with a durable queue between them. The discovery cron does no scraping — it only finds URLs. Scraping is handled by a separate worker function that processes one URL per job.
 
 ```
-RSS Registry (65+ feeds, curated per category)
-          │
-          │  every 30 minutes (Vercel Cron)
-          ▼
-    ┌─────────────────────────────────────────────┐
-    │              ingestor.js                    │
-    │                                             │
-    │  1. Fetch all feeds (parallel, batches=10)  │
-    │  2. For each new article URL:               │
-    │     a. Dedup check (url_hash → skip if seen)│
-    │     b. Scrape full article body (cheerio)   │
-    │     c. Anchor query (same cat, last 48h)    │
-    │     d. Jaccard similarity ≥0.7 → cluster_id │
-    │     e. INSERT raw_articles                  │
-    └─────────────────────────────────────────────┘
-          │
-          ▼
-    raw_articles (Supabase)
-    ┌──────────────────────────────────┐
-    │ url_hash | title | full_content  │
-    │ source_domain | category_id      │
-    │ cluster_id | published_at        │
-    └──────────────────────────────────┘
-          │
-          │  7:00 AM UTC (existing Vercel Cron, unchanged)
-          ▼
-    generateDaily.js
-          │
-          ├─ for each category in EDITORIAL_MIX
-          │         │
-          │         ▼
-          │   articleStore.js
-          │   Query: cluster_id with ≥3 distinct source_domains (last 48h)
-          │   Returns: { title, description: full_content.slice(0,500) }
-          │         │
-          │         ▼
-          │   claude.js  ← UNCHANGED
-          │   Richer context → better quiz question
-          │
-          ▼
-    Redis + Supabase cache (unchanged)
-          │
-          ▼
-    GET /api/questions → app (unchanged)
+┌─────────────────────────────────────────────────────────────────┐
+│  PHASE 1 — DISCOVERY  (every 30 min, lightweight)               │
+│                                                                  │
+│  RSS Registry (65+ feeds, curated, authority-scored)            │
+│       │                                                          │
+│       ▼  rss-parser, parallel batches of 10                     │
+│  For each feed item:                                             │
+│    1. canonicalise URL (strip utm_*, normalise host/scheme)      │
+│    2. url_hash = SHA256(canonical_url)                           │
+│    3. INSERT INTO scrape_queue ON CONFLICT(url_hash) DO NOTHING  │
+│                                                                  │
+│  Output: new URLs queued, duplicates silently skipped           │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+                      ┌──────────────┐
+                      │ scrape_queue │  (Supabase table)
+                      │              │
+                      │ status:      │
+                      │  PENDING     │
+                      │  PROCESSING  │
+                      │  DONE        │
+                      │  PARTIAL     │
+                      │  FAILED      │
+                      │  LOW_QUALITY │
+                      └──────┬───────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│  PHASE 2 — PROCESSING  (every 5 min, worker)                    │
+│                                                                  │
+│  SELECT PENDING items, up to 50                                  │
+│  Respect concurrency: global cap=8, per-domain cap=2            │
+│                                                                  │
+│  For each URL (parallel, within caps):                           │
+│    1. UPDATE status = PROCESSING                                 │
+│    2. fetch(canonical_url, { timeout: 9s, UA: QuydlyBot })      │
+│    3. Parse with @mozilla/readability + jsdom                    │
+│    4. content_hash = SHA256(cleaned_text)                       │
+│    5. Check content length:                                      │
+│         < MIN_CONTENT_LENGTH → status = LOW_QUALITY             │
+│    6. INSERT INTO raw_articles ON CONFLICT(url_hash) DO NOTHING  │
+│    7. UPDATE scrape_queue status = DONE | PARTIAL | FAILED       │
+│                                                                  │
+│  On parse failure:                                               │
+│    store metadata, increment retry_count                         │
+│    if retry_count < MAX_RETRIES → status = PENDING (re-queued)  │
+│    else → status = FAILED                                        │
+└─────────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+                      ┌──────────────┐
+                      │ raw_articles │  (Supabase table)
+                      │              │
+                      │ is_verified  │ ← manual gate (first 2 weeks)
+                      │ = false      │
+                      └──────┬───────┘
+                             │  Human reviews + sets is_verified = true
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  QUIZ GENERATION  (7:00 AM UTC, existing cron, 2-line change)   │
+│                                                                  │
+│  articleStore.fetchStoriesForCategory(categoryId)               │
+│    → SELECT FROM raw_articles                                    │
+│      WHERE category_id = ?                                       │
+│        AND is_verified = true                                    │
+│        AND status = 'DONE'                                       │
+│        AND published_at > NOW() - INTERVAL '48 hours'           │
+│      ORDER BY authority_score DESC, published_at DESC           │
+│      LIMIT 1                                                     │
+│    → { title, description: content.slice(0, 500) }              │
+│                                                                  │
+│  generateDaily.js  →  claude.js  (both untouched)               │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+### Cron Schedule
+
+| Function | Path | Schedule | Purpose |
+|----------|------|----------|---------|
+| Discovery | `/api/cron/discover` | `*/30 * * * *` | RSS fetch → queue new URLs |
+| Processing | `/api/cron/process` | `*/5 * * * *` | Scrape queued URLs → raw_articles |
+| Generation | `/api/cron/generate` | `0 7 * * *` | Existing — unchanged |
+| Cleanup | `/api/cron/cleanup` | `0 3 * * *` | Delete raw_articles older than 7 days |
 
 ### What Changes vs. What Stays the Same
 
-| Component | Change |
-|-----------|--------|
-| `newsdata.js` | Replaced by `articleStore.js` |
-| `generateDaily.js` | 2-line change: swap import + call |
-| `claude.js` | **Untouched** |
-| `api/questions.js` | **Untouched** |
-| `api/complete.js` | **Untouched** |
-| Redis/Supabase caching | **Untouched** |
-| `config/categories.js` | `newsDataTag` field becomes unused (left in place) |
-
-The contract `{title, description}` is preserved end-to-end. Claude never knows where its input came from.
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `backend/services/newsdata.js` | Deleted after cutover | Replaced by `articleStore.js` |
+| `backend/jobs/generateDaily.js` | 2-line change | Swap import + call site only |
+| `backend/services/claude.js` | **Untouched** | Same prompt, same interface |
+| `api/questions.js` | **Untouched** | |
+| `api/complete.js` | **Untouched** | |
+| Redis/Supabase question cache | **Untouched** | |
+| `config/categories.js` | `newsDataTag` unused | Left in place, harmless |
 
 ---
 
 ## 4. Tech Stack
 
-### New Components
+### New Dependencies
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| RSS parsing | `rss-parser` (npm) | Battle-tested, handles RSS 2.0 + Atom, returns structured JS objects |
-| Article scraping | `cheerio` (npm) | jQuery-like HTML parsing, no headless browser, Vercel-compatible |
-| Story clustering | Jaccard similarity (custom, no library) | No NLP dependency, O(k) per insert, deterministic |
-| Article store | Supabase (existing) | New `raw_articles` table in same DB, no new infrastructure |
-| Ingest cron | Vercel Cron (existing mechanism) | Same pattern as `generate.js`, 30-min schedule |
+| Package | Purpose | Replaces |
+|---------|---------|---------|
+| `rss-parser` | RSS/Atom feed parsing | — |
+| `@mozilla/readability` | Semantic article text extraction | cheerio selector guessing |
+| `jsdom` | DOM environment for Readability | — |
+
+### Why `@mozilla/readability` over cheerio?
+
+Cheerio requires us to guess CSS selectors per publisher (`article`, `[class*="article-body"]`, etc.). This is brittle — publishers change their markup. Readability uses the same algorithm as Firefox Reader View: it analyses paragraph density across the DOM and extracts the main content node automatically. It works across publishers without hardcoded selectors. Tradeoff: requires `jsdom` for a DOM environment (~a few MB of overhead on the Lambda, acceptable).
 
 ### Why Not Puppeteer / Playwright?
 
-Headless browsers require ~150MB of Chromium binaries. Vercel Functions have a 50MB unzipped limit by default. The `@sparticuz/chromium` shim exists but adds complexity and cold-start latency. For major news publishers (BBC, Reuters, AP, NYT, Guardian), the full article text is available in plain HTML — no JavaScript rendering required. Cheerio covers ~80% of our target sources. The remaining ~20% (heavy JS, hard paywalls) are inaccessible to any scraper without authentication.
+Headless browsers (~150MB Chromium) exceed Vercel's 50MB unzipped function limit without the `@sparticuz/chromium` shim. They add cold-start latency and cost. For major news publishers (BBC, Reuters, AP, Guardian), the article is in plain HTML — no JavaScript rendering required. Publishers that require JS rendering (rare) are behind paywalls anyway, inaccessible to any unauthenticated scraper.
 
 ### Why Not Newspaper3k?
 
-Python-only. Our backend is Node.js (ESM). Adding a Python Vercel Function creates a separate runtime, a separate deployment surface, and inter-service HTTP calls. The benefit doesn't justify the complexity for our use case.
+Python-only. Our backend is Node.js ESM. Adding a Python Vercel Function creates a separate runtime and inter-service HTTP calls for no meaningful benefit.
 
-### Why Not a Managed News API (e.g. GDELT, MediaStack, GNews)?
+### Queue Infrastructure
 
-They all have the same problem as NewsData.io: paid at scale, no full article body, no triangulation control. We'd still be paying for something we can do ourselves for free.
+**Choice: Supabase `scrape_queue` table (not Redis, not external queue)**
+
+| Option | Pro | Con |
+|--------|-----|-----|
+| Supabase table | Durable, reprocessable, visible, no new infra | Slightly slower than in-memory |
+| Redis list | Fast | Ephemeral without persistence, no reprocess visibility |
+| Vercel Queues | Platform-native | Public beta, uncertain API stability |
+
+Supabase wins because durability and reprocessing (`UPDATE status = 'PENDING'`) are first-class requirements.
 
 ### Full Stack After Migration
 
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| Frontend | React Native (Expo) | No change |
-| Backend API | Node.js + Express (Vercel Functions) | No change |
-| **News ingest** | **rss-parser + cheerio (Vercel Cron)** | **New** |
-| **Article DB** | **Supabase `raw_articles` table** | **New table** |
-| AI | Claude API (`claude-sonnet-4-20250514`) | No change |
-| Question cache | Redis + Supabase `daily_questions` | No change |
-| Auth | Supabase Auth | No change |
-| Email | Resend | No change |
-| Payments | Stripe (stub) | No change |
-| Deploy | Vercel | No change |
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React Native (Expo) |
+| Backend API | Node.js + Express (Vercel Functions) |
+| **Discovery cron** | **rss-parser + Vercel Cron (every 30 min)** |
+| **Processing worker** | **@mozilla/readability + jsdom + Vercel Cron (every 5 min)** |
+| **Job queue** | **Supabase `scrape_queue` table** |
+| **Article store** | **Supabase `raw_articles` table** |
+| AI | Claude API (`claude-sonnet-4-20250514`) |
+| Question cache | Redis + Supabase `daily_questions` |
+| Auth | Supabase Auth |
+| Email | Resend |
+| Payments | Stripe (stub) |
+| Deploy | Vercel |
 
 ---
 
 ## 5. Data Model
 
-### New Table: `raw_articles`
+### Table: `scrape_queue`
+
+The durable job queue. Discovery writes here. Processing reads from here.
+
+```sql
+CREATE TABLE IF NOT EXISTS scrape_queue (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  url_hash       text        UNIQUE NOT NULL,
+  -- SHA256(canonical_url) — idempotency key
+
+  canonical_url  text        NOT NULL,
+  -- Normalised URL: https, lowercase host, no trailing slash, no tracking params
+
+  raw_url        text        NOT NULL,
+  -- Original URL from RSS feed (preserved for debugging)
+
+  title          text,
+  summary        text,
+  -- From RSS — stored immediately so we have metadata even if scrape fails
+
+  source_domain  text        NOT NULL,
+  -- e.g. "bbc.com" — used for per-domain rate limiting
+
+  category_id    text        NOT NULL,
+  -- world | tech | finance | culture | science
+
+  authority_score float      NOT NULL DEFAULT 1.0,
+  -- From rss-feeds.js registry entry. Copied here at discovery time.
+
+  published_at   timestamptz,
+  -- From RSS <pubDate>
+
+  status         text        NOT NULL DEFAULT 'PENDING',
+  -- PENDING | PROCESSING | DONE | PARTIAL | FAILED | LOW_QUALITY
+
+  retry_count    int         NOT NULL DEFAULT 0,
+  last_error     text,
+  -- Last failure reason (for debugging, failure sampling)
+
+  discovered_at  timestamptz NOT NULL DEFAULT now(),
+  processed_at   timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_scrape_queue_status_discovered
+  ON scrape_queue (status, discovered_at ASC);
+  -- Primary worker query path: fetch PENDING ordered by age
+
+CREATE INDEX IF NOT EXISTS idx_scrape_queue_domain_status
+  ON scrape_queue (source_domain, status);
+  -- Per-domain concurrency cap enforcement
+```
+
+**Status lifecycle:**
+
+```
+PENDING → PROCESSING → DONE
+                    ↘ PARTIAL      (fetch ok, parse failed — has metadata, no content)
+                    ↘ LOW_QUALITY  (content below MIN_CONTENT_LENGTH threshold)
+                    ↘ FAILED       (retry_count >= MAX_RETRIES)
+PARTIAL/FAILED → PENDING           (manual reprocess: UPDATE status='PENDING')
+```
+
+---
+
+### Table: `raw_articles`
+
+Cleaned, deduplicated, ready-to-use articles. Only `DONE` + `is_verified = true` rows reach quiz generation.
 
 ```sql
 CREATE TABLE IF NOT EXISTS raw_articles (
-  id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  url              text        UNIQUE NOT NULL,
-  url_hash         text        UNIQUE NOT NULL,
-  -- url_hash = SHA-256 of normalised URL (utm_* stripped, fragment removed)
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  title            text        NOT NULL,
-  summary          text,
-  -- RSS <description> or <contentSnippet>, ≤1000 chars
+  url_hash       text        UNIQUE NOT NULL,
+  -- SHA256(canonical_url) — same key as scrape_queue
 
-  full_content     text,
-  -- Scraped article body (cheerio), ≤5000 chars. NULL if scrape fails.
+  canonical_url  text        NOT NULL,
 
-  source_domain    text        NOT NULL,
-  -- e.g. "bbc.com" — used for triangulation (distinct domain count)
+  title          text        NOT NULL,
 
-  category_id      text        NOT NULL,
-  -- world | tech | finance | culture | science (matches config/categories.js)
+  content        text,
+  -- Cleaned article text from @mozilla/readability
+  -- NULL only if scrape_queue status = PARTIAL
 
-  cluster_id       uuid,
-  -- Dynamically assigned at insert time via Jaccard similarity.
-  -- Articles about the same story share a cluster_id.
+  content_hash   text,
+  -- SHA256(content) — detect duplicate content from different URLs
+  -- NULL if content is NULL
 
-  published_at     timestamptz,
-  -- From RSS <pubDate>. Used to bound anchor queries (last 48h window).
+  source_domain  text        NOT NULL,
+  category_id    text        NOT NULL,
 
-  ingested_at      timestamptz DEFAULT now()
-  -- When we processed it.
+  authority_score float      NOT NULL DEFAULT 1.0,
+  -- Copied from rss-feeds.js at ingest time
+
+  status         text        NOT NULL DEFAULT 'DONE',
+  -- DONE | PARTIAL | LOW_QUALITY
+
+  is_verified    boolean     NOT NULL DEFAULT false,
+  -- Manual gate: must be true for article to reach quiz generation
+  -- Required for first 2 weeks; automated verification TBD
+
+  published_at   timestamptz,
+  ingested_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_raw_articles_category_cluster
-  ON raw_articles (category_id, cluster_id, ingested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_raw_articles_quiz_ready
+  ON raw_articles (category_id, published_at DESC)
+  WHERE is_verified = true AND status = 'DONE';
+  -- Partial index: only rows eligible for quiz generation
 
-CREATE INDEX idx_raw_articles_anchor
-  ON raw_articles (category_id, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_raw_articles_content_hash
+  ON raw_articles (content_hash)
+  WHERE content_hash IS NOT NULL;
+  -- Detect duplicate content from different URLs
 
-CREATE INDEX idx_raw_articles_url_hash
-  ON raw_articles (url_hash);
+CREATE INDEX IF NOT EXISTS idx_raw_articles_cleanup
+  ON raw_articles (ingested_at);
+  -- Cleanup cron: DELETE WHERE ingested_at < NOW() - INTERVAL '7 days'
 ```
 
-### Cluster Assignment Algorithm
+---
 
-Run once per new article at insert time:
+### URL Canonicalization Rules
+
+Applied to every URL at discovery time before computing `url_hash`.
 
 ```
-1. Tokenise title:
-   - lowercase
-   - strip punctuation  /[^a-z0-9\s]/g → ""
-   - split on whitespace
-   - remove stopwords (the, a, an, is, are, was, of, to, in, ...)
-
-2. Anchor query:
-   SELECT id, title, cluster_id FROM raw_articles
-   WHERE category_id = ? AND published_at > NOW() - INTERVAL '48 hours'
-   -- Bounded to same category + 48h → typically 50-200 rows
-
-3. For each candidate:
-   jaccard = |tokens(newTitle) ∩ tokens(candidate.title)| /
-             |tokens(newTitle) ∪ tokens(candidate.title)|
-
-4. if any jaccard >= 0.70:
-     cluster_id = candidate.cluster_id   (join existing cluster)
-   else:
-     cluster_id = gen_random_uuid()      (start new cluster)
+1. Parse URL
+2. Force scheme to https
+3. Lowercase hostname
+4. Remove trailing slash from path (unless path is "/")
+5. Remove tracking query parameters:
+     utm_source, utm_medium, utm_campaign, utm_content, utm_term
+     ref, source, campaign
+     fbclid, gclid, dclid
+     mc_cid, mc_eid
+     (pattern: /^(utm_|mc_|fb|g)clid/i)
+6. Sort remaining query parameters alphabetically (deterministic)
+7. Remove URL fragment (#...)
+8. Result: canonical_url
+9. url_hash = SHA256(canonical_url)
 ```
 
-**Why 0.70?**
-- 0.70 catches paraphrasings: "Trump signs Greenland deal" ↔ "US acquires Greenland, Trump confirms"
-- Below 0.60 false positives appear (unrelated stories sharing common political vocabulary)
-- Above 0.80 misses legitimate variations in headline phrasing
+Example:
+```
+Input:  https://www.bbc.com/news/world-123?utm_source=rss&utm_medium=rss#top
+Output: https://www.bbc.com/news/world-123
+Hash:   SHA256("https://www.bbc.com/news/world-123")
+```
 
-### Quiz-Ready Gate
+---
 
-A story is promoted to "quiz-ready" when its `cluster_id` has ≥3 rows with distinct `source_domain` values published within the last 48 hours.
+### Content Hash Logic
 
-```sql
-SELECT cluster_id, COUNT(DISTINCT source_domain) AS coverage
-FROM raw_articles
-WHERE category_id = $1
-  AND published_at > NOW() - INTERVAL '48 hours'
-GROUP BY cluster_id
-HAVING COUNT(DISTINCT source_domain) >= 3
-ORDER BY coverage DESC;
+```
+1. cleaned_text = Readability output (article.textContent, whitespace normalised)
+2. content_hash = SHA256(cleaned_text)
+```
+
+Used to detect duplicate content published under different URLs (syndicated stories). If `content_hash` already exists in `raw_articles`, the new row is still inserted (different `url_hash`, different source — this is useful for triangulation in v2) but the `content_hash` index makes duplicates detectable.
+
+---
+
+### Low-Quality Filter
+
+```
+MIN_CONTENT_LENGTH = 200  (characters of cleaned text)
+
+if (content.length < MIN_CONTENT_LENGTH) {
+  status = 'LOW_QUALITY'
+  // stored in raw_articles but excluded from quiz generation
+}
+```
+
+A 200-char threshold filters login walls, "subscribe to read" pages, and RSS-only stub entries while allowing genuinely short news items through for manual review.
+
+---
+
+### Feed Registry Schema (`config/rss-feeds.js`)
+
+```js
+{
+  url: string,           // RSS feed URL
+  domain: string,        // e.g. "bbc.com"
+  category: string,      // world | tech | finance | culture | science
+  authority_score: float // 0.0–1.0, used for article ranking
+                         // 1.0 = wire services (Reuters, AP)
+                         // 0.8 = major broadsheets (NYT, Guardian, BBC)
+                         // 0.6 = specialist/trade publications
+                         // 0.4 = aggregators, secondary sources
+}
 ```
 
 ---
 
 ## 6. Component Design
 
-### `config/rss-feeds.js`
-
-Array of 65 feed entries: `{ url, domain, category }`. Distribution: world×14, tech×13, finance×13, culture×13, science×12.
-
-Sources: BBC, Reuters, AP, NYT, Guardian, FT, Economist, Al Jazeera, Washington Post, NPR, DW, France24, Sky News, Ars Technica, Wired, TechCrunch, The Verge, MIT Technology Review, Engadget, ZDNet, Bloomberg, CNBC, Fortune, MarketWatch, Rolling Stone, Variety, Deadline, Pitchfork, Hollywood Reporter, NME, New Scientist, Nature, Scientific American, ScienceDaily, Phys.org, Popular Science.
-
-### `backend/services/scraper.js`
-
-```
-Input:  url (string)
-Output: string (article body, ≤5000 chars) | null (if fails)
-
-Steps:
-  1. fetch(url, { timeout: 9s, User-Agent: "QuydlyBot/1.0" })
-  2. If non-200 → return null
-  3. load HTML into cheerio
-  4. Remove: script, style, nav, header, footer, aside, [class*="ad"], [id*="ad"]
-  5. Try selectors in order:
-       article
-       [class*="article-body"]
-       [class*="article__body"]
-       [class*="story-body"]
-       [class*="entry-content"]
-       main
-  6. For first matching selector:
-       collect all <p> with >40 chars
-       join with " "
-       if result.length > 200 → return result.slice(0, 5000)
-  7. Fall through all selectors → return null
-```
-
-A null result is not an error — the ingestor falls back to the RSS summary, and `articleStore` will still use that article (just with less context for Claude).
-
-### `backend/services/ingestor.js`
+### `api/cron/discover.js` — Discovery Cron (every 30 min)
 
 ```
 Input:  none (reads RSS_FEEDS from config)
-Output: { inserted: number, skipped: number }
+Output: { feeds_attempted, feeds_ok, feeds_failed, urls_queued, urls_skipped }
 
-Steps:
-  1. Parse all 65 feeds in parallel batches of 10
-     (batch size prevents hammering publishers simultaneously)
-  2. For each feed item:
-     a. Skip if title or URL is missing
-     b. Normalise URL (strip utm_*, fbclid, fragment)
-     c. SHA-256 url_hash → check raw_articles for existing
-     d. If exists → skipped++, continue
-     e. scrapeArticle(url) → full_content (or null)
-     f. Jaccard anchor query (same category, last 48h)
-     g. Assign cluster_id
-     h. INSERT raw_articles
-     i. inserted++
-  3. Return { inserted, skipped }
+Algorithm:
+  1. Fetch all feeds: Promise.allSettled in batches of 10
+  2. For each item in each feed:
+     a. canonicaliseUrl(item.link) → canonical_url
+     b. url_hash = SHA256(canonical_url)
+     c. INSERT INTO scrape_queue
+          (url_hash, canonical_url, raw_url, title, summary,
+           source_domain, category_id, authority_score, published_at)
+        ON CONFLICT (url_hash) DO NOTHING
+     d. if inserted → urls_queued++; else → urls_skipped++
+  3. Log structured metrics (see Observability)
+  4. Return summary
+
+Error handling:
+  - Per-feed errors are caught individually — one broken feed never stops the run
+  - Feed-level failures are logged with feed URL and error message
+  - Failed feeds sampled to scrape_queue.last_error for debugging
 ```
 
-**Concurrency design:** RSS fetches are parallel (10 at a time). Scraping + DB writes per article are serial within each feed's item loop. This avoids saturating Vercel's outbound connection pool and keeps memory usage flat.
+### `api/cron/process.js` — Processing Worker (every 5 min)
 
-### `backend/services/articleStore.js`
+```
+Input:  none (reads from scrape_queue)
+Output: { processed, done, partial, low_quality, failed }
+
+Algorithm:
+  1. SELECT id, canonical_url, url_hash, source_domain, category_id,
+            title, summary, authority_score, published_at
+     FROM scrape_queue
+     WHERE status = 'PENDING'
+     ORDER BY discovered_at ASC
+     LIMIT 50
+     FOR UPDATE SKIP LOCKED
+     -- SKIP LOCKED: safe for concurrent invocations if they overlap
+
+  2. UPDATE scrape_queue SET status = 'PROCESSING' for selected rows
+
+  3. Apply concurrency caps:
+     - Global cap: 8 simultaneous scrapes (p-limit)
+     - Per-domain cap: 2 simultaneous per source_domain
+     Group selected rows: sort, assign slots respecting both caps
+
+  4. For each URL (parallel, within caps):
+     a. fetch(canonical_url, { signal: AbortSignal.timeout(9000),
+             headers: { 'User-Agent': 'QuydlyBot/1.0 (+https://quydly.com/bot)' }})
+     b. If non-200:
+          increment retry_count
+          if retry_count < MAX_RETRIES(3) → set status = PENDING
+          else → set status = FAILED, store last_error
+          continue
+     c. Parse HTML with jsdom:
+          const dom = new JSDOM(html, { url: canonical_url })
+     d. Extract with Readability:
+          const reader = new Readability(dom.window.document)
+          const article = reader.parse()
+     e. cleaned = article?.textContent?.trim() ?? null
+     f. if !cleaned or cleaned.length < MIN_CONTENT_LENGTH(200):
+          determine status: PARTIAL (null) or LOW_QUALITY (too short)
+     g. content_hash = cleaned ? SHA256(cleaned) : null
+     h. INSERT INTO raw_articles
+          (url_hash, canonical_url, title, content, content_hash,
+           source_domain, category_id, authority_score, status,
+           is_verified=false, published_at)
+        ON CONFLICT (url_hash) DO NOTHING
+     i. UPDATE scrape_queue SET status = final_status, processed_at = now()
+
+  5. Return summary metrics
+
+Error handling:
+  - Per-URL errors (network, parse, DB) are isolated — never abort the batch
+  - Errors stored in scrape_queue.last_error for failure sampling
+  - Retry budget: MAX_RETRIES = 3
+```
+
+### `backend/services/articleStore.js` — Article Store (replaces newsdata.js)
 
 ```
 Input:  categoryId (string)
 Output: { title: string, description: string }
 
-Steps:
-  1. Query quiz-ready cluster_ids (≥3 distinct domains, last 48h, same category)
-  2. If none found → fallback: most recent article in category (last 48h)
-  3. If nothing in 48h → throw (generateDaily catches and logs)
-  4. Pick random quiz-ready cluster
-  5. Fetch up to 5 articles from that cluster → prefer one with full_content
-  6. Return { title, description: (full_content ?? summary).slice(0,500) }
+Algorithm:
+  1. SELECT title, content, summary
+     FROM raw_articles
+     WHERE category_id = $categoryId
+       AND is_verified = true
+       AND status = 'DONE'
+       AND published_at > NOW() - INTERVAL '48 hours'
+     ORDER BY authority_score DESC, published_at DESC
+     LIMIT 10
+
+  2. If results empty → throw "No verified articles for category in 48h"
+     (generateDaily catches this; fallback: use newsdata.js until cutover confirmed)
+
+  3. Pick randomly from top-5 results (avoid always using same top article)
+
+  4. Return {
+       title: article.title,
+       description: (article.content ?? article.summary ?? "").slice(0, 500)
+     }
+
+Interface: identical to fetchHeadline() in newsdata.js
 ```
 
-### `api/cron/ingest.js`
+### `api/cron/cleanup.js` — Cleanup Cron (daily at 3AM)
 
-Vercel Function handler. Identical guard pattern to `api/cron/generate.js` (CRON_SECRET via `Authorization: Bearer`). Calls `ingestFeeds()`, returns `{ ok, inserted, skipped, timestamp }`.
+```sql
+-- Delete articles older than 7 days
+DELETE FROM raw_articles WHERE ingested_at < NOW() - INTERVAL '7 days';
+DELETE FROM scrape_queue WHERE discovered_at < NOW() - INTERVAL '7 days'
+  AND status IN ('DONE', 'LOW_QUALITY', 'FAILED');
+-- Keep PENDING/PARTIAL for manual inspection
+```
 
 ### Modified `backend/jobs/generateDaily.js`
 
-Two lines change. No other modifications.
+Two lines change. Everything else is identical.
 
 ```js
 // Line 11 — before:
@@ -405,124 +575,230 @@ const headline = await fetchStoriesForCategory(category.id);
 
 ---
 
-## 7. Drawbacks & Concerns
+## 7. Observability
 
-### 7.1 Vercel Function Timeout (High Priority)
+### Structured Metrics (logged per cron run)
 
-**Problem:** The ingest cron scrapes articles inline. On first run with 65 feeds × ~10 items each = ~650 potential scrape calls. At 1–3s per scrape, that's 650–1950 seconds — far beyond Vercel's 60s Pro limit.
+Each cron function logs one JSON object at completion. These are queryable in Vercel log drains.
 
-**Mitigation:**
-- After the first run, the vast majority of articles will be skipped (already in DB). Subsequent runs are fast — typically 5–20 new articles per 30-min cycle.
-- First-run seeding should be done locally (`node backend/services/ingestor.js`) before deploying the cron, not through Vercel.
-- Add `SCRAPE_ENABLED=true` env flag — if disabled, ingestor stores RSS summary only (no HTTP scrape). First deploy with scraping off, seed locally, then enable.
+**Discovery cron:**
+```json
+{
+  "event": "discover_run",
+  "timestamp": "2026-04-09T10:30:00Z",
+  "feeds_attempted": 65,
+  "feeds_ok": 63,
+  "feeds_failed": 2,
+  "urls_discovered": 247,
+  "urls_queued": 12,
+  "urls_skipped": 235,
+  "failed_feeds": ["https://example.com/rss"]
+}
+```
 
-**Residual risk:** A new publisher with a large backlog could cause a slow run if many new URLs appear simultaneously (e.g., after adding new feeds to the registry).
+**Processing cron:**
+```json
+{
+  "event": "process_run",
+  "timestamp": "2026-04-09T10:35:00Z",
+  "batch_size": 12,
+  "done": 9,
+  "partial": 1,
+  "low_quality": 1,
+  "failed": 1,
+  "scrape_success_rate": 0.75,
+  "avg_content_length": 2840
+}
+```
 
-### 7.2 Scrape Failures & Paywalls (~20% of sources)
+**Key metrics to watch:**
+| Metric | Formula | Alert threshold |
+|--------|---------|----------------|
+| Feed success rate | `feeds_ok / feeds_attempted` | < 0.85 for 3 consecutive runs |
+| Scrape success rate | `done / batch_size` | < 0.60 for 3 consecutive runs |
+| Dedup rate | `urls_skipped / urls_discovered` | — (informational) |
+| Queue depth | `SELECT COUNT(*) FROM scrape_queue WHERE status='PENDING'` | > 500 (processing falling behind) |
 
-**Problem:** Bloomberg, FT, NYT, and The Economist have hard paywalls. Cheerio will fetch the page but get a login wall, not article text. `full_content` will be null for these.
+### Failure Sampling
 
-**Mitigation:**
-- These sources are still valuable for `title` and `summary` (RSS always gives this, paywall or not).
-- The Jaccard clustering still works on their titles — they contribute to triangulation.
-- Claude will use the RSS summary for these sources, which is acceptable (it's what we use today with NewsData.io).
-- Practically, for heavily covered stories BBC/Reuters/AP/Guardian will have full text — the paywalled sources add triangulation signal without needing their full body.
+Failed scrape payloads are stored in `scrape_queue.last_error` (text). For HTTP errors, also store status code. This provides a debugging corpus without a separate error store.
 
-**Residual risk:** If the only sources covering a story are paywalled, Claude gets thin context. Rare in practice — major stories are always covered by open-access wire services.
+Example stored in `last_error`:
+```
+fetch_error: 403 Forbidden (attempted 3 times)
+```
+```
+parse_error: Readability returned null — likely a login wall
+```
 
-### 7.3 Jaccard False Positives / False Negatives
+### Reprocessing
 
-**Problem:** A 0.70 threshold is a heuristic. It can fail in two directions:
+To retry failed articles:
+```sql
+-- Retry all FAILED items (resets retry counter)
+UPDATE scrape_queue
+SET status = 'PENDING', retry_count = 0, last_error = NULL
+WHERE status = 'FAILED';
 
-- **False positive (over-clustering):** "Apple launches new phone" and "Apple CEO phone call with investor" both contain `apple` and `phone` — could cluster incorrectly.
-- **False negative (under-clustering):** "Gaza ceasefire agreement reached" and "Hamas and Israel agree to pause fighting" share little vocabulary despite being the same story.
+-- Retry specific domain
+UPDATE scrape_queue
+SET status = 'PENDING', retry_count = 0
+WHERE status = 'FAILED' AND source_domain = 'bloomberg.com';
 
-**Mitigation:**
-- Over-clustering is less harmful than under-clustering — a merged cluster just means more domain coverage, still produces a valid quiz question.
-- The 48-hour + same-category bounds significantly reduce false positives (the two Apple examples would need to arrive within 48h in the same category).
-- False negatives mean a real story gets two separate clusters, each with fewer source domains — it might not hit the ≥3 threshold and gets skipped. The fallback (`most recent article`) catches this.
-
-**Residual risk:** A genuinely major story might be missed if it's phrased very differently across publishers. Acceptable for a quiz — we have many stories per category to choose from.
-
-### 7.4 RSS Feed Reliability
-
-**Problem:** RSS feeds go down, change URLs, go behind auth, or return malformed XML. We're depending on 65 external URLs.
-
-**Mitigation:**
-- `rss-parser` errors per feed are caught and logged individually — one broken feed doesn't stop the run.
-- Feed failures are silent to end users; the ingestor just skips that source for that cycle.
-- If a major source (e.g. Reuters) breaks its RSS, we lose their triangulation contribution — but the ≥3 threshold is still achievable from the other 13 world feeds.
-
-**Monitoring needed:** Alert when a given feed fails for >3 consecutive cycles (not implemented in v1 — log-based monitoring only).
-
-### 7.5 `cluster_id` Persistence Risk
-
-**Problem:** `cluster_id` is assigned at insert time by comparing against articles from the last 48 hours. If the ingestor runs on two overlapping batches in quick succession (race condition), two threads could assign different `cluster_id` values to articles that should be in the same cluster.
-
-**Mitigation:**
-- Vercel cron fires once per 30 minutes per function instance — not concurrent by default.
-- The `url_hash` unique constraint prevents the same article being inserted twice.
-- Race condition is only possible if two separate cron triggers overlap (extremely rare, and only affects articles at the boundary of the 48h window).
-
-**Residual risk:** Low. Worst case: some articles that should cluster together get separate `cluster_id` values → they each need 3 independent domain sources rather than sharing. This reduces quiz-ready coverage slightly but doesn't cause incorrect quiz questions.
-
-### 7.6 Database Growth
-
-**Problem:** `raw_articles` accumulates indefinitely. At 20 new articles per 30-min cycle × 48 cycles/day = ~960 rows/day. After a year: ~350k rows.
-
-**Mitigation:**
-- Add a cleanup cron (daily or weekly) to `DELETE FROM raw_articles WHERE ingested_at < NOW() - INTERVAL '30 days'`. This is a 10-line addition, not implemented in v1.
-- At 350k rows with the current indexes, query performance is still fast (the index on `category_id, cluster_id, ingested_at` is selective).
-
-**Not urgent:** Supabase free tier supports 500MB of database storage. At ~500 bytes per row average, 350k rows = ~175MB/year.
-
-### 7.7 Bootstrap Problem (Day 1)
-
-**Problem:** When the pipeline first deploys, `raw_articles` is empty. The 7AM `generateDaily` run will call `articleStore` → find nothing → throw → quiz generation fails.
-
-**Mitigation (required before cutover):**
-1. Run ingestor locally first (`node backend/services/ingestor.js`)
-2. Wait for ≥4 cron cycles (2 hours) to accumulate triangulated clusters
-3. Run the verification SQL query to confirm quiz-ready coverage in all categories
-4. Only then swap the 2 lines in `generateDaily.js`
-
-The old `newsdata.js` remains available as an instant rollback.
-
-### 7.8 robots.txt / Legal
-
-**Problem:** Some publishers may have `robots.txt` entries disallowing crawlers, or ToS clauses against scraping.
-
-**Mitigation:**
-- We send a `User-Agent: QuydlyBot/1.0` identifying header — we are not hiding.
-- We respect the HTTP response: if a page returns 403/429/401, we store `null` for `full_content` and move on.
-- We are not storing full articles for redistribution — we extract ≤500 chars of context to generate quiz questions, which is consistent with fair use for educational/transformative purposes.
-- RSS feeds are explicitly published for syndication; fetching them is the intended use.
-
-**Residual risk:** Low for RSS fetching. Moderate for article scraping. If a publisher objects, removing their domain from `rss-feeds.js` immediately stops all ingestion from them.
+-- Reprocess LOW_QUALITY (e.g. after raising threshold)
+UPDATE raw_articles SET status = 'PENDING' WHERE status = 'LOW_QUALITY';
+-- (process.js would need to re-read from raw_articles for this — alternatively
+--  update scrape_queue status = 'PENDING' for same url_hashes)
+```
 
 ---
 
-## 8. Open Questions
+## 8. Product Safety
 
-| # | Question | Impact | Status |
-|---|----------|--------|--------|
-| Q1 | Should we add a `used_on` date field to prevent the same story being quizzed twice in the same week? | Low — low probability of collision given daily reset | Defer to v2 |
-| Q2 | Should the `science` category be added to `EDITORIAL_MIX`? It's in `CATEGORIES` but excluded from the daily mix. | Medium — more variety | Separate decision, not blocked |
-| Q3 | What's the retention policy for `raw_articles`? 7 days? 30 days? | Storage cost | Implement cleanup cron in v1 or v2 |
-| Q4 | Do we alert/page when quiz-ready coverage drops below threshold at 6AM? | High — silent failure risk | Add monitoring before cutover |
-| Q5 | Jaccard threshold: 0.70 is a heuristic — do we want A/B data before locking it in? | Low initially | Review after 1 week of data |
+### Manual Verification Gate
+
+All newly ingested articles enter `raw_articles` with `is_verified = false`. They are invisible to quiz generation until a human sets `is_verified = true`.
+
+**Required for: first 2 weeks of operation.**
+
+During this period:
+1. Run discovery + processing crns in shadow mode (not wired to generateDaily)
+2. Review `raw_articles` in Supabase dashboard daily
+3. Check: is content clean? is it actually news? is it category-appropriate?
+4. Bulk-approve trusted sources:
+   ```sql
+   -- Approve all DONE articles from wire services
+   UPDATE raw_articles SET is_verified = true
+   WHERE source_domain IN ('reuters.com', 'apnews.com', 'bbc.com')
+     AND status = 'DONE';
+   ```
+5. After 2 weeks, move to automated verification (approve all DONE + authority_score ≥ 0.8)
+
+### Source Authority Scoring
+
+Each feed in `config/rss-feeds.js` carries an `authority_score` (0.0–1.0):
+
+| Score | Publisher tier | Examples |
+|-------|---------------|---------|
+| 1.0 | International wire services | Reuters, AP |
+| 0.8 | Major broadsheets + broadcasters | BBC, NYT, Guardian, FT, WaPo |
+| 0.6 | Quality specialist / trade | Ars Technica, Wired, Nature, Economist |
+| 0.4 | Secondary / aggregator | Engadget, ZDNet, ScienceDaily |
+
+`authority_score` is stored on each article at ingest time and used for:
+- Ordering results in `articleStore` (higher authority = preferred)
+- Future: filtering threshold (e.g. only quiz on articles from sources ≥ 0.6)
+- Future: triangulation weighting (3 wire-service sources > 5 aggregator sources)
+
+### Category-Aware Prompting
+
+*Deferred from MVP.* The claude.js prompt is currently category-aware only through the `categoryId` field passed to Claude. Future: inject category-specific tone guidance (finance = precise/sober; culture = playful; science = curious) into the system prompt. Structure defined, implementation optional in MVP.
+
+---
+
+## 9. Drawbacks & Concerns
+
+### 9.1 Processing Cron Throughput
+
+**Problem:** The processing cron runs every 5 minutes and processes up to 50 URLs per run. At 8 concurrent scrapes with ~2s average per scrape, one run takes ~13s for 50 URLs. This is fine. However, if the queue grows faster than it drains (e.g., after adding many new feeds), backpressure builds.
+
+**Mitigation:**
+- Monitor queue depth (`SELECT COUNT(*) WHERE status='PENDING'`)
+- `FOR UPDATE SKIP LOCKED` allows multiple processing invocations to run safely in parallel if needed
+- Alert threshold: queue depth > 500
+
+### 9.2 Paywall Scraping (~20% of sources)
+
+**Problem:** Bloomberg, FT, NYT, Economist return login walls. Readability will extract "Subscribe to read" text, which gets flagged as LOW_QUALITY (too short) or PARTIAL.
+
+**Mitigation:**
+- These sources still contribute `title` + `summary` from RSS (stored at discovery time)
+- `is_verified = true` can be set on PARTIAL rows manually if the title alone is sufficient for a good question
+- Wire services (Reuters, AP, BBC — all open) cover every major story
+
+### 9.3 jsdom Memory Footprint
+
+**Problem:** `jsdom` is a full DOM implementation. Instantiating it per article adds ~20-30MB of memory per concurrent execution. At 8 concurrent scrapes, peak memory could hit ~250MB.
+
+**Mitigation:**
+- Vercel Functions default to 1024MB on Pro — well within budget
+- `jsdom` instances are not retained between articles (GC'd after each parse)
+- Alternative if memory becomes an issue: `linkedom` as a lighter JSDOM drop-in (but Readability compatibility is partial)
+
+### 9.4 Bootstrap / Day-One Problem
+
+**Problem:** `raw_articles` is empty on first deploy. `generateDaily` at 7AM will find no verified articles → throw → quiz generation fails.
+
+**Required sequence before cutover:**
+1. Deploy discovery + processing crns without modifying `generateDaily.js`
+2. Wait 24h for articles to accumulate
+3. Manually verify first batch (`is_verified = true` for trusted sources)
+4. Confirm `articleStore` returns results for all 4 categories in EDITORIAL_MIX
+5. Only then apply the 2-line change to `generateDaily.js`
+6. Keep `NEWSDATA_API_KEY` in env as instant rollback for 1 week post-cutover
+
+### 9.5 Vercel Cron Reliability
+
+**Problem:** Vercel Crons are best-effort on Hobby plan — they can be skipped under load. Missing a 30-min discovery cycle means slightly stale queue, but not catastrophic (articles from prior cycles are still valid).
+
+**Mitigation:**
+- On Pro plan, crons are more reliable
+- The 48-hour window in `articleStore` gives ample buffer — missing one or two discovery cycles doesn't affect quiz generation
+- The cleanup cron uses a 7-day TTL — missing one daily cleanup is harmless
+
+### 9.6 robots.txt / Legal
+
+**Problem:** Some publishers may prohibit crawling.
+
+**Mitigation:**
+- `User-Agent: QuydlyBot/1.0` is honest self-identification
+- We respect non-200 HTTP responses without retry-hammering
+- RSS feeds are explicitly published for syndication — fetching them is the intended use
+- We extract ≤500 chars for LLM context (educational/transformative use)
+- Per-domain cap of 2 simultaneous requests prevents scraping at scale
+- Removing a publisher = delete their feeds from `rss-feeds.js`
+
+---
+
+## 10. Out of Scope for MVP
+
+| Feature | Rationale for deferral |
+|---------|----------------------|
+| Jaccard / embedding-based story clustering | Adds O(k) complexity per insert; no quiz-side benefit until triangulation is reintroduced in v2 |
+| Triangulation gate (≥3 sources) | Requires clustering; deferred with clustering |
+| `content_hash` dedup enforcement | Detected (indexed) but not blocked in MVP — duplicate content reaches the DB, is_verified gate is the quality control |
+| Automated `is_verified` promotion | Manual gate for first 2 weeks; automate after trust is established |
+| Category-aware Claude prompting | Structure in place; implementation optional |
+| Readability language detection | Out of scope — all feeds are English |
+| Sitemap / full-site crawl | RSS-only in MVP; sitemap crawling is future expansion |
+
+---
+
+## 11. Open Questions
+
+| # | Question | Impact | Decision by |
+|---|----------|--------|------------|
+| Q1 | MIN_CONTENT_LENGTH: 200 chars — right threshold? | Affects LOW_QUALITY rate | Set at implementation, tune after 1 week of data |
+| Q2 | MAX_RETRIES: 3 — sufficient for transient failures? | Affects FAILED rate | Confirm at implementation |
+| Q3 | 7-day TTL: right retention window? | Storage cost vs. lookback range | Review at 1 month |
+| Q4 | Who performs manual verification in the first 2 weeks? | Ops dependency | Designate before go-live |
+| Q5 | Should `science` category be added to EDITORIAL_MIX? | Quiz variety | Separate product decision, not blocked |
 
 ---
 
 ## Summary
 
-| Dimension | Current | Proposed |
-|-----------|---------|----------|
-| News source | Paid API (NewsData.io) | Free public RSS (65 feeds) |
-| Article context | Headline + 1-sentence snippet | Full article body (≤5000 chars) |
-| Story verification | None (single API decides) | Triangulation: ≥3 independent sources |
-| Source curation | API provider controls | We control the publisher registry |
-| Single point of failure | Yes (NewsData.io at 7AM) | No — 65 sources, graceful per-feed fallback |
-| Clustering | None | Jaccard similarity ≥0.70 within 48h window |
-| Cost | Paid tier | $0 (Vercel Cron + existing Supabase) |
-| Code changes | — | 6 new files, 2 modified, 1 deleted |
+| Dimension | Current | Proposed MVP |
+|-----------|---------|-------------|
+| News source | Paid API (NewsData.io) | Free public RSS (65+ feeds) |
+| Article context | Headline + snippet | Full cleaned body (Readability) |
+| Story verification | None | Manual `is_verified` gate (2 weeks) |
+| Pipeline model | Single synchronous cron | Decoupled discover → queue → worker |
+| Idempotency | None | SHA256(canonical_url), ON CONFLICT DO NOTHING |
+| Content quality | Unfiltered | LOW_QUALITY filter + PARTIAL status |
+| Failure handling | Throw → fail | Retry budget, status tracking, reprocessing |
+| Source ranking | None | `authority_score` per feed |
+| Clustering | N/A | **Deferred to v2** |
+| Triangulation | N/A | **Deferred to v2** |
+| Observability | None | Structured metrics per run, failure sampling |
+| Cost | Paid tier | $0 (existing Vercel + Supabase) |

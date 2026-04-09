@@ -1,208 +1,181 @@
-# RSS Crawl Pipeline — Plan & Tracker
+# RSS Crawl Pipeline — Implementation Tracker
 
-Replacing NewsData.io with a self-hosted RSS crawl model. Free, no paid API. Stories are only flagged "quiz-ready" once 3+ unique publishers have covered them (triangulation gate).
+Replacing NewsData.io with a self-hosted RSS crawl pipeline.
+Full design: [`docs/rss-pipeline-design.md`](docs/rss-pipeline-design.md)
 
 **Branch:** `feature/rss-crawl-pipeline`
 **Status legend:** ⬜ todo · 🔄 in progress · ✅ done · ❌ blocked
 
 ---
 
-## Architecture Overview
+## Architecture (MVP)
 
 ```
-RSS Registry (65+ feeds)
-        ↓  every 30 min (Vercel Cron)
-  ingestor.js
-    ├─ 1. Upsert by URL → skip if exists
-    ├─ 2. Scrape inline → cheerio extracts <article> body
-    ├─ 3. Anchor query → find same-category articles (last 48h)
-    ├─ 4. Jaccard similarity → if ≥ 0.7 match, reuse cluster_id; else new UUID
-    └─ 5. INSERT raw_articles (title, summary, full_content, published_at, cluster_id)
-                         ↓
-                   raw_articles (Supabase)
-                         ↓  quiz-ready = cluster_id with ≥3 distinct domains
-                   articleStore.js
-                         ↓  returns {title, description}  ← same interface as newsdata.js
-                   generateDaily.js  ──→  claude.js (untouched)
+Discovery Cron (30 min)  →  scrape_queue (Supabase)  →  Processing Worker (5 min)
+                                                                  ↓
+                                                           raw_articles (Supabase)
+                                                           [is_verified = false]
+                                                                  ↓  manual review
+                                                           articleStore.js
+                                                                  ↓
+                                                           generateDaily.js → claude.js
 ```
 
-**Key contract preserved:** `articleStore.fetchStoriesForCategory(categoryId)` → `{title, description}`. `claude.js` and all quiz generation code are untouched.
+**Deferred to v2:** story clustering, Jaccard similarity, triangulation gate (≥3 sources)
+**MVP dedup:** SHA256(canonical_url) + ON CONFLICT DO NOTHING only
 
 ---
 
-## Schema
+## Phase 1 — Database
 
-### New table: `raw_articles`
+| # | Task | Status |
+|---|------|--------|
+| 1.1 | Create `backend/db/migration_scrape_queue.sql` | ⬜ |
+| 1.2 | Create `backend/db/migration_raw_articles.sql` | ⬜ |
+| 1.3 | Run both migrations in Supabase SQL editor | ⬜ |
+| 1.4 | Verify tables + indexes in Supabase dashboard | ⬜ |
 
+**Tables:**
+- `scrape_queue` — job queue (url_hash, canonical_url, status, retry_count, last_error, authority_score, ...)
+- `raw_articles` — cleaned articles (url_hash, canonical_url, content, content_hash, is_verified, authority_score, status, ...)
+
+**Status values:**
+- `scrape_queue`: PENDING → PROCESSING → DONE | PARTIAL | LOW_QUALITY | FAILED
+- `raw_articles`: DONE | PARTIAL | LOW_QUALITY
+
+---
+
+## Phase 2 — Dependencies & RSS Registry
+
+| # | Task | Status |
+|---|------|--------|
+| 2.1 | `npm install rss-parser @mozilla/readability jsdom` | ⬜ |
+| 2.2 | Create `config/rss-feeds.js` — 65+ feeds with `authority_score` | ⬜ |
+
+**Feed schema:** `{ url, domain, category, authority_score }`
+**Authority scores:** Reuters/AP = 1.0, BBC/NYT/Guardian = 0.8, Ars/Wired/Nature = 0.6, Engadget/ZDNet = 0.4
+
+---
+
+## Phase 3 — URL Canonicalization Utility
+
+| # | Task | Status |
+|---|------|--------|
+| 3.1 | Create `backend/utils/canonicalise.js` | ⬜ |
+
+**Rules:**
+- Force `https`
+- Lowercase hostname
+- Remove trailing slash from path
+- Strip tracking params: `utm_*`, `ref`, `source`, `campaign`, `fbclid`, `gclid`, `mc_*`
+- Sort remaining params alphabetically
+- Remove fragment
+- `url_hash = SHA256(canonical_url)`
+
+---
+
+## Phase 4 — Discovery Cron
+
+| # | Task | Status |
+|---|------|--------|
+| 4.1 | Create `backend/services/discoverer.js` — RSS fetch + queue insert | ⬜ |
+| 4.2 | Create `api/cron/discover.js` — Vercel Function handler | ⬜ |
+| 4.3 | Add to `vercel.json`: `*/30 * * * *` schedule | ⬜ |
+| 4.4 | Smoke-test locally: run discoverer, check `scrape_queue` fills | ⬜ |
+| 4.5 | Run twice — confirm `urls_skipped` = prior `urls_queued` (idempotency works) | ⬜ |
+
+**Output per run:** `{ feeds_attempted, feeds_ok, feeds_failed, urls_queued, urls_skipped }`
+Logs structured JSON (see Observability section in design doc).
+
+---
+
+## Phase 5 — Processing Worker
+
+| # | Task | Status |
+|---|------|--------|
+| 5.1 | Create `backend/services/scraper.js` — fetch + Readability extract | ⬜ |
+| 5.2 | Create `backend/services/processor.js` — batch worker with concurrency caps | ⬜ |
+| 5.3 | Create `api/cron/process.js` — Vercel Function handler | ⬜ |
+| 5.4 | Add to `vercel.json`: `*/5 * * * *` schedule, `maxDuration: 60` | ⬜ |
+| 5.5 | Smoke-test: run processor, check `raw_articles` fills | ⬜ |
+| 5.6 | Verify `is_verified = false` on all inserted rows | ⬜ |
+| 5.7 | Verify `status = 'LOW_QUALITY'` for short/paywalled content | ⬜ |
+| 5.8 | Verify retry logic: force a 404 URL → confirm retry_count increments | ⬜ |
+
+**Concurrency caps:** global = 8, per-domain = 2
+**Retry budget:** MAX_RETRIES = 3
+**Low-quality threshold:** MIN_CONTENT_LENGTH = 200 chars
+
+---
+
+## Phase 6 — Article Store
+
+| # | Task | Status |
+|---|------|--------|
+| 6.1 | Create `backend/services/articleStore.js` — replaces newsdata.js | ⬜ |
+| 6.2 | Manually verify first batch in Supabase (`is_verified = true` for trusted sources) | ⬜ |
+| 6.3 | Test `fetchStoriesForCategory("world")` returns `{title, description}` | ⬜ |
+| 6.4 | Test all 4 categories in EDITORIAL_MIX return results | ⬜ |
+
+**Query:** `WHERE is_verified = true AND status = 'DONE' AND published_at > NOW() - INTERVAL '48 hours'`
+**Ordering:** `authority_score DESC, published_at DESC`
+
+---
+
+## Phase 7 — Cleanup Cron
+
+| # | Task | Status |
+|---|------|--------|
+| 7.1 | Create `api/cron/cleanup.js` — 7-day TTL deletion | ⬜ |
+| 7.2 | Add to `vercel.json`: `0 3 * * *` schedule | ⬜ |
+
+**Deletes:** `raw_articles` + `scrape_queue` (DONE/FAILED/LOW_QUALITY only) older than 7 days
+
+---
+
+## Phase 8 — Wire Up generateDaily (2-line change)
+
+| # | Task | Status |
+|---|------|--------|
+| 8.1 | Confirm verified article coverage for all 4 categories (run verification query) | ⬜ |
+| 8.2 | Edit `backend/jobs/generateDaily.js` line 11: swap import | ⬜ |
+| 8.3 | Edit `backend/jobs/generateDaily.js` line 73: swap call | ⬜ |
+| 8.4 | Run `node backend/jobs/generateDaily.js` end-to-end — confirm 5 questions | ⬜ |
+
+**Verification query before 8.2:**
 ```sql
-CREATE TABLE IF NOT EXISTS raw_articles (
-  id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  url              text        UNIQUE NOT NULL,
-  url_hash         text        UNIQUE NOT NULL,          -- SHA-256 of normalised URL
-  title            text        NOT NULL,
-  summary          text,                                 -- RSS snippet (≤1000 chars)
-  full_content     text,                                 -- scraped <article> body
-  source_domain    text        NOT NULL,                 -- e.g. "bbc.com"
-  category_id      text        NOT NULL,                 -- world|tech|finance|culture|science
-  cluster_id       uuid,                                 -- dynamically assigned at insert time
-  published_at     timestamptz,                          -- from RSS <pubDate>
-  ingested_at      timestamptz DEFAULT now()
-);
-
--- Primary query path: quiz-ready clusters per category in last 48h
-CREATE INDEX IF NOT EXISTS idx_raw_articles_category_cluster
-  ON raw_articles (category_id, cluster_id, ingested_at DESC);
-
--- Anchor query: find potential matches for incoming article
-CREATE INDEX IF NOT EXISTS idx_raw_articles_anchor
-  ON raw_articles (category_id, published_at DESC);
-
--- Dedup check
-CREATE INDEX IF NOT EXISTS idx_raw_articles_url_hash
-  ON raw_articles (url_hash);
-```
-
-**Changed from original plan:** `story_group_hash` (pre-computed keyword hash) → `cluster_id` (UUID, dynamically assigned via Jaccard at insert time). Also added `published_at`.
-
----
-
-## Ingestor Logic (per new article)
-
-```
-1. normalise URL → SHA-256 url_hash
-2. SELECT id FROM raw_articles WHERE url_hash = ? → if exists, SKIP
-3. scrape(url) → extract full_content via cheerio:
-     - remove: script, style, nav, header, footer, aside, [class*="ad"]
-     - try selectors in order: article, [class*="article-body"], [class*="story-body"],
-       [class*="entry-content"], main
-     - join <p> tags with >40 chars, truncate to 5000 chars
-     - fall back to RSS summary if scrape fails / returns <200 chars
-4. anchor query:
-     SELECT id, title, cluster_id FROM raw_articles
-     WHERE category_id = ? AND published_at > NOW() - INTERVAL '48 hours'
-5. for each candidate: jaccardSimilarity(newTitle, candidate.title)
-     tokenize = lowercase → strip punctuation → split → remove stopwords → Set
-     jaccard = |A ∩ B| / |A ∪ B|
-6. if any candidate.jaccard >= 0.7 → cluster_id = candidate.cluster_id
-   else → cluster_id = gen_random_uuid()
-7. INSERT raw_articles (url, url_hash, title, summary, full_content,
-                        source_domain, category_id, cluster_id,
-                        published_at, ingested_at)
-```
-
-**O(n²) avoided:** The anchor query returns only same-category articles from the last 48h. In practice this is ~50–200 rows per category — O(k) per insert, not O(n²) over the full table.
-
----
-
-## articleStore Query (quiz-ready gate)
-
-A cluster is "quiz-ready" when `cluster_id` has ≥3 rows with distinct `source_domain` in the last 48h.
-
-```sql
--- Find quiz-ready cluster_ids for a category
-SELECT cluster_id, COUNT(DISTINCT source_domain) AS domain_count
+SELECT category_id, COUNT(*) AS ready
 FROM raw_articles
-WHERE category_id = $1
+WHERE is_verified = true AND status = 'DONE'
   AND published_at > NOW() - INTERVAL '48 hours'
-GROUP BY cluster_id
-HAVING COUNT(DISTINCT source_domain) >= 3
-ORDER BY domain_count DESC;
-```
-
-Pick a random quiz-ready cluster → select one article from it (prefer rows with `full_content`) → return `{title, description: full_content.slice(0, 500)}`.
-
----
-
-## Implementation Phases
-
-### Phase 1 — Database
-
-| # | Task | Status |
-|---|------|--------|
-| 1.1 | Create `backend/db/migration_raw_articles.sql` with schema above | ⬜ |
-| 1.2 | Run migration in Supabase SQL editor | ⬜ |
-| 1.3 | Verify table + 3 indexes exist in Supabase dashboard | ⬜ |
-
----
-
-### Phase 2 — Dependencies & RSS Registry
-
-| # | Task | Status |
-|---|------|--------|
-| 2.1 | `npm install rss-parser cheerio` | ⬜ |
-| 2.2 | Create `config/rss-feeds.js` — 65+ feeds across 5 categories | ⬜ |
-
-Feed structure: `{ url, domain, category }` where `category` ∈ `{world, tech, finance, culture, science}`.
-
----
-
-### Phase 3 — Ingestor + Inline Scraper
-
-| # | Task | Status |
-|---|------|--------|
-| 3.1 | Create `backend/services/scraper.js` — cheerio extractor | ⬜ |
-| 3.2 | Create `backend/services/ingestor.js` — full flow (fetch → upsert → scrape → anchor → jaccard → insert) | ⬜ |
-| 3.3 | Smoke-test locally against a single feed | ⬜ |
-| 3.4 | Run twice — confirm second run shows 0 inserted (dedup works) | ⬜ |
-| 3.5 | Inspect `raw_articles` in Supabase — verify `full_content` is populated, `cluster_id` groups related articles | ⬜ |
-
----
-
-### Phase 4 — Article Store
-
-| # | Task | Status |
-|---|------|--------|
-| 4.1 | Create `backend/services/articleStore.js` | ⬜ |
-| 4.2 | Wait for ≥4h of ingest cycles before testing (need cluster coverage) | ⬜ |
-| 4.3 | Run quiz-ready verification SQL (see below) | ⬜ |
-| 4.4 | Test `fetchStoriesForCategory("world")` returns `{title, description}` | ⬜ |
-
-**Verification SQL** — run before wiring up generateDaily:
-```sql
-SELECT category_id, COUNT(DISTINCT cluster_id) AS ready_clusters
-FROM (
-  SELECT category_id, cluster_id
-  FROM raw_articles
-  WHERE published_at > NOW() - INTERVAL '48 hours'
-  GROUP BY category_id, cluster_id
-  HAVING COUNT(DISTINCT source_domain) >= 3
-) t
 GROUP BY category_id;
+-- Need: world ≥ 2, tech ≥ 1, finance ≥ 1, culture ≥ 1
 ```
-Need: `world` ≥ 2, others ≥ 1 (matches `EDITORIAL_MIX`).
 
 ---
 
-### Phase 5 — Wire Up generateDaily (2-line change)
+## Phase 9 — Deploy & Cutover
 
 | # | Task | Status |
 |---|------|--------|
-| 5.1 | `backend/jobs/generateDaily.js` line 11: change import from `fetchHeadline` → `fetchStoriesForCategory` | ⬜ |
-| 5.2 | `backend/jobs/generateDaily.js` line 73: change call from `fetchHeadline(category.newsDataTag)` → `fetchStoriesForCategory(category.id)` | ⬜ |
-| 5.3 | Run `node backend/jobs/generateDaily.js` end-to-end — confirm 5 questions generated | ⬜ |
+| 9.1 | Deploy to Vercel staging (discovery + processing crns only, generateDaily still uses newsdata.js) | ⬜ |
+| 9.2 | Let shadow pipeline run for 24h | ⬜ |
+| 9.3 | Manual verification batch: approve trusted sources in Supabase | ⬜ |
+| 9.4 | Confirm `articleStore` returns results for all 4 categories | ⬜ |
+| 9.5 | Deploy 2-line generateDaily change | ⬜ |
+| 9.6 | Monitor 7AM generation run | ⬜ |
+| 9.7 | Confirm quiz questions are sourced from RSS (check logs) | ⬜ |
+| 9.8 | Keep `NEWSDATA_API_KEY` in env for 1 week (rollback safety) | ⬜ |
 
 ---
 
-### Phase 6 — Vercel Cron
+## Phase 10 — Cleanup
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Create `api/cron/ingest.js` — Vercel Function handler (CRON_SECRET guard) | ⬜ |
-| 6.2 | Update `vercel.json` — add `*/30 * * * *` schedule + `maxDuration: 60` for ingest function | ⬜ |
-| 6.3 | Deploy to Vercel staging | ⬜ |
-| 6.4 | Manually `POST /api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>` | ⬜ |
-| 6.5 | Confirm Vercel logs show inserted/skipped counts and no timeout | ⬜ |
-
----
-
-### Phase 7 — Cutover & Cleanup
-
-| # | Task | Status |
-|---|------|--------|
-| 7.1 | Monitor `raw_articles` growth over 24h | ⬜ |
-| 7.2 | Confirm `generateDaily` 7AM run sources from `articleStore` | ⬜ |
-| 7.3 | Remove `NEWSDATA_API_KEY` from Vercel env | ⬜ |
-| 7.4 | Delete `backend/services/newsdata.js` (now orphaned) | ⬜ |
+| 10.1 | Remove `NEWSDATA_API_KEY` from Vercel env | ⬜ |
+| 10.2 | Delete `backend/services/newsdata.js` | ⬜ |
+| 10.3 | Remove `newsDataTag` field from `config/categories.js` | ⬜ |
 
 ---
 
@@ -210,22 +183,28 @@ Need: `world` ≥ 2, others ≥ 1 (matches `EDITORIAL_MIX`).
 
 | Action | File | Phase |
 |--------|------|-------|
+| CREATE | `backend/db/migration_scrape_queue.sql` | 1 |
 | CREATE | `backend/db/migration_raw_articles.sql` | 1 |
 | CREATE | `config/rss-feeds.js` | 2 |
-| CREATE | `backend/services/scraper.js` | 3 |
-| CREATE | `backend/services/ingestor.js` | 3 |
-| CREATE | `backend/services/articleStore.js` | 4 |
-| MODIFY | `backend/jobs/generateDaily.js` (2 lines) | 5 |
-| CREATE | `api/cron/ingest.js` | 6 |
-| MODIFY | `vercel.json` | 6 |
-| DELETE | `backend/services/newsdata.js` | 7 |
-| NO TOUCH | `config/categories.js` | `newsDataTag` unused but harmless |
-| NO TOUCH | `backend/services/claude.js` | contract unchanged |
-| NO TOUCH | `api/questions.js` | no changes |
-| NO TOUCH | `api/complete.js` | no changes |
+| CREATE | `backend/utils/canonicalise.js` | 3 |
+| CREATE | `backend/services/discoverer.js` | 4 |
+| CREATE | `api/cron/discover.js` | 4 |
+| CREATE | `backend/services/scraper.js` | 5 |
+| CREATE | `backend/services/processor.js` | 5 |
+| CREATE | `api/cron/process.js` | 5 |
+| CREATE | `backend/services/articleStore.js` | 6 |
+| CREATE | `api/cron/cleanup.js` | 7 |
+| MODIFY | `backend/jobs/generateDaily.js` (2 lines) | 8 |
+| MODIFY | `vercel.json` (3 new crons + maxDuration) | 4/5/7 |
+| DELETE | `backend/services/newsdata.js` | 10 |
+| MODIFY | `config/categories.js` (remove newsDataTag) | 10 |
+| NO TOUCH | `backend/services/claude.js` | — |
+| NO TOUCH | `api/questions.js` | — |
+| NO TOUCH | `api/complete.js` | — |
 
 ---
 
 ## Rollback
 
-Revert the 2 lines in `backend/jobs/generateDaily.js` → NewsData.io re-activates instantly. `raw_articles` table and new services are purely additive.
+Revert the 2 lines in `backend/jobs/generateDaily.js` → NewsData.io re-activates instantly.
+All new tables and service files are purely additive.
