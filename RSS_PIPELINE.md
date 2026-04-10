@@ -113,9 +113,9 @@ Logs structured JSON (see Observability section in design doc).
 | # | Task | Status |
 |---|------|--------|
 | 6.1 | Create `backend/services/articleStore.js` — replaces newsdata.js | ✅ |
-| 6.2 | Manually verify first batch in Supabase (`is_verified = true` for trusted sources) | ⬜ |
-| 6.3 | Test `fetchStoriesForCategory("world")` returns `{title, description}` | ⬜ |
-| 6.4 | Test all 4 categories in EDITORIAL_MIX return results | ⬜ |
+| 6.2 | Manually verify first batch in Supabase (`is_verified = true` for trusted sources) | ✅ |
+| 6.3 | Test `fetchStoriesForCategory("world")` returns `{title, description}` | ✅ |
+| 6.4 | Test all 4 categories in EDITORIAL_MIX return results | ✅ |
 
 **Query:** `WHERE is_verified = true AND status = 'DONE' AND published_at > NOW() - INTERVAL '48 hours'`
 **Ordering:** `authority_score DESC, published_at DESC`
@@ -137,10 +137,10 @@ Logs structured JSON (see Observability section in design doc).
 
 | # | Task | Status |
 |---|------|--------|
-| 8.1 | Confirm verified article coverage for all 4 categories (run verification query) | ⬜ |
+| 8.1 | Confirm verified article coverage for all 4 categories (run verification query) | ✅ |
 | 8.2 | Edit `backend/jobs/generateDaily.js` line 11: swap import | ✅ |
 | 8.3 | Edit `backend/jobs/generateDaily.js` line 73: swap call | ✅ |
-| 8.4 | Run `node backend/jobs/generateDaily.js` end-to-end — confirm 5 questions | ⬜ |
+| 8.4 | Run `node backend/jobs/generateDaily.js` end-to-end — confirm 5 questions | ✅ |
 
 **Verification query before 8.2:**
 ```sql
@@ -158,11 +158,11 @@ GROUP BY category_id;
 
 | # | Task | Status |
 |---|------|--------|
-| 9.1 | Deploy to Vercel staging (discovery + processing crns only, generateDaily still uses newsdata.js) | ⬜ |
-| 9.2 | Let shadow pipeline run for 24h | ⬜ |
-| 9.3 | Manual verification batch: approve trusted sources in Supabase | ⬜ |
-| 9.4 | Confirm `articleStore` returns results for all 4 categories | ⬜ |
-| 9.5 | Deploy 2-line generateDaily change | ⬜ |
+| 9.1 | Deploy to Vercel staging (discovery + processing crns only, generateDaily still uses newsdata.js) | ✅ |
+| 9.2 | Let shadow pipeline run for 24h | ✅ skipped — no active users in prod |
+| 9.3 | Manual verification batch: approve trusted sources in Supabase | ✅ skipped — verified locally |
+| 9.4 | Confirm `articleStore` returns results for all 4 categories | ✅ |
+| 9.5 | Deploy 2-line generateDaily change | ✅ via PR merge to main |
 | 9.6 | Monitor 7AM generation run | ⬜ |
 | 9.7 | Confirm quiz questions are sourced from RSS (check logs) | ⬜ |
 | 9.8 | Keep `NEWSDATA_API_KEY` in env for 1 week (rollback safety) | ⬜ |
