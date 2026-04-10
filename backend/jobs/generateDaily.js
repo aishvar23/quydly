@@ -8,7 +8,7 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, EDITORIAL_MIX } from "../../config/categories.js";
-import { fetchHeadline } from "../services/newsdata.js";
+import { fetchStoriesForCategory as fetchHeadline } from "../services/articleStore.js";
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 
@@ -70,7 +70,7 @@ export async function generateDaily() {
   const questions = [];
   for (const category of categoryQueue) {
     console.log(`[generateDaily] processing category "${category.id}"`);
-    const headline = await fetchHeadline(category.newsDataTag);
+    const headline = await fetchHeadline(category.id);
     const question = await generateQuestion(headline, category.id);
     questions.push(question);
   }
