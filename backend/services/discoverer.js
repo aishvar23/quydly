@@ -45,12 +45,14 @@ export async function runDiscovery() {
         }
 
         const url_hash = hashUrl(canonical);
+        const published_at = item.isoDate ?? item.pubDate ?? null;
         rows.push({
           url_hash,
           canonical_url: canonical,
           domain: feed.domain,
           category_id: feed.category,
           authority_score: feed.authority_score,
+          published_at,
           status: "PENDING",
         });
       }

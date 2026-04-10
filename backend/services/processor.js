@@ -40,7 +40,7 @@ export async function runProcessing() {
   // Claim a batch atomically: set status = PROCESSING
   const { data: items, error: claimError } = await supabase
     .from("scrape_queue")
-    .select("id, url_hash, canonical_url, domain, category_id, authority_score, retry_count")
+    .select("id, url_hash, canonical_url, domain, category_id, authority_score, retry_count, published_at")
     .eq("status", "PENDING")
     .lte("retry_count", MAX_RETRIES - 1)
     .order("authority_score", { ascending: false })
@@ -107,6 +107,7 @@ export async function runProcessing() {
                 content: result.content ?? null,
                 content_hash: result.content_hash ?? null,
                 author: result.author ?? null,
+                published_at: item.published_at ?? null,
                 authority_score: item.authority_score,
                 status: queueStatus,
                 is_verified: false,
