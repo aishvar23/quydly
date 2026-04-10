@@ -63,14 +63,12 @@ export async function runDiscovery() {
     }
   }
 
-  // Batch-insert; ON CONFLICT (url_hash) DO NOTHING gives us idempotency
+  // Batch-upsert; ignoreDuplicates skips rows with conflicting url_hash
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE);
     const { error, count } = await supabase
       .from("scrape_queue")
-      .insert(batch, { count: "exact" })
-      .onConflict("url_hash")
-      .ignore();
+      .upsert(batch, { onConflict: "url_hash", ignoreDuplicates: true, count: "exact" });
 
     if (error) {
       console.error(
