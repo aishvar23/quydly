@@ -97,10 +97,10 @@ Logs structured JSON (see Observability section in design doc).
 | 5.2 | Create `backend/services/processor.js` — batch worker with concurrency caps | ✅ |
 | 5.3 | Create `api/cron/process.js` — Vercel Function handler | ✅ |
 | 5.4 | Add to `vercel.json`: `*/5 * * * *` schedule, `maxDuration: 60` | ✅ |
-| 5.5 | Smoke-test: run processor, check `raw_articles` fills | ⬜ |
-| 5.6 | Verify `is_verified = false` on all inserted rows | ⬜ |
-| 5.7 | Verify `status = 'LOW_QUALITY'` for short/paywalled content | ⬜ |
-| 5.8 | Verify retry logic: force a 404 URL → confirm retry_count increments | ⬜ |
+| 5.5 | Smoke-test: run processor, check `raw_articles` fills | ✅ |
+| 5.6 | Verify `is_verified = false` on all inserted rows | ✅ |
+| 5.7 | Verify `status = 'LOW_QUALITY'` for short/paywalled content | ✅ |
+| 5.8 | Verify retry logic: force a 404 URL → confirm retry_count increments | ✅ |
 
 **Concurrency caps:** global = 8, per-domain = 2
 **Retry budget:** MAX_RETRIES = 3

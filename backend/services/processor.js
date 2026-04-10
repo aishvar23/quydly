@@ -96,22 +96,23 @@ export async function runProcessing() {
         if (result.title) {
           const { error: insertErr } = await supabase
             .from("raw_articles")
-            .insert({
-              url_hash: item.url_hash,
-              canonical_url: item.canonical_url,
-              domain: item.domain,
-              category_id: item.category_id,
-              title: result.title,
-              description: result.description ?? null,
-              content: result.content ?? null,
-              content_hash: result.content_hash ?? null,
-              author: result.author ?? null,
-              authority_score: item.authority_score,
-              status: queueStatus,
-              is_verified: false,
-            })
-            .onConflict("url_hash")
-            .ignore();
+            .upsert(
+              {
+                url_hash: item.url_hash,
+                canonical_url: item.canonical_url,
+                domain: item.domain,
+                category_id: item.category_id,
+                title: result.title,
+                description: result.description ?? null,
+                content: result.content ?? null,
+                content_hash: result.content_hash ?? null,
+                author: result.author ?? null,
+                authority_score: item.authority_score,
+                status: queueStatus,
+                is_verified: false,
+              },
+              { onConflict: "url_hash", ignoreDuplicates: true }
+            );
 
           if (insertErr) {
             console.error(
