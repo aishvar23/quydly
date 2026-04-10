@@ -33,7 +33,6 @@ const RSS_FEEDS = [
   { url: "https://www.ft.com/world?format=rss",                           domain: "ft.com",               category: "world",   authority_score: 0.8 },
   { url: "https://foreignpolicy.com/feed/",                               domain: "foreignpolicy.com",    category: "world",   authority_score: 0.6 },
   { url: "https://abcnews.go.com/abcnews/internationalheadlines",         domain: "abcnews.go.com",       category: "world",   authority_score: 0.8 },
-  { url: "https://feeds.cbsnews.com/feeds/articlefeeds",                  domain: "cbsnews.com",          category: "world",   authority_score: 0.8 },
 
   // ── Tech ───────────────────────────────────────────────────────────────────
   { url: "https://feeds.arstechnica.com/arstechnica/index",               domain: "arstechnica.com",      category: "tech",    authority_score: 0.6 },
@@ -61,7 +60,6 @@ const RSS_FEEDS = [
   { url: "https://feeds.marketwatch.com/marketwatch/topstories/",         domain: "marketwatch.com",      category: "finance", authority_score: 0.6 },
   { url: "https://feeds.bloomberg.com/markets/news.rss",                  domain: "bloomberg.com",        category: "finance", authority_score: 0.8 },
   { url: "https://fortune.com/feed/",                                     domain: "fortune.com",          category: "finance", authority_score: 0.6 },
-  { url: "https://feeds.washingtonpost.com/rss/business",                 domain: "washingtonpost.com",   category: "finance", authority_score: 0.8 },
   { url: "https://www.economist.com/finance-and-economics/rss.xml",       domain: "economist.com",        category: "finance", authority_score: 0.8 },
   { url: "https://feeds.npr.org/1006/rss.xml",                            domain: "npr.org",              category: "finance", authority_score: 0.8 },
 
@@ -75,7 +73,6 @@ const RSS_FEEDS = [
   { url: "https://www.hollywoodreporter.com/feed/",                       domain: "hollywoodreporter.com",category: "culture", authority_score: 0.6 },
   { url: "https://pitchfork.com/rss/news/",                               domain: "pitchfork.com",        category: "culture", authority_score: 0.4 },
   { url: "https://www.npr.org/rss/rss.php?id=1008",                       domain: "npr.org",              category: "culture", authority_score: 0.8 },
-  { url: "https://www.pastemagazine.com/rss/arts",                        domain: "pastemagazine.com",    category: "culture", authority_score: 0.4 },
 
   // ── Science ────────────────────────────────────────────────────────────────
   { url: "https://www.nature.com/nature.rss",                             domain: "nature.com",           category: "science", authority_score: 0.6 },
@@ -88,7 +85,6 @@ const RSS_FEEDS = [
   { url: "https://www.newscientist.com/feed/home/",                       domain: "newscientist.com",     category: "science", authority_score: 0.6 },
   { url: "https://phys.org/rss-feed/",                                    domain: "phys.org",             category: "science", authority_score: 0.4 },
   { url: "https://www.sciencedaily.com/rss/top/science.xml",              domain: "sciencedaily.com",     category: "science", authority_score: 0.4 },
-  { url: "https://rss.sciam.com/ScientificAmerican-Global",               domain: "scientificamerican.com",category: "science", authority_score: 0.6 },
 ];
 
 export default RSS_FEEDS;
