@@ -33,7 +33,7 @@ Discovery Cron (30 min)  →  scrape_queue (Supabase)  →  Processing Worker (5
 | 1.1 | Create `backend/db/migration_scrape_queue.sql` | ✅ |
 | 1.2 | Create `backend/db/migration_raw_articles.sql` | ✅ |
 | 1.3 | Run both migrations in Supabase SQL editor | ✅ |
-| 1.4 | Verify tables + indexes in Supabase dashboard | ⬜ |
+| 1.4 | Verify tables + indexes in Supabase dashboard | ✅ |
 
 **Tables:**
 - `scrape_queue` — job queue (url_hash, canonical_url, status, retry_count, last_error, authority_score, ...)
@@ -81,8 +81,8 @@ Discovery Cron (30 min)  →  scrape_queue (Supabase)  →  Processing Worker (5
 | 4.1 | Create `backend/services/discoverer.js` — RSS fetch + queue insert | ✅ |
 | 4.2 | Create `api/cron/discover.js` — Vercel Function handler | ✅ |
 | 4.3 | Add to `vercel.json`: `*/30 * * * *` schedule | ✅ |
-| 4.4 | Smoke-test locally: run discoverer, check `scrape_queue` fills | ⬜ |
-| 4.5 | Run twice — confirm `urls_skipped` = prior `urls_queued` (idempotency works) | ⬜ |
+| 4.4 | Smoke-test locally: run discoverer, check `scrape_queue` fills | ✅ |
+| 4.5 | Run twice — confirm `urls_skipped` = prior `urls_queued` (idempotency works) | ✅ |
 
 **Output per run:** `{ feeds_attempted, feeds_ok, feeds_failed, urls_queued, urls_skipped }`
 Logs structured JSON (see Observability section in design doc).
