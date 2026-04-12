@@ -5,7 +5,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { hashUrl } from "../utils/canonicalise.js";
 
-const FETCH_TIMEOUT_MS = 15_000;
+const FETCH_TIMEOUT_MS = 8_000;
 const MIN_CONTENT_LENGTH = 200;
 
 export async function scrapeArticle(canonical_url) {

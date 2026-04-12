@@ -17,14 +17,18 @@
 //   politico.com RSS — 403
 //   dw.com/rss/rss.xml — 404 (moved to rss.dw.com)
 //   rss.france24.com — ENOTFOUND (moved to france24.com/en/rss)
+//
+// Paywalled domains removed (2026-04-12): RSS discovery works but article
+// scraping always fails — NYT returns 403, WaPo stalls the connection to
+// timeout. BBC/Guardian/Al Jazeera/NPR/DW cover the same stories openly.
+//   nytimes.com (world, tech, finance, culture, science) — 403 on all articles
+//   washingtonpost.com (world) — bot-detection timeout on all articles
 
 const RSS_FEEDS = [
   // ── World ──────────────────────────────────────────────────────────────────
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",        domain: "nytimes.com",          category: "world",   authority_score: 0.8 },
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml",                   domain: "bbc.com",              category: "world",   authority_score: 0.8 },
   { url: "https://www.theguardian.com/world/rss",                         domain: "theguardian.com",      category: "world",   authority_score: 0.8 },
   { url: "https://www.aljazeera.com/xml/rss/all.xml",                     domain: "aljazeera.com",        category: "world",   authority_score: 0.8 },
-  { url: "https://feeds.washingtonpost.com/rss/world",                    domain: "washingtonpost.com",   category: "world",   authority_score: 0.8 },
   { url: "https://www.economist.com/the-world-this-week/rss.xml",         domain: "economist.com",        category: "world",   authority_score: 0.8 },
   { url: "https://rss.dw.com/rdf/rss-en-all",                             domain: "dw.com",               category: "world",   authority_score: 0.6 },
   { url: "https://www.france24.com/en/rss",                               domain: "france24.com",         category: "world",   authority_score: 0.6 },
@@ -37,7 +41,6 @@ const RSS_FEEDS = [
   // ── Tech ───────────────────────────────────────────────────────────────────
   { url: "https://feeds.arstechnica.com/arstechnica/index",               domain: "arstechnica.com",      category: "tech",    authority_score: 0.6 },
   { url: "https://www.wired.com/feed/rss",                                domain: "wired.com",            category: "tech",    authority_score: 0.6 },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",   domain: "nytimes.com",          category: "tech",    authority_score: 0.8 },
   { url: "https://feeds.bbci.co.uk/news/technology/rss.xml",              domain: "bbc.com",              category: "tech",    authority_score: 0.8 },
   { url: "https://www.theguardian.com/technology/rss",                    domain: "theguardian.com",      category: "tech",    authority_score: 0.8 },
   { url: "https://techcrunch.com/feed/",                                  domain: "techcrunch.com",       category: "tech",    authority_score: 0.6 },
@@ -54,7 +57,6 @@ const RSS_FEEDS = [
 
   // ── Finance ────────────────────────────────────────────────────────────────
   { url: "https://www.ft.com/rss/home/uk",                                domain: "ft.com",               category: "finance", authority_score: 0.8 },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",     domain: "nytimes.com",          category: "finance", authority_score: 0.8 },
   { url: "https://feeds.bbci.co.uk/news/business/rss.xml",                domain: "bbc.com",              category: "finance", authority_score: 0.8 },
   { url: "https://www.theguardian.com/business/rss",                      domain: "theguardian.com",      category: "finance", authority_score: 0.8 },
   { url: "https://feeds.marketwatch.com/marketwatch/topstories/",         domain: "marketwatch.com",      category: "finance", authority_score: 0.6 },
@@ -64,7 +66,6 @@ const RSS_FEEDS = [
   { url: "https://feeds.npr.org/1006/rss.xml",                            domain: "npr.org",              category: "finance", authority_score: 0.8 },
 
   // ── Culture ────────────────────────────────────────────────────────────────
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml",         domain: "nytimes.com",          category: "culture", authority_score: 0.8 },
   { url: "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",  domain: "bbc.com",              category: "culture", authority_score: 0.8 },
   { url: "https://www.theguardian.com/culture/rss",                       domain: "theguardian.com",      category: "culture", authority_score: 0.8 },
   { url: "https://www.rollingstone.com/music/music-news/feed/",           domain: "rollingstone.com",     category: "culture", authority_score: 0.6 },
@@ -77,7 +78,6 @@ const RSS_FEEDS = [
   // ── Science ────────────────────────────────────────────────────────────────
   { url: "https://www.nature.com/nature.rss",                             domain: "nature.com",           category: "science", authority_score: 0.6 },
   { url: "https://www.sciencemag.org/rss/news_current.xml",               domain: "science.org",          category: "science", authority_score: 0.6 },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",      domain: "nytimes.com",          category: "science", authority_score: 0.8 },
   { url: "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml", domain: "bbc.com",              category: "science", authority_score: 0.8 },
   { url: "https://www.theguardian.com/science/rss",                       domain: "theguardian.com",      category: "science", authority_score: 0.8 },
   { url: "https://www.wired.com/category/science/feed/",                  domain: "wired.com",            category: "science", authority_score: 0.6 },
