@@ -19,22 +19,23 @@
 //   rss.france24.com — ENOTFOUND (moved to france24.com/en/rss)
 //
 // Paywalled domains removed (2026-04-12): RSS discovery works but article
-// scraping always fails — NYT returns 403, WaPo stalls the connection to
-// timeout. BBC/Guardian/Al Jazeera/NPR/DW cover the same stories openly.
+// scraping always fails. BBC/Guardian/Al Jazeera/NPR/DW/Ars cover the same
+// stories openly.
 //   nytimes.com (world, tech, finance, culture, science) — 403 on all articles
 //   washingtonpost.com (world) — bot-detection timeout on all articles
+//   economist.com (world, finance) — 403 on all articles
+//   bloomberg.com (finance) — 403 on all articles
+//   ft.com (world, finance) — 403 on all articles
 
 const RSS_FEEDS = [
   // ── World ──────────────────────────────────────────────────────────────────
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml",                   domain: "bbc.com",              category: "world",   authority_score: 0.8 },
   { url: "https://www.theguardian.com/world/rss",                         domain: "theguardian.com",      category: "world",   authority_score: 0.8 },
   { url: "https://www.aljazeera.com/xml/rss/all.xml",                     domain: "aljazeera.com",        category: "world",   authority_score: 0.8 },
-  { url: "https://www.economist.com/the-world-this-week/rss.xml",         domain: "economist.com",        category: "world",   authority_score: 0.8 },
   { url: "https://rss.dw.com/rdf/rss-en-all",                             domain: "dw.com",               category: "world",   authority_score: 0.6 },
   { url: "https://www.france24.com/en/rss",                               domain: "france24.com",         category: "world",   authority_score: 0.6 },
   { url: "https://feeds.skynews.com/feeds/rss/world.xml",                 domain: "skynews.com",          category: "world",   authority_score: 0.6 },
   { url: "https://feeds.npr.org/1004/rss.xml",                            domain: "npr.org",              category: "world",   authority_score: 0.8 },
-  { url: "https://www.ft.com/world?format=rss",                           domain: "ft.com",               category: "world",   authority_score: 0.8 },
   { url: "https://foreignpolicy.com/feed/",                               domain: "foreignpolicy.com",    category: "world",   authority_score: 0.6 },
   { url: "https://abcnews.go.com/abcnews/internationalheadlines",         domain: "abcnews.go.com",       category: "world",   authority_score: 0.8 },
 
@@ -56,13 +57,10 @@ const RSS_FEEDS = [
   { url: "https://news.ycombinator.com/rss",                              domain: "ycombinator.com",      category: "tech",    authority_score: 0.4 },
 
   // ── Finance ────────────────────────────────────────────────────────────────
-  { url: "https://www.ft.com/rss/home/uk",                                domain: "ft.com",               category: "finance", authority_score: 0.8 },
   { url: "https://feeds.bbci.co.uk/news/business/rss.xml",                domain: "bbc.com",              category: "finance", authority_score: 0.8 },
   { url: "https://www.theguardian.com/business/rss",                      domain: "theguardian.com",      category: "finance", authority_score: 0.8 },
   { url: "https://feeds.marketwatch.com/marketwatch/topstories/",         domain: "marketwatch.com",      category: "finance", authority_score: 0.6 },
-  { url: "https://feeds.bloomberg.com/markets/news.rss",                  domain: "bloomberg.com",        category: "finance", authority_score: 0.8 },
   { url: "https://fortune.com/feed/",                                     domain: "fortune.com",          category: "finance", authority_score: 0.6 },
-  { url: "https://www.economist.com/finance-and-economics/rss.xml",       domain: "economist.com",        category: "finance", authority_score: 0.8 },
   { url: "https://feeds.npr.org/1006/rss.xml",                            domain: "npr.org",              category: "finance", authority_score: 0.8 },
 
   // ── Culture ────────────────────────────────────────────────────────────────
