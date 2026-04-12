@@ -110,7 +110,7 @@ export async function runProcessing() {
                 published_at: item.published_at ?? null,
                 authority_score: item.authority_score,
                 status: queueStatus,
-                is_verified: false,
+                is_verified: true,
               },
               { onConflict: "url_hash", ignoreDuplicates: true }
             );
