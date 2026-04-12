@@ -16,6 +16,16 @@ function buildSupabase() {
  * Mirrors the interface of newsdata.js fetchHeadline().
  */
 export async function fetchStoriesForCategory(category_id) {
+  const pool = await fetchArticlePool(category_id);
+  return pool[0];
+}
+
+/**
+ * Fetch a pool of usable stories for a category (up to 10).
+ * Returns an array of { title, description } sorted by authority then recency.
+ * Throws if no articles are available.
+ */
+export async function fetchArticlePool(category_id) {
   const supabase = buildSupabase();
 
   const { data, error } = await supabase
@@ -38,6 +48,5 @@ export async function fetchStoriesForCategory(category_id) {
     throw new Error(`No verified articles available for category "${category_id}"`);
   }
 
-  // Return the top result (highest authority, most recent)
-  return { title: articles[0].title, description: articles[0].description };
+  return articles;
 }
