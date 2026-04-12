@@ -5,8 +5,8 @@ import { runProcessing } from "../../backend/services/processor.js";
 
 export default async function handler(req, res) {
   if (
-    process.env.NODE_ENV === "production" &&
-    req.headers["x-vercel-cron"] !== "1"
+    process.env.CRON_SECRET &&
+    req.headers["authorization"] !== `Bearer ${process.env.CRON_SECRET}`
   ) {
     return res.status(401).json({ error: "Unauthorized" });
   }

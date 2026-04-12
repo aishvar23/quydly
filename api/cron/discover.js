@@ -6,8 +6,8 @@ import { runDiscovery } from "../../backend/services/discoverer.js";
 export default async function handler(req, res) {
   // Vercel cron requests include this header; reject anything else in production
   if (
-    process.env.NODE_ENV === "production" &&
-    req.headers["x-vercel-cron"] !== "1"
+    process.env.CRON_SECRET &&
+    req.headers["authorization"] !== `Bearer ${process.env.CRON_SECRET}`
   ) {
     return res.status(401).json({ error: "Unauthorized" });
   }
