@@ -5,7 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { scrapeArticle } from "./scraper.js";
 
-const BATCH_LIMIT = 50;       // items claimed per run
+const BATCH_LIMIT = 25;       // items claimed per run — ceil(25/8)×8s = 32s, fits in 300s maxDuration
 const GLOBAL_CONCURRENCY = 8;
 const PER_DOMAIN_CONCURRENCY = 2;
 const MAX_RETRIES = 3;
