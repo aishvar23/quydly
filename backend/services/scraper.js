@@ -2,7 +2,7 @@
 // Fetches a URL, extracts article content via @mozilla/readability.
 
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { parseHTML } from "linkedom";
 import { hashUrl } from "../utils/canonicalise.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -32,8 +32,8 @@ export async function scrapeArticle(canonical_url) {
     clearTimeout(timer);
   }
 
-  const dom = new JSDOM(html, { url: canonical_url });
-  const reader = new Readability(dom.window.document);
+  const { document } = parseHTML(html);
+  const reader = new Readability(document);
   const article = reader.parse();
 
   if (!article) {
