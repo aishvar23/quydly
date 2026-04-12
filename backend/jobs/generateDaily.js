@@ -7,8 +7,8 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { CATEGORIES, EDITORIAL_MIX } from "../../config/categories.js";
-import { fetchStoriesForCategory as fetchHeadline } from "../services/articleStore.js";
+import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
+import { fetchArticlePool } from "../services/articleStore.js";
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 
@@ -27,15 +27,28 @@ function buildSupabaseClient() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Build the full category slot list for all sessions.
+ * EDITORIAL_MIX defines the per-session ratio; we scale it by TOTAL_SESSIONS
+ * to get the full list of TOTAL_SESSIONS * SESSION_SIZE category slots.
+ * Slots are interleaved so each session gets the correct category mix.
+ */
 function buildCategoryQueue() {
   const byId = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
-  const queue = [];
+  const totalQuestions = SESSION_SIZE * TOTAL_SESSIONS;
+
+  // Build one session's worth of slots (e.g. [world, world, tech, finance, culture])
+  const sessionSlots = [];
   for (const [id, count] of Object.entries(EDITORIAL_MIX)) {
-    for (let i = 0; i < count; i++) {
-      queue.push(byId[id]);
-    }
+    for (let i = 0; i < count; i++) sessionSlots.push(byId[id]);
   }
-  return queue;
+
+  // Repeat for all sessions to reach totalQuestions
+  const queue = [];
+  while (queue.length < totalQuestions) {
+    queue.push(...sessionSlots);
+  }
+  return queue.slice(0, totalQuestions);
 }
 
 function todayKey() {
@@ -67,12 +80,61 @@ export async function generateDaily() {
   const categoryQueue = buildCategoryQueue();
   const date = new Date().toISOString().slice(0, 10);
 
+  // Pre-fetch article pools for every category (up to 10 articles each)
+  const articlePools = {};
+  const poolIndexes  = {};
+  for (const cat of CATEGORIES) {
+    try {
+      articlePools[cat.id] = await fetchArticlePool(cat.id);
+      poolIndexes[cat.id]  = 0;
+      console.log(`[generateDaily] fetched ${articlePools[cat.id].length} articles for "${cat.id}"`);
+    } catch (err) {
+      console.warn(`[generateDaily] no articles for "${cat.id}": ${err.message}`);
+      articlePools[cat.id] = [];
+      poolIndexes[cat.id]  = 0;
+    }
+  }
+
+  /**
+   * Pick the next unused article for a category.
+   * Falls back to any other category that still has articles remaining.
+   * Returns { article, resolvedCategoryId } or throws if all pools exhausted.
+   */
+  function pickArticle(preferredCategoryId) {
+    // Try preferred category first
+    const pool  = articlePools[preferredCategoryId];
+    const idx   = poolIndexes[preferredCategoryId];
+    if (pool.length > 0 && idx < pool.length) {
+      poolIndexes[preferredCategoryId]++;
+      return { article: pool[idx], resolvedCategoryId: preferredCategoryId };
+    }
+
+    // Fall back to any category with remaining articles
+    for (const cat of CATEGORIES) {
+      if (cat.id === preferredCategoryId) continue;
+      const fbPool = articlePools[cat.id];
+      const fbIdx  = poolIndexes[cat.id];
+      if (fbPool.length > 0 && fbIdx < fbPool.length) {
+        console.warn(`[generateDaily] "${preferredCategoryId}" exhausted — falling back to "${cat.id}"`);
+        poolIndexes[cat.id]++;
+        return { article: fbPool[fbIdx], resolvedCategoryId: cat.id };
+      }
+    }
+
+    throw new Error("All article pools exhausted — cannot generate more questions");
+  }
+
   const questions = [];
   for (const category of categoryQueue) {
     console.log(`[generateDaily] processing category "${category.id}"`);
-    const headline = await fetchHeadline(category.id);
-    const question = await generateQuestion(headline, category.id);
-    questions.push(question);
+    try {
+      const { article, resolvedCategoryId } = pickArticle(category.id);
+      const question = await generateQuestion(article, resolvedCategoryId);
+      questions.push(question);
+    } catch (err) {
+      console.error(`[generateDaily] stopping early at question ${questions.length + 1}: ${err.message}`);
+      break;
+    }
   }
 
   console.log(`[generateDaily] generated ${questions.length} questions`);
