@@ -2,7 +2,7 @@
 
 **Feature:** Transform `raw_articles` into a continuously updating "Gold Set" of 20–50 high-quality, deduplicated, multi-source validated Stories per day
 **Branch:** `feature/gold-set-pipeline`
-**Status:** Design v1 — initial
+**Status:** Design v2 — review fixes incorporated
 **Authors:** Aishvarya Suhane
 
 ---
@@ -226,6 +226,10 @@ CREATE TABLE clusters (
   unique_domains   text[] NOT NULL DEFAULT '{}',
   -- Deduplicated source_domain list
 
+  cluster_score    numeric(4,2) NOT NULL DEFAULT 0,
+  -- Scored before LLM processing: article_count + unique_domains + entity_density + recency
+  -- Only clusters above threshold (default: 0.50) are sent to synthesizer
+
   status           text NOT NULL DEFAULT 'PENDING'
                    CHECK (status IN ('PENDING','PROCESSING','PROCESSED','FAILED')),
   created_at       timestamptz DEFAULT now(),
@@ -243,11 +247,23 @@ CREATE INDEX clusters_category_idx ON clusters(category_id, updated_at DESC);
 PENDING → PROCESSING → PROCESSED
                     ↘ FAILED       (Claude API error after 2 retries)
 FAILED → PENDING                   (manual reprocess: UPDATE status='PENDING')
+
+River model re-entry:
+  New article matches existing PROCESSED cluster
+    → status reset to PENDING for re-synthesis
 ```
 
+**Article lifecycle (important):**
+Articles in `raw_articles` are **never permanently excluded** after clustering. An article's `status` in `raw_articles` is only changed by `process.js` — the clusterer is read-only against that table. Articles are considered "done" for clustering only after they appear in `cluster.article_ids`. If a cluster is later re-opened (new article appended), those articles will be re-sent to synthesis as part of the updated cluster payload.
+
 **Eligibility for synthesis:**
+- `cluster_score ≥ 0.50` (scoring gate — see Cluster Scoring below)
 - `array_length(article_ids, 1) ≥ 2` AND `array_length(unique_domains, 1) ≥ 2`
 - OR any referenced article has `authority_score ≥ 0.8` (single-source exception for wire services)
+
+**Size constraints:**
+- Maximum 20 articles per cluster. If a cluster already has 20 articles, new matching articles are **not appended** — a new cluster is created instead.
+- Clusters older than 24 hours receive a recency penalty in scoring; older than 48 hours are excluded from synthesis entirely.
 
 ---
 
@@ -270,6 +286,10 @@ CREATE TABLE stories (
 
   confidence_score int  NOT NULL DEFAULT 0,
   -- 1–10, synthesizer-assigned. Gate: must be ≥ 6 to write.
+
+  story_score      numeric(4,2) NOT NULL DEFAULT 0,
+  -- Composite: source_count (30%) + fact_consistency (30%) + entity_clarity (20%) + LLM confidence (20%)
+  -- Thresholds: ≥ 0.70 → auto-publish candidate; 0.40–0.69 → manual review; < 0.40 → reject
 
   is_verified      boolean NOT NULL DEFAULT false,
   -- Manual gate initially; automate after trust is established
@@ -311,15 +331,31 @@ Applied to every entity before comparison and storage.
 Pattern: /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g
 ```
 
-Matches 1–4 consecutive Title-Cased words. No external NLP dependency.
+Matches 1–4 consecutive Title-Cased words. Captures multi-word entities like "White House", "Strait of Hormuz", "Federal Reserve". No external NLP dependency.
 
-**High-signal heuristic:**
+**Stop-entity list** (filtered out before comparison):
+
+```js
+const STOP_ENTITIES = new Set([
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'january', 'february', 'march', 'april', 'june', 'july', 'august',
+  'september', 'october', 'november', 'december',
+  'according', 'report', 'official', 'statement', 'source', 'said',
+  'new', 'first', 'last', 'top', 'key', 'major'
+]);
+```
+
+**High-signal vs low-signal:**
 
 ```
-hasHighSignalEntity(entities): entity.length > 3 chars after normalization
+High-signal entity: normalized length > 3 chars AND not in STOP_ENTITIES
+  Examples: "White House", "Vladimir Putin", "NATO", "Federal Reserve"
+
+Low-signal entity: length ≤ 3 chars OR in STOP_ENTITIES
+  Examples: "US", "EU", "The", "New", "In"
 ```
 
-Filters common false positives like "The", "In", "He", "Its".
+Cluster matching requires ≥1 high-signal entity in the intersection — generic entities like "US" or "government" alone are not sufficient to merge two articles.
 
 ---
 
@@ -328,22 +364,28 @@ Filters common false positives like "The", "In", "He", "Its".
 ```
 Intersection = cluster.primary_entities ∩ article.entities  (normalized comparison)
 
-Match conditions (both must hold):
-  1. |Intersection| ≥ 2              (at least 2 shared entities)
-  2. hasHighSignalEntity(Intersection) (at least one entity > 3 chars)
+Match conditions (ALL must hold):
+  1. |Intersection| ≥ 2
+     (at least 2 shared entities)
+  2. hasHighSignalEntity(Intersection)
+     (at least one entity is high-signal — not US/government/etc.)
+  3. array_length(cluster.article_ids, 1) < 20
+     (cluster not at size cap — prevents unbounded growth)
 
 On match (River model):
-  article_ids  = array_append(article_ids, article.id)
-  unique_domains = array (deduplicated union)
+  article_ids      = array_append(article_ids, article.id)
+  unique_domains   = array (deduplicated union)
   primary_entities = array (union, normalized)
-  status = 'PENDING'  ← re-queued for re-synthesis
-  updated_at = NOW()
+  cluster_score    = computeClusterScore(updated cluster)
+  status           = 'PENDING'  ← re-queued for re-synthesis
+  updated_at       = NOW()
 
-On no match:
+On no match OR cluster at size cap:
   INSERT new cluster with article as seed
+  status = 'PENDING'
 ```
 
-Clusters with `updated_at < NOW() - 48h` are considered stale and skipped by synthesizer.
+Clusters with `updated_at < NOW() - 48h` are considered stale and excluded from synthesis.
 
 ---
 
@@ -361,6 +403,8 @@ Find existing story:
             INTERSECT SELECT unnest(cluster.primary_entities)
           ), 1
         ) >= 2
+    AND at least 1 of the overlapping entities is high-signal
+      (filters merging on generic entities like "US", "government")
     AND updated_at > NOW() - INTERVAL '24 hours'
 
 If found → UPDATE:
@@ -384,10 +428,41 @@ Exports:
     Apply normalization rules above
 
   extractEntities(text) → string[]
-    Apply regex to text, normalize each match, deduplicate, return array
+    Apply regex to text, normalize each match,
+    filter stop-entities, deduplicate, return array
 
   hasHighSignalEntity(entities) → boolean
-    Return true if any entity.length > 3 after normalization
+    Return true if any entity passes: length > 3 AND not in STOP_ENTITIES
+
+  isHighSignal(entity) → boolean
+    Single-entity check used in matching logic
+```
+
+### `backend/utils/scoring.js` — Scoring Utilities
+
+```
+Exports:
+  computeClusterScore(cluster) → number (0–1)
+    Components:
+      article_count  weight 0.30  (normalized: count / 20, capped at 1.0)
+      unique_domains weight 0.25  (normalized: domains / 5, capped at 1.0)
+      entity_density weight 0.25  (unique entities / article_count)
+      recency        weight 0.20  (1.0 if updated_at < 6h ago,
+                                   0.5 if 6–12h, 0.25 if 12–24h, 0.0 if > 24h)
+    Returns weighted sum. Stored as cluster.cluster_score.
+
+  computeStoryScore(story, synthesisResult) → number (0–1)
+    Components:
+      source_count      weight 0.30  (unique_domains / 5, capped at 1.0)
+      fact_consistency  weight 0.30  (1 - (conflict_count / total_facts))
+      entity_clarity    weight 0.20  (high_signal_entity_count / total_entities)
+      llm_confidence    weight 0.20  (confidence_score / 10)
+    Returns weighted sum. Stored as story.story_score.
+
+  storyDisposition(story_score) → 'publish' | 'review' | 'reject'
+    ≥ 0.70 → 'publish'   (auto-approve candidate after trust established)
+    0.40–0.69 → 'review' (manual review required)
+    < 0.40  → 'reject'   (log, do not write to stories table)
 ```
 
 ### `backend/engine/clusterer.js` — Clustering Engine
@@ -412,11 +487,16 @@ Algorithm:
      d. If match → append + update (River model)
         If no match → INSERT new cluster
 
-  3. Compute eligible clusters:
-       article_ids.length ≥ 2 AND unique_domains.length ≥ 2
-       OR any article has authority_score ≥ 0.8
+  3. After each cluster INSERT or UPDATE:
+       cluster.cluster_score = computeClusterScore(cluster)
+       UPDATE clusters SET cluster_score = ... WHERE id = cluster.id
 
-  4. Return summary metrics
+  4. Compute eligible clusters:
+       cluster_score ≥ 0.50
+       AND (article_ids.length ≥ 2 AND unique_domains.length ≥ 2
+            OR any article has authority_score ≥ 0.8)
+
+  5. Return summary metrics
 
 Error handling:
   - Per-article errors isolated — one bad article never aborts the run
@@ -444,18 +524,21 @@ Output: { clusters_processed, stories_written, stories_updated, clusters_failed 
 Algorithm:
   1. SELECT clusters WHERE
        status = 'PENDING'
+       AND cluster_score >= 0.50
        AND array_length(article_ids, 1) >= 2
        AND array_length(unique_domains, 1) >= 2
      LIMIT 50 per run
 
   2. For each cluster (parallel, up to 10 concurrent):
      a. Fetch article content:
-          SELECT title, summary, content FROM raw_articles
+          SELECT title, summary, cleaned_content FROM raw_articles
           WHERE id = ANY(cluster.article_ids)
+          -- Use cleaned_content (no raw HTML), never send raw HTML to Claude
 
      b. Pass 1 — fact extraction per article:
           Prompt: extract structured facts from article
-          Input: title + summary + content.slice(0, 500 words)
+          Input: title + summary + cleaned_content (truncated to 500 words)
+          -- Structured input only; do not pass raw article bodies
           Output: [{ fact, type: 'event|actor|number|statement', source_count }]
 
      c. Merge facts:
@@ -473,12 +556,24 @@ Algorithm:
           if confidence_score < 6 → skip (log as LOW_CONFIDENCE)
           if key_points.length < 3 → skip
 
-     f. River model upsert (see Data Model section)
+     f. Story scoring:
+          story_score = computeStoryScore(cluster, synthesisResult)
+          disposition = storyDisposition(story_score)
+          if disposition = 'reject' → skip (log as LOW_STORY_SCORE)
+          if disposition = 'review' → write with is_verified = false
+          if disposition = 'publish' → write with is_verified = false
+            (is_verified still requires manual approval during shadow period;
+             disposition stored for operator review)
 
-     g. UPDATE cluster status = 'PROCESSED', updated_at = NOW()
+     g. River model upsert (see Data Model section)
+          story.story_score = computed score above
+
+     h. UPDATE cluster status = 'PROCESSED', updated_at = NOW()
 
   3. On Claude API error:
-     Retry up to 2×, then UPDATE cluster status = 'FAILED', log error
+     Retry up to 2× with exponential backoff (1s, 2s)
+     On final failure: UPDATE cluster status = 'FAILED'
+     Log full error with cluster.id and failed prompt payload for debugging
 
   4. Return summary metrics
 
@@ -540,6 +635,7 @@ maxDuration: 300
   "clusters_updated": 23,
   "clusters_created": 11,
   "clusters_eligible": 28,
+  "avg_cluster_size": 3.4,
   "duration_ms": 4200
 }
 ```
@@ -550,10 +646,13 @@ maxDuration: 300
   "event": "synthesize_run",
   "timestamp": "2026-04-12T06:45:00Z",
   "clusters_processed": 28,
+  "clusters_promoted_to_story": 25,
   "stories_written": 19,
   "stories_updated": 6,
   "clusters_failed": 3,
+  "llm_failure_rate": 0.11,
   "low_confidence_skipped": 2,
+  "low_score_rejected": 1,
   "claude_calls": 56,
   "duration_ms": 47000
 }
@@ -564,9 +663,12 @@ maxDuration: 300
 | Metric | Formula | Alert threshold |
 |--------|---------|----------------|
 | Clustering rate | `clusters_eligible / articles_processed` | < 0.10 (articles not clustering) |
+| Avg cluster size | `avg_cluster_size` (logged per run) | < 2.0 (clusters too thin) |
+| Promotion rate | `clusters_promoted_to_story / clusters_processed` | < 0.70 |
 | Synthesis success rate | `(stories_written + stories_updated) / clusters_processed` | < 0.70 |
 | Stories per day | `SELECT COUNT(*) FROM stories WHERE published_at > NOW() - 24h` | < 20 |
-| Claude failure rate | `clusters_failed / clusters_processed` | > 0.15 |
+| LLM failure rate | `clusters_failed / clusters_processed` | > 0.15 |
+| Avg story score | `SELECT AVG(story_score) FROM stories WHERE published_at > NOW() - 24h` | — (informational) |
 | Avg confidence score | `SELECT AVG(confidence_score) FROM stories WHERE published_at > NOW() - 24h` | — (informational) |
 
 ### Reprocessing
@@ -636,13 +738,14 @@ This policy is encoded in the Pass 2 system prompt.
 
 ### 9.1 Entity Extraction Quality
 
-**Problem:** Regex-based entity extraction misses entities in all-caps ("NATO", "IMF") and non-standard casing. It also over-matches common capitalized words at sentence starts.
+**Problem:** Regex-based entity extraction misses entities in all-caps ("NATO", "IMF") and non-standard casing.
 
 **Mitigation:**
-- The ≥2 entity threshold for clustering absorbs false positives — one noise match doesn't create a cluster
-- Most wire service headlines use standard title casing for proper nouns
-- Can extend equivalence map (`backend/utils/nlp.js`) for specific missed entities without changing architecture
-- If false clustering becomes a problem in production, `hasHighSignalEntity` threshold can be raised from >3 to >5 chars
+- Multi-word regex captures sequences like "White House", "Strait of Hormuz" correctly
+- Stop-entity list filters days, months, and filler words before comparison
+- High-signal / low-signal distinction prevents generic terms ("US", "government") from driving matches
+- The ≥2 entities + ≥1 high-signal requirement absorbs residual false positives
+- Equivalence map (`backend/utils/nlp.js`) can be extended for specific missed cases (NATO → "nato") without changing architecture
 
 ### 9.2 Claude Cost Scaling
 
@@ -723,6 +826,8 @@ This policy is encoded in the Pass 2 system prompt.
 | Cross-source validation | None | ≥2 domains per story required |
 | Deduplication | URL-level only | Topic-level clustering |
 | Story confidence | N/A | 1–10 confidence score, gate at 6 |
+| Cluster scoring | N/A | Scored before LLM (article_count, domains, entity_density, recency); gate at 0.50 |
+| Story scoring | N/A | Composite score (source, consistency, clarity, LLM confidence); thresholds for publish/review/reject |
 | Story persistence | Stateless (rebuilt each 7AM) | River model (updates throughout day) |
 | Daily output | 5 questions from 5 articles | 20–50 stories → 5 quiz questions |
 | New dependencies | None added | None (reuses existing SDK) |
