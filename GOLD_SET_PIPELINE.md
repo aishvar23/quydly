@@ -160,7 +160,7 @@ story_score = (2 × source_count) + (4 × consistency_score × 10)
 
 | # | Task | Status |
 |---|------|--------|
-| 4.1 | Create `backend/engine/clusterer.js` | ⬜ |
+| 4.1 | Create `backend/engine/clusterer.js` | ✅ |
 | 4.2 | Create `api/cron/cluster.js` — Vercel Function handler | ⬜ |
 | 4.3 | Add to `vercel.json`: `"30 6 * * *"` schedule for `/api/cron/cluster` | ⬜ |
 | 4.4 | Call `computeClusterScore` after every INSERT or UPDATE; write `cluster_score` + `last_scored_at` | ⬜ |
