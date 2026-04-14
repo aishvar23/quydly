@@ -95,17 +95,18 @@ raw_articles (Supabase)
 | 2.2 | Unit test: verify entity normalization ("U.S." → "us", "United Kingdom" → "uk") | ✅ |
 | 2.3 | Unit test: verify extraction on 3 real news headlines | ✅ |
 | 2.4 | Review: incorporate nlp.js review findings (critical + high severity) | ✅ |
+| 2.5 | Follow-up: tighten `hasHighSignalEntity`; fix dead ranking branch | ✅ |
 
-**Review applied (2026-04-14):** All critical and high issues from the nlp.js review incorporated.
+**Review applied (2026-04-14):** All critical and high issues incorporated. Follow-up tightening applied same day.
 
 **Entity extraction:** two-pass regex — title-case phrases + all-caps acronyms (`WHO`, `NATO`, `U.S.`) — no external NLP lib
 **Cleaning:** `cleanEntity` helper strips leading/trailing punctuation, removes leading articles (`The/A/An`), normalises whitespace — runs before lowercasing in `normalizeEntity`
-**High-signal:** multi-word entities OR 2–4 char tokens (treated as acronyms) OR words > 4 chars — replaces the broken `length > 3` heuristic
+**High-signal:** two rules only — multi-word entity OR explicit membership in `HIGH_SIGNAL_SINGLES` (curated set: `nato`, `who`, `fbi`, `cia`, `us`, `uk`, `eu`, `ai`, etc.). Length is not used as a proxy.
 **Stop-entity filter:** weekdays + generic publishing words (`breaking`, `news`, `update`, etc.) removed after normalization
 **Overlap resolution:** shorter entity dropped when it is a strict substring of a longer retained entity (`New York` ⊂ `New York Times`)
-**Output cap:** top 10 entities returned, ranked by word count then length
+**Output cap:** top 10 entities returned, ranked by word count then length (no acronym-aware tier — case is lost after normalization)
 **Equivalence map:** `"U.S." / "u.s" / "United States" → "us"`, `"U.K." / "u.k" / "United Kingdom" → "uk"`, `"EU" / "European Union" → "eu"`
-**Tests (43/43):** normalizeEntity (equivalence + cleaning), hasHighSignalEntity (new rule-based logic), extractEntities (title-case, all-caps acronyms, stop filtering, overlap resolution, output cap)
+**Tests (50/50):** normalizeEntity (equivalence + cleaning), hasHighSignalEntity (multi-word, curated acronyms, unknown singles correctly false), extractEntities (title-case, all-caps acronyms, stop filtering, overlap resolution, output cap)
 
 ---
 
