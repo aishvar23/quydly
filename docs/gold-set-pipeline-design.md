@@ -14,12 +14,13 @@
 3. [Proposed Architecture](#3-proposed-architecture)
 4. [Tech Stack](#4-tech-stack)
 5. [Data Model](#5-data-model)
-6. [Component Design](#6-component-design)
-7. [Observability](#7-observability)
-8. [Product Safety](#8-product-safety)
-9. [Drawbacks & Concerns](#9-drawbacks--concerns)
-10. [Out of Scope for MVP](#10-out-of-scope-for-mvp)
-11. [Open Questions](#11-open-questions)
+6. [Scoring System](#6-scoring-system)
+7. [Component Design](#7-component-design)
+8. [Observability](#8-observability)
+9. [Product Safety](#9-product-safety)
+10. [Drawbacks & Concerns](#10-drawbacks--concerns)
+11. [Out of Scope for MVP](#11-out-of-scope-for-mvp)
+12. [Open Questions](#12-open-questions)
 
 ---
 
@@ -226,9 +227,12 @@ CREATE TABLE clusters (
   unique_domains   text[] NOT NULL DEFAULT '{}',
   -- Deduplicated source_domain list
 
-  cluster_score    numeric(4,2) NOT NULL DEFAULT 0,
-  -- Scored before LLM processing: article_count + unique_domains + entity_density + recency
-  -- Only clusters above threshold (default: 0.50) are sent to synthesizer
+  cluster_score    numeric(5,2) NOT NULL DEFAULT 0,
+  -- Scored before LLM processing: weighted sum of article_count_score, domain_score,
+  -- entity_density_score, and recency_score. See Section 6.1 for formula.
+  -- Only clusters with cluster_score ≥ 8 are sent to synthesizer.
+  last_scored_at   timestamptz,
+  -- Set on every scoring write; NULL means never scored
 
   status           text NOT NULL DEFAULT 'PENDING'
                    CHECK (status IN ('PENDING','PROCESSING','PROCESSED','FAILED')),
@@ -257,7 +261,7 @@ River model re-entry:
 Articles in `raw_articles` are **never permanently excluded** after clustering. An article's `status` in `raw_articles` is only changed by `process.js` — the clusterer is read-only against that table. Articles are considered "done" for clustering only after they appear in `cluster.article_ids`. If a cluster is later re-opened (new article appended), those articles will be re-sent to synthesis as part of the updated cluster payload.
 
 **Eligibility for synthesis:**
-- `cluster_score ≥ 0.50` (scoring gate — see Cluster Scoring below)
+- `cluster_score ≥ 8` (scoring gate — see Section 6.1)
 - `array_length(article_ids, 1) ≥ 2` AND `array_length(unique_domains, 1) ≥ 2`
 - OR any referenced article has `authority_score ≥ 0.8` (single-source exception for wire services)
 
@@ -287,9 +291,15 @@ CREATE TABLE stories (
   confidence_score int  NOT NULL DEFAULT 0,
   -- 1–10, synthesizer-assigned. Gate: must be ≥ 6 to write.
 
-  story_score      numeric(4,2) NOT NULL DEFAULT 0,
-  -- Composite: source_count (30%) + fact_consistency (30%) + entity_clarity (20%) + LLM confidence (20%)
-  -- Thresholds: ≥ 0.70 → auto-publish candidate; 0.40–0.69 → manual review; < 0.40 → reject
+  story_score      numeric(5,2) NOT NULL DEFAULT 0,
+  -- Composite: (2×source) + (4×consistency×10) + (1×entity_clarity) + (2×confidence)
+  -- Thresholds: ≥ 12 → publish candidate; 8–12 → manual review; < 8 → reject (not written)
+
+  consistency_score numeric(4,3) NOT NULL DEFAULT 0,
+  -- Fraction of extracted facts corroborated by ≥2 sources (0.0–1.0)
+
+  source_count     int NOT NULL DEFAULT 0,
+  -- Number of unique articles in source cluster at time of synthesis
 
   is_verified      boolean NOT NULL DEFAULT false,
   -- Manual gate initially; automate after trust is established
@@ -418,7 +428,173 @@ If not found → INSERT new story
 
 ---
 
-## 6. Component Design
+## 6. Scoring System
+
+The scoring system is the pipeline's primary cost-control and quality-control mechanism. Scores are computed in the application layer (never in SQL), cached on the relevant DB row, and recalculated when the row is updated. Thresholds are env-configurable (see `config/flags.js`).
+
+---
+
+### 6.1 Cluster Scoring (Pre-LLM Gate)
+
+**Purpose:** prevent low-signal clusters from reaching the LLM. Applied by `clusterer.js` after every INSERT or UPDATE.
+
+#### Inputs
+
+| Field | Type |
+|---|---|
+| `article_count` | `article_ids.length` |
+| `unique_domains` | `unique_domains.length` |
+| `primary_entities` | `primary_entities.length` |
+| `updated_at` | timestamp |
+
+#### Derived Component Scores
+
+**1. Article Count Score** — logarithmic scaling, prevents bias toward large clusters:
+```
+article_count_score = log(article_count + 1)
+```
+
+**2. Domain Diversity Score** — higher diversity = higher credibility:
+```
+domain_score = unique_domains
+```
+
+**3. Entity Density Score** — measures cluster focus:
+```
+entity_density_score = count(primary_entities)
+```
+
+**4. Recency Score:**
+```
+1.0  →  updated_at within 6 hours
+0.7  →  within 12 hours
+0.4  →  within 24 hours
+0.1  →  older than 24 hours
+```
+
+#### Cluster Score Formula
+
+```
+cluster_score =
+  (2 × article_count_score) +
+  (3 × domain_score) +
+  (2 × entity_density_score) +
+  (2 × recency_score)
+```
+
+#### Thresholds
+
+| Score | Disposition |
+|---|---|
+| `≥ 8` | Eligible for synthesis |
+| `5 – 8` | Optional — batch or low-priority |
+| `< 5` | Discard / skip |
+
+**Minimum quality guard (always applied first, before score):**
+- `article_count ≥ 2`
+- `unique_domains ≥ 2`
+
+#### Storage
+
+Stored on `clusters` table:
+- `cluster_score numeric(5,2)` — the raw computed value
+- `last_scored_at timestamptz` — set on every scoring write
+
+---
+
+### 6.2 Story Scoring (Post-LLM Gate)
+
+**Purpose:** ensure only high-quality synthesized stories are published. Applied by `synthesizer.js` after Pass 2 output is validated.
+
+#### Inputs
+
+| Source | Fields |
+|---|---|
+| Cluster metadata | `unique_domains`, `primary_entities` |
+| Pass 1 output (extracted facts) | `[{ fact, type, source_count }]` |
+| Pass 2 output (LLM narrative) | `confidence_score` (1–10) |
+
+#### Derived Component Scores
+
+**1. Source Strength Score:**
+```
+source_score = number of unique articles in cluster
+```
+
+**2. Fact Consistency Score** _(most important)_:
+```
+consistency_score = (# facts with source_count ≥ 2) / total_facts
+```
+Measures the fraction of facts corroborated by more than one source.
+
+**3. Entity Clarity Score:**
+```
+entity_score = count(primary_entities)
+
+Penalties applied before scoring:
+  < 2 entities  →  story is too vague    (entity_score = 0)
+  > 6 entities  →  story is too noisy    (entity_score capped at 6)
+```
+
+**4. LLM Confidence Score:**
+```
+confidence_score = model output (1–10), taken directly
+```
+
+#### Story Score Formula
+
+```
+story_score =
+  (2 × source_score) +
+  (4 × consistency_score × 10) +
+  (1 × entity_score) +
+  (2 × confidence_score)
+```
+
+#### Thresholds
+
+| Score | Disposition |
+|---|---|
+| `≥ 12` | Publish candidate (`is_verified = false`, flagged for bulk approve) |
+| `8 – 12` | Manual review required (`is_verified = false`) |
+| `< 8` | Reject — log `LOW_STORY_SCORE`, do not write to `stories` table |
+
+#### Penalty conditions (logged, do not auto-reject but reduce score)
+
+- `consistency_score < 0.5` → weak corroboration, flag in logs
+- `confidence_score < 5` → LLM is uncertain, flag in logs
+
+#### Storage
+
+Stored on `stories` table:
+- `story_score numeric(5,2)` — raw composite value
+- `consistency_score numeric(4,3)` — fact corroboration ratio
+- `source_count int` — number of unique articles in source cluster
+
+---
+
+### 6.3 Ranking & Usage
+
+`story_score` drives daily story selection:
+
+- Select **top 20–50 stories/day** ranked by `story_score DESC`
+- Rank within categories for category-level feeds
+- Surface:
+  - **"Top Stories"** — highest `story_score` across all categories
+  - **"Emerging Stories"** — high `recency_score` on source cluster, lower `source_count` (breaking news not yet fully corroborated)
+
+---
+
+### 6.4 Future Scoring Extensions (Do NOT implement now)
+
+- Authority weighting: Reuters / AP / BBC articles count more than blogs
+- User personalization: category-based score multipliers per user
+- Embedding-based semantic scoring: replace regex entity overlap with vector similarity
+- Trend detection: cluster growth rate as a recency signal boost
+
+---
+
+## 7. Component Design
 
 ### `backend/utils/nlp.js` — NLP Utilities
 
@@ -442,27 +618,57 @@ Exports:
 
 ```
 Exports:
-  computeClusterScore(cluster) → number (0–1)
-    Components:
-      article_count  weight 0.30  (normalized: count / 20, capped at 1.0)
-      unique_domains weight 0.25  (normalized: domains / 5, capped at 1.0)
-      entity_density weight 0.25  (unique entities / article_count)
-      recency        weight 0.20  (1.0 if updated_at < 6h ago,
-                                   0.5 if 6–12h, 0.25 if 12–24h, 0.0 if > 24h)
-    Returns weighted sum. Stored as cluster.cluster_score.
+  computeClusterScore(cluster) → number
+    cluster: { article_ids, unique_domains, primary_entities, updated_at }
 
-  computeStoryScore(story, synthesisResult) → number (0–1)
-    Components:
-      source_count      weight 0.30  (unique_domains / 5, capped at 1.0)
-      fact_consistency  weight 0.30  (1 - (conflict_count / total_facts))
-      entity_clarity    weight 0.20  (high_signal_entity_count / total_entities)
-      llm_confidence    weight 0.20  (confidence_score / 10)
-    Returns weighted sum. Stored as story.story_score.
+    article_count_score  = Math.log(article_ids.length + 1)
+    domain_score         = unique_domains.length
+    entity_density_score = primary_entities.length
+    recency_score:
+      1.0  if updated_at within 6h
+      0.7  if within 12h
+      0.4  if within 24h
+      0.1  otherwise
+
+    cluster_score =
+      (2 * article_count_score) +
+      (3 * domain_score) +
+      (2 * entity_density_score) +
+      (2 * recency_score)
+
+    Returns raw numeric. Stored as cluster.cluster_score + cluster.last_scored_at.
+
+  clusterDisposition(cluster_score) → 'eligible' | 'optional' | 'discard'
+    ≥ 8   → 'eligible'   (passed to synthesizer)
+    5–8   → 'optional'   (low-priority batch)
+    < 5   → 'discard'    (skip, do not synthesize)
+
+  computeStoryScore(cluster, synthesisResult) → { story_score, consistency_score, source_count }
+    cluster:         { article_ids, primary_entities }
+    synthesisResult: { facts: [{ fact, type, source_count }], confidence_score }
+
+    source_score      = cluster.article_ids.length
+    consistency_score = (facts with source_count ≥ 2).length / facts.length
+    entity_score:
+      raw = cluster.primary_entities.length
+      if raw < 2 → 0        (too vague)
+      if raw > 6 → 6        (cap, too noisy)
+      else       → raw
+    confidence_score  = synthesisResult.confidence_score  (1–10 from LLM)
+
+    story_score =
+      (2 * source_score) +
+      (4 * consistency_score * 10) +
+      (1 * entity_score) +
+      (2 * confidence_score)
+
+    Returns { story_score, consistency_score, source_count: source_score }.
+    Stored as story.story_score, story.consistency_score, story.source_count.
 
   storyDisposition(story_score) → 'publish' | 'review' | 'reject'
-    ≥ 0.70 → 'publish'   (auto-approve candidate after trust established)
-    0.40–0.69 → 'review' (manual review required)
-    < 0.40  → 'reject'   (log, do not write to stories table)
+    ≥ 12    → 'publish'  (auto-approve candidate after trust period)
+    8–12    → 'review'   (manual review required)
+    < 8     → 'reject'   (log LOW_STORY_SCORE, do not write to stories table)
 ```
 
 ### `backend/engine/clusterer.js` — Clustering Engine
@@ -524,7 +730,7 @@ Output: { clusters_processed, stories_written, stories_updated, clusters_failed 
 Algorithm:
   1. SELECT clusters WHERE
        status = 'PENDING'
-       AND cluster_score >= 0.50
+       AND cluster_score >= 8
        AND array_length(article_ids, 1) >= 2
        AND array_length(unique_domains, 1) >= 2
      LIMIT 50 per run
@@ -622,7 +828,7 @@ maxDuration: 300
 
 ---
 
-## 7. Observability
+## 8. Observability
 
 ### Structured Metrics (logged per cron run)
 
@@ -694,7 +900,7 @@ LIMIT 20;
 
 ---
 
-## 8. Product Safety
+## 9. Product Safety
 
 ### Manual Verification Gate
 
@@ -734,9 +940,9 @@ This policy is encoded in the Pass 2 system prompt.
 
 ---
 
-## 9. Drawbacks & Concerns
+## 10. Drawbacks & Concerns
 
-### 9.1 Entity Extraction Quality
+### 10.1 Entity Extraction Quality
 
 **Problem:** Regex-based entity extraction misses entities in all-caps ("NATO", "IMF") and non-standard casing.
 
@@ -747,7 +953,7 @@ This policy is encoded in the Pass 2 system prompt.
 - The ≥2 entities + ≥1 high-signal requirement absorbs residual false positives
 - Equivalence map (`backend/utils/nlp.js`) can be extended for specific missed cases (NATO → "nato") without changing architecture
 
-### 9.2 Claude Cost Scaling
+### 10.2 Claude Cost Scaling
 
 **Problem:** At 50 clusters/day × 2 passes = 100 Claude calls/day. At peak (100 clusters), this becomes 200 calls. `claude-sonnet-4-20250514` is not free.
 
@@ -759,7 +965,7 @@ This policy is encoded in the Pass 2 system prompt.
 - Estimated cost: ~100 calls/day × ~2000 tokens avg = 200K tokens/day ≈ ~$0.30/day at Sonnet pricing
 - Acceptable for MVP
 
-### 9.3 synthesize Cron Duration
+### 10.3 synthesize Cron Duration
 
 **Problem:** 50 clusters × 2 Claude passes with 10 concurrent = at least 10 rounds. Each round is ~2-3 API calls with latency. At 1s/call, worst case: 50 clusters ÷ 10 concurrent × 2 passes × 1.5s avg = ~15s. With retries and DB writes, realistic estimate: 60–120s.
 
@@ -768,7 +974,7 @@ This policy is encoded in the Pass 2 system prompt.
 - 15-minute gap between synthesize (6:45AM) and generate (7:00AM) provides buffer
 - If cron runs long, adjust to 6:30AM synthesis
 
-### 9.4 River Model Stale Clusters
+### 10.4 River Model Stale Clusters
 
 **Problem:** A cluster from yesterday might get a new article appended today, re-queuing it for synthesis. The resulting story overwrites yesterday's story. This is intentional but could cause the updated_at timestamp to look misleading.
 
@@ -777,7 +983,7 @@ This policy is encoded in the Pass 2 system prompt.
 - `updated_at` reflects the last synthesis
 - Future quiz generation should filter by `updated_at > NOW() - 24h` not `published_at`
 
-### 9.5 Bootstrap / Day-One Problem
+### 10.5 Bootstrap / Day-One Problem
 
 **Problem:** No clusters or stories exist on first deploy.
 
@@ -790,7 +996,7 @@ This policy is encoded in the Pass 2 system prompt.
 
 ---
 
-## 10. Out of Scope for MVP
+## 11. Out of Scope for MVP
 
 | Feature | Rationale for deferral |
 |---------|----------------------|
@@ -805,7 +1011,7 @@ This policy is encoded in the Pass 2 system prompt.
 
 ---
 
-## 11. Open Questions
+## 12. Open Questions
 
 | # | Question | Impact | Decision by |
 |---|----------|--------|------------|
@@ -826,8 +1032,8 @@ This policy is encoded in the Pass 2 system prompt.
 | Cross-source validation | None | ≥2 domains per story required |
 | Deduplication | URL-level only | Topic-level clustering |
 | Story confidence | N/A | 1–10 confidence score, gate at 6 |
-| Cluster scoring | N/A | Scored before LLM (article_count, domains, entity_density, recency); gate at 0.50 |
-| Story scoring | N/A | Composite score (source, consistency, clarity, LLM confidence); thresholds for publish/review/reject |
+| Cluster scoring | N/A | Weighted formula (log article_count, domains, entity_density, recency); gate at ≥ 8 |
+| Story scoring | N/A | Composite formula (source, consistency×10, entity_clarity, LLM confidence); ≥ 12 publish, 8–12 review, < 8 reject |
 | Story persistence | Stateless (rebuilt each 7AM) | River model (updates throughout day) |
 | Daily output | 5 questions from 5 articles | 20–50 stories → 5 quiz questions |
 | New dependencies | None added | None (reuses existing SDK) |
