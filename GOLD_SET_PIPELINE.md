@@ -188,11 +188,11 @@ story_score = (2 × source_count) + (4 × consistency_score × 10)
 | 5.7 | Call `computeStoryScore`; write `story_score`, `consistency_score`, `source_count` to story row | ✅ |
 | 5.8 | Apply `storyDisposition`: skip write if reject, log `LOW_STORY_SCORE`; log `LOW_CONFIDENCE` if confidence < 6 | ✅ |
 | 5.9 | Smoke-test: call `/api/cron/synthesize` manually, verify `stories` table fills with scores populated | ✅ |
-| 5.10 | Verify River model: second run updates existing stories (merges key_points, refreshes summary + scores) | ⬜ |
-| 5.11 | Verify failed clusters are marked FAILED and logged with cluster.id + prompt payload | ⬜ |
+| 5.10 | Verify River model: second run updates existing stories (merges key_points, refreshes summary + scores) | ✅ |
+| 5.11 | Verify failed clusters are marked FAILED and logged with cluster.id + prompt payload | ✅ |
 
 **Model:** `claude-sonnet-4-20250514`
-**Concurrency:** max 10 clusters in parallel (p-limit)
+**Concurrency:** max 3 clusters in parallel (reduced from 10 — hit 8k TPM org limit in smoke test)
 **Retry budget:** 2× per cluster before FAILED
 
 ---
@@ -201,12 +201,12 @@ story_score = (2 × source_count) + (4 × consistency_score × 10)
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Confirm `confidence_score < 6` stories are never written (logged as `LOW_CONFIDENCE`) | ⬜ |
-| 6.2 | Confirm `storyDisposition = 'reject'` stories are never written (logged as `LOW_STORY_SCORE`) | ⬜ |
-| 6.3 | Confirm `storyDisposition = 'review'` stories are written with `is_verified = false` and flagged for review | ⬜ |
+| 6.1 | Confirm `confidence_score < 6` stories are never written (logged as `LOW_CONFIDENCE`) | ✅ |
+| 6.2 | Confirm `storyDisposition = 'reject'` stories are never written (logged as `LOW_STORY_SCORE`) | ✅ |
+| 6.3 | Confirm `storyDisposition = 'review'` stories are written with `is_verified = false` and flagged for review | ✅ |
 | 6.4 | Confirm `storyDisposition = 'publish'` stories are written with `is_verified = false` as publish candidates | ⬜ |
 | 6.5 | Verify 20–50 stories/day target met in Supabase after 24h run | ⬜ |
-| 6.6 | Check `consistency_score` and `source_count` populated on every written story row | ⬜ |
+| 6.6 | Check `consistency_score` and `source_count` populated on every written story row | ✅ |
 
 **Gate criteria (story written only if ALL pass):**
 - `confidence_score ≥ 6` (LLM confidence gate)
