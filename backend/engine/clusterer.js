@@ -116,12 +116,14 @@ export async function runClustering() {
 
   if (!articles || articles.length === 0) {
     const empty = {
-      articles_processed:         0,
-      articles_skipped_no_signal: 0,
-      articles_skipped_no_match:  0,
-      clusters_updated:           0,
-      clusters_created:           0,
-      clusters_eligible:          0,
+      articles_processed:          0,
+      articles_skipped_no_signal:  0,
+      articles_skipped_no_match:   0,
+      clusters_updated:            0,
+      clusters_created:            0,
+      clusters_below_quality:      0,
+      clusters_persist_failed:     0,
+      clusters_eligible:           0,
     };
     console.log(JSON.stringify({ event: 'clustering_no_articles', ...empty }));
     return empty;
@@ -132,7 +134,7 @@ export async function runClustering() {
 
   const { data: existingRows, error: clustError } = await supabase
     .from('clusters')
-    .select('id, category_id, primary_entities, article_ids, unique_domains, updated_at')
+    .select('id, category_id, primary_entities, article_ids, unique_domains, cluster_score, updated_at')
     .eq('status', 'PENDING')
     .gte('updated_at', clusterSince);
 
@@ -141,6 +143,13 @@ export async function runClustering() {
   // Working set: DB rows + in-memory candidates created this run.
   // _isNew  — not yet in DB; persisted on first quality pass
   // _dirty  — existing DB row modified; needs UPDATE
+  //
+  // cluster_score is preserved from the DB for existing rows so that
+  // clusters_eligible reflects the DB-effective score after this run:
+  //   - non-dirty existing rows → original DB score
+  //   - dirty rows persisted successfully → overwritten with fresh score
+  //   - dirty rows that fail to persist → original DB score unchanged (DB not updated)
+  //   - new rows → null until successfully persisted
   const workingSet = (existingRows ?? []).map(c => ({
     id:               c.id,
     category_id:      c.category_id,
@@ -148,7 +157,9 @@ export async function runClustering() {
     article_ids:      Array.isArray(c.article_ids)      ? [...c.article_ids]      : [],
     unique_domains:   Array.isArray(c.unique_domains)   ? [...c.unique_domains]   : [],
     updated_at:       c.updated_at,
-    cluster_score:    null,
+    cluster_score:    (typeof c.cluster_score === 'number' && Number.isFinite(c.cluster_score))
+                        ? c.cluster_score
+                        : null,
     _isNew:           false,
     _dirty:           false,
   }));
@@ -273,9 +284,13 @@ export async function runClustering() {
   }
 
   // ── 6. Count eligible clusters ──────────────────────────────────────────────
+  // "Logically eligible after this run" — PENDING clusters whose DB-effective
+  // cluster_score meets the synthesis threshold. Includes untouched existing
+  // clusters (original DB score preserved) and newly persisted ones (fresh score).
+  // New clusters that failed to persist have cluster_score = null and are excluded.
   const clusters_eligible = workingSet.filter(c =>
     (c.cluster_score ?? 0) >= FLAGS.scoring.cluster.eligible &&
-    c.article_ids.length   >= MIN_ARTICLE_COUNT &&
+    c.article_ids.length    >= MIN_ARTICLE_COUNT &&
     c.unique_domains.length >= MIN_DOMAIN_COUNT
   ).length;
 
