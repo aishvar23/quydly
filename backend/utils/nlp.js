@@ -13,6 +13,20 @@ const EQUIVALENCE_MAP = {
   'european union': 'eu',
 };
 
+// Single-word entities that are definitively high-signal.
+// All values are post-normalization (lowercased).
+// Do NOT use string length as a proxy — add explicit entries here instead.
+const HIGH_SIGNAL_SINGLES = new Set([
+  // Equivalence-map canonical outputs
+  'us', 'uk', 'eu',
+  // Intergovernmental / multilateral
+  'un', 'nato', 'who', 'imf', 'wto', 'g7', 'g20', 'icc', 'iaea',
+  // US government agencies / bodies
+  'fbi', 'cia', 'nsa', 'doj', 'dhs', 'sec', 'fed', 'gop',
+  // Common news acronyms
+  'ai', 'ceo', 'cfo',
+]);
+
 // Low-signal entities to discard after normalization.
 const STOP_ENTITIES = new Set([
   // Weekdays
@@ -103,51 +117,33 @@ export function extractEntities(text) {
     !arr.some(other => other !== e && other.includes(e))
   );
 
-  // Rank: multi-word > acronym (all-caps) > single-word
+  // Rank by word count descending, then by character length descending.
+  // All entities are lowercased after normalization so no acronym-specific
+  // ordering is possible here — HIGH_SIGNAL_SINGLES handles acronym identity.
   deduped.sort((a, b) => {
-    const scoreOf = s => {
-      if (s.includes(' ')) return 2;
-      if (/^[a-z]{2,5}$/.test(s) && s === s.toUpperCase()) return 1; // preserved acronym (already lowercased by equivalence map edge case — handled below)
-      return 0;
-    };
-    // After normalization acronyms are lowercased; detect via original if needed.
-    // Use word count and length as a reasonable proxy.
     const wordsA = a.split(' ').length;
     const wordsB = b.split(' ').length;
-    if (wordsA !== wordsB) return wordsB - wordsA; // more words = higher priority
-    return b.length - a.length;                    // longer = higher priority
+    if (wordsA !== wordsB) return wordsB - wordsA;
+    return b.length - a.length;
   });
 
   return deduped.slice(0, MAX_ENTITIES);
 }
 
 /**
- * Returns true if at least one entity in the array is "high-signal":
- *   - A multi-word entity (contains a space), or
- *   - A short all-caps acronym (2–5 chars, letters only, maps to a known form
- *     or was originally all-caps before normalization).
+ * Returns true if at least one entity in the array is high-signal.
  *
- * Normalized entities are lowercased, so we detect acronym origin by checking
- * if the value is 2–5 alphabetic characters AND appears in the EQUIVALENCE_MAP
- * values, OR was produced from an all-caps source — we proxy this by checking
- * length ≤ 5 with no spaces and known equivalence-map output values.
+ * Two rules, nothing else:
+ *   1. Multi-word entity (contains a space) — e.g. "donald trump", "federal reserve"
+ *   2. Explicit membership in HIGH_SIGNAL_SINGLES — e.g. "nato", "fbi", "us"
+ *
+ * Length is NOT used as a proxy. After normalization all entities are lowercased,
+ * so case-based acronym detection is impossible; instead, add known acronyms to
+ * HIGH_SIGNAL_SINGLES explicitly.
  *
  * @param {string[]} entities — already normalised
  * @returns {boolean}
  */
 export function hasHighSignalEntity(entities) {
-  const acronymOutputs = new Set(Object.values(EQUIVALENCE_MAP));
-
-  return entities.some(e => {
-    // Multi-word entities are always high-signal
-    if (e.includes(' ')) return true;
-    // Known equivalence-map outputs (us, uk, eu) are high-signal acronyms
-    if (acronymOutputs.has(e)) return true;
-    // Short (2–4 char) purely-alpha tokens that came from all-caps source.
-    // Since we lowercase everything, we accept 2–4 letter tokens as acronyms.
-    if (/^[a-z]{2,4}$/.test(e)) return true;
-    // Single words longer than 4 chars are high-signal (proper names, etc.)
-    if (e.length > 4) return true;
-    return false;
-  });
+  return entities.some(e => e.includes(' ') || HIGH_SIGNAL_SINGLES.has(e));
 }

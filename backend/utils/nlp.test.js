@@ -49,16 +49,30 @@ test('"The White House" and "White House," → same value', () => {
 
 console.log('\nhasHighSignalEntity');
 
-test('multi-word entity is high-signal',           () => assert.equal(hasHighSignalEntity(['donald trump']), true));
-test('known acronym output "us" is high-signal',   () => assert.equal(hasHighSignalEntity(['us']), true));
-test('known acronym output "uk" is high-signal',   () => assert.equal(hasHighSignalEntity(['uk']), true));
-test('known acronym output "eu" is high-signal',   () => assert.equal(hasHighSignalEntity(['eu']), true));
-test('2-letter token treated as acronym',          () => assert.equal(hasHighSignalEntity(['ai']), true));
-test('3-letter token treated as acronym',          () => assert.equal(hasHighSignalEntity(['who']), true));
-test('proper name > 4 chars is high-signal',       () => assert.equal(hasHighSignalEntity(['apple']), true));
-test('single short generic word is not high-signal', () => assert.equal(hasHighSignalEntity(['it']), true)); // 2 chars = acronym rule
-test('empty array returns false',                  () => assert.equal(hasHighSignalEntity([]), false));
-test('mixed array: false entries do not override', () => assert.equal(hasHighSignalEntity(['donald trump', 'x']), true));
+// Multi-word → always high-signal
+test('multi-word entity is high-signal',                  () => assert.equal(hasHighSignalEntity(['donald trump']), true));
+test('multi-word with 3 words is high-signal',            () => assert.equal(hasHighSignalEntity(['federal reserve chair']), true));
+
+// HIGH_SIGNAL_SINGLES membership → high-signal
+test('"us" (equivalence-map output) is high-signal',      () => assert.equal(hasHighSignalEntity(['us']), true));
+test('"uk" (equivalence-map output) is high-signal',      () => assert.equal(hasHighSignalEntity(['uk']), true));
+test('"eu" (equivalence-map output) is high-signal',      () => assert.equal(hasHighSignalEntity(['eu']), true));
+test('"nato" (curated acronym) is high-signal',           () => assert.equal(hasHighSignalEntity(['nato']), true));
+test('"who" (curated acronym) is high-signal',            () => assert.equal(hasHighSignalEntity(['who']), true));
+test('"fbi" (curated acronym) is high-signal',            () => assert.equal(hasHighSignalEntity(['fbi']), true));
+test('"ai" (curated acronym) is high-signal',             () => assert.equal(hasHighSignalEntity(['ai']), true));
+
+// Single words NOT in HIGH_SIGNAL_SINGLES → not high-signal regardless of length
+test('unknown 5-char word "apple" is not high-signal',    () => assert.equal(hasHighSignalEntity(['apple']), false));
+test('unknown 4-char word "iran" is not high-signal',     () => assert.equal(hasHighSignalEntity(['iran']), false));
+test('generic 2-char token "it" is not high-signal',      () => assert.equal(hasHighSignalEntity(['it']), false));
+test('generic long word "government" is not high-signal', () => assert.equal(hasHighSignalEntity(['government']), false));
+
+// Edge cases
+test('empty array returns false',                         () => assert.equal(hasHighSignalEntity([]), false));
+test('only unknown singles → false',                      () => assert.equal(hasHighSignalEntity(['apple', 'iran', 'senate']), false));
+test('mix: one multi-word overrides unknowns',            () => assert.equal(hasHighSignalEntity(['apple', 'donald trump']), true));
+test('mix: one known acronym overrides unknowns',         () => assert.equal(hasHighSignalEntity(['apple', 'nato']), true));
 
 // ── extractEntities — basic behaviour ─────────────────────────────────────
 
