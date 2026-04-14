@@ -201,12 +201,12 @@ story_score = (2 × source_count) + (4 × consistency_score × 10)
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Confirm `confidence_score < 6` stories are never written (logged as `LOW_CONFIDENCE`) | ⬜ |
-| 6.2 | Confirm `storyDisposition = 'reject'` stories are never written (logged as `LOW_STORY_SCORE`) | ⬜ |
-| 6.3 | Confirm `storyDisposition = 'review'` stories are written with `is_verified = false` and flagged for review | ⬜ |
+| 6.1 | Confirm `confidence_score < 6` stories are never written (logged as `LOW_CONFIDENCE`) | ✅ |
+| 6.2 | Confirm `storyDisposition = 'reject'` stories are never written (logged as `LOW_STORY_SCORE`) | ✅ |
+| 6.3 | Confirm `storyDisposition = 'review'` stories are written with `is_verified = false` and flagged for review | ✅ |
 | 6.4 | Confirm `storyDisposition = 'publish'` stories are written with `is_verified = false` as publish candidates | ⬜ |
 | 6.5 | Verify 20–50 stories/day target met in Supabase after 24h run | ⬜ |
-| 6.6 | Check `consistency_score` and `source_count` populated on every written story row | ⬜ |
+| 6.6 | Check `consistency_score` and `source_count` populated on every written story row | ✅ |
 
 **Gate criteria (story written only if ALL pass):**
 - `confidence_score ≥ 6` (LLM confidence gate)
