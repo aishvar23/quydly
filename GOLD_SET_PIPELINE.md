@@ -60,9 +60,9 @@ raw_articles (Supabase)
 
 | # | Task | Status |
 |---|------|--------|
-| 1.1 | Create `backend/db/migration_gold_set.sql` — clusters + stories tables + indexes | ⬜ |
-| 1.2 | Run migration in Supabase SQL editor | ⬜ |
-| 1.3 | Verify both tables + indexes appear in Supabase dashboard | ⬜ |
+| 1.1 | Create `backend/db/migration_gold_set.sql` — clusters + stories tables + indexes | ✅ |
+| 1.2 | Run migration in Supabase SQL editor | ✅ |
+| 1.3 | Verify both tables + indexes appear in Supabase dashboard | ✅ |
 
 **`clusters` table columns:**
 - `id`, `category_id`, `primary_entities text[]`, `article_ids bigint[]`, `unique_domains text[]`
