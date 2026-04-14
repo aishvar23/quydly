@@ -3,6 +3,13 @@
 // River model: find existing story by cluster_id first, then by entity overlap.
 // Max 10 concurrent cluster syntheses; 2× retry on transient errors before FAILED.
 // Quality-gate failures (low confidence / low key_points) mark PROCESSED, not FAILED.
+//
+// Two-phase execution:
+//   Phase A (concurrent) — Claude API calls only; no DB writes.
+//   Phase B (serial)     — quality gates + River lookup + DB writes.
+// Phase B is serial to eliminate the River-model check-then-insert race
+// that exists when two concurrent workers both observe "no existing story"
+// and both attempt to insert for the same real-world event.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
@@ -176,6 +183,21 @@ Rules:
   return result;
 }
 
+// ── Phase A: Claude passes — concurrent, no DB writes ───────────────────────
+
+/**
+ * Run Pass 1 + Pass 2 for one cluster.  No DB side-effects.
+ * Returns { facts, narrative } or throws on API / parse error.
+ * @param {Anthropic} ai
+ * @param {object} cluster
+ * @param {object[]} articles
+ */
+async function runClaudePasses(ai, cluster, articles) {
+  const facts     = await extractFacts(ai, articles);
+  const narrative = await generateNarrative(ai, cluster, facts);
+  return { facts, narrative };
+}
+
 // ── Cluster status helper ────────────────────────────────────────────────────
 
 async function setClusterStatus(supabase, clusterId, status) {
@@ -238,7 +260,7 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   }
   if (!candidates || candidates.length === 0) return null;
 
-  let best       = null;
+  let best        = null;
   let bestOverlap = 0;
 
   for (const story of candidates) {
@@ -253,167 +275,123 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   return best;
 }
 
-// ── Synthesize one cluster ───────────────────────────────────────────────────
+// ── Phase B: quality gates + DB write — called serially ─────────────────────
 
 /**
- * Run both Claude passes for one cluster, apply quality gates, and write/merge story.
- *
- * Returns a result object for the run summary.
- * NEVER throws — all errors are caught and logged.
+ * Apply quality gates, score, and upsert story.
+ * Called in a serial loop after all Claude work is done — no concurrent DB writes.
  *
  * @param {object} supabase
- * @param {Anthropic} ai
- * @param {object} cluster — eligible cluster row
- * @param {object[]} articles — pre-fetched article rows for this cluster
+ * @param {object} cluster
+ * @param {object[]} facts — from Pass 1
+ * @param {object}  narrative — from Pass 2
  * @returns {Promise<{ written: boolean, disposition: string|null, reason: string|null }>}
  */
-async function synthesizeCluster(supabase, ai, cluster, articles) {
-  if (articles.length === 0) {
-    console.warn(JSON.stringify({ event: 'synthesis_no_articles', cluster_id: cluster.id }));
+async function writeStoryResult(supabase, cluster, facts, narrative) {
+  // Quality gate: confidence
+  if (narrative.confidence_score < 6) {
+    console.log(JSON.stringify({
+      event:      'LOW_CONFIDENCE',
+      cluster_id: cluster.id,
+      confidence: narrative.confidence_score,
+    }));
     await setClusterStatus(supabase, cluster.id, 'PROCESSED');
-    return { written: false, disposition: null, reason: 'NO_ARTICLES' };
+    return { written: false, disposition: null, reason: 'LOW_CONFIDENCE' };
   }
 
-  let lastErr;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      // ── Pass 1: fact extraction ─────────────────────────────────────────
-      const facts = await extractFacts(ai, articles);
-
-      // ── Pass 2: narrative generation ────────────────────────────────────
-      const narrative = await generateNarrative(ai, cluster, facts);
-
-      // ── Quality gate: confidence ─────────────────────────────────────────
-      if (narrative.confidence_score < 6) {
-        console.log(JSON.stringify({
-          event:      'LOW_CONFIDENCE',
-          cluster_id: cluster.id,
-          confidence: narrative.confidence_score,
-        }));
-        await setClusterStatus(supabase, cluster.id, 'PROCESSED');
-        return { written: false, disposition: null, reason: 'LOW_CONFIDENCE' };
-      }
-
-      // ── Quality gate: key_points completeness ─────────────────────────
-      if (narrative.key_points.length < 3) {
-        console.log(JSON.stringify({
-          event:      'LOW_KEY_POINTS',
-          cluster_id: cluster.id,
-          count:      narrative.key_points.length,
-        }));
-        await setClusterStatus(supabase, cluster.id, 'PROCESSED');
-        return { written: false, disposition: null, reason: 'LOW_KEY_POINTS' };
-      }
-
-      // ── Scoring ────────────────────────────────────────────────────────
-      const synthesisResult = { ...narrative, facts };
-      const { story_score, consistency_score, source_count } =
-        computeStoryScore(cluster, synthesisResult);
-      const disposition = storyDisposition(story_score);
-
-      if (disposition === 'reject') {
-        console.log(JSON.stringify({
-          event:       'LOW_STORY_SCORE',
-          cluster_id:  cluster.id,
-          story_score,
-          disposition,
-        }));
-        await setClusterStatus(supabase, cluster.id, 'PROCESSED');
-        return { written: false, disposition, reason: 'LOW_STORY_SCORE' };
-      }
-
-      // ── River model ────────────────────────────────────────────────────
-      const riverCutoff  = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
-      const existingStory = await findExistingStory(supabase, cluster, riverCutoff);
-      const now           = new Date().toISOString();
-
-      if (existingStory) {
-        // Merge key_points (deduplicate), refresh summary + scores
-        const existingPoints = Array.isArray(existingStory.key_points)
-          ? existingStory.key_points
-          : [];
-        const mergedKeyPoints = [
-          ...new Set([...existingPoints, ...narrative.key_points]),
-        ].slice(0, 10);
-
-        const { error: updateErr } = await supabase
-          .from('stories')
-          .update({
-            primary_entities:  cluster.primary_entities,
-            headline:          narrative.headline,
-            summary:           narrative.summary,
-            key_points:        mergedKeyPoints,
-            confidence_score:  narrative.confidence_score,
-            story_score,
-            consistency_score,
-            source_count,
-            updated_at:        now,
-          })
-          .eq('id', existingStory.id);
-
-        if (updateErr) throw new Error(`story update: ${updateErr.message}`);
-
-        console.log(JSON.stringify({
-          event:       'story_merged',
-          cluster_id:  cluster.id,
-          story_id:    existingStory.id,
-          story_score,
-          disposition,
-        }));
-      } else {
-        // New story
-        const { error: insertErr } = await supabase
-          .from('stories')
-          .insert({
-            cluster_id:        cluster.id,
-            category_id:       cluster.category_id,
-            primary_entities:  cluster.primary_entities,
-            headline:          narrative.headline,
-            summary:           narrative.summary,
-            key_points:        narrative.key_points,
-            confidence_score:  narrative.confidence_score,
-            story_score,
-            consistency_score,
-            source_count,
-            is_verified:       false,
-            published_at:      now,
-            updated_at:        now,
-          });
-
-        if (insertErr) throw new Error(`story insert: ${insertErr.message}`);
-
-        console.log(JSON.stringify({
-          event:       'story_written',
-          cluster_id:  cluster.id,
-          story_score,
-          disposition,
-        }));
-      }
-
-      await setClusterStatus(supabase, cluster.id, 'PROCESSED');
-      return { written: true, disposition, reason: null };
-
-    } catch (err) {
-      lastErr = err;
-      console.error(JSON.stringify({
-        event:      'synthesis_attempt_failed',
-        cluster_id: cluster.id,
-        attempt,
-        error:      err.message,
-      }));
-      // Transient error — continue to next attempt
-    }
+  // Quality gate: key_points completeness
+  if (narrative.key_points.length < 3) {
+    console.log(JSON.stringify({
+      event:      'LOW_KEY_POINTS',
+      cluster_id: cluster.id,
+      count:      narrative.key_points.length,
+    }));
+    await setClusterStatus(supabase, cluster.id, 'PROCESSED');
+    return { written: false, disposition: null, reason: 'LOW_KEY_POINTS' };
   }
 
-  // All retries exhausted — technical failure
-  await setClusterStatus(supabase, cluster.id, 'FAILED');
-  console.error(JSON.stringify({
-    event:      'synthesis_failed',
-    cluster_id: cluster.id,
-    error:      lastErr?.message,
-  }));
-  return { written: false, disposition: null, reason: 'ERROR' };
+  // Scoring
+  const synthesisResult = { ...narrative, facts };
+  const { story_score, consistency_score, source_count } =
+    computeStoryScore(cluster, synthesisResult);
+  const disposition = storyDisposition(story_score);
+
+  if (disposition === 'reject') {
+    console.log(JSON.stringify({
+      event:       'LOW_STORY_SCORE',
+      cluster_id:  cluster.id,
+      story_score,
+      disposition,
+    }));
+    await setClusterStatus(supabase, cluster.id, 'PROCESSED');
+    return { written: false, disposition, reason: 'LOW_STORY_SCORE' };
+  }
+
+  // River model
+  const riverCutoff   = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
+  const existingStory = await findExistingStory(supabase, cluster, riverCutoff);
+  const now           = new Date().toISOString();
+
+  if (existingStory) {
+    // Merge key_points (deduplicate), refresh summary + scores
+    const existingPoints  = Array.isArray(existingStory.key_points) ? existingStory.key_points : [];
+    const mergedKeyPoints = [...new Set([...existingPoints, ...narrative.key_points])].slice(0, 10);
+
+    const { error: updateErr } = await supabase
+      .from('stories')
+      .update({
+        primary_entities:  cluster.primary_entities,
+        headline:          narrative.headline,
+        summary:           narrative.summary,
+        key_points:        mergedKeyPoints,
+        confidence_score:  narrative.confidence_score,
+        story_score,
+        consistency_score,
+        source_count,
+        updated_at:        now,
+      })
+      .eq('id', existingStory.id);
+
+    if (updateErr) throw new Error(`story update: ${updateErr.message}`);
+
+    console.log(JSON.stringify({
+      event:       'story_merged',
+      cluster_id:  cluster.id,
+      story_id:    existingStory.id,
+      story_score,
+      disposition,
+    }));
+  } else {
+    const { error: insertErr } = await supabase
+      .from('stories')
+      .insert({
+        cluster_id:        cluster.id,
+        category_id:       cluster.category_id,
+        primary_entities:  cluster.primary_entities,
+        headline:          narrative.headline,
+        summary:           narrative.summary,
+        key_points:        narrative.key_points,
+        confidence_score:  narrative.confidence_score,
+        story_score,
+        consistency_score,
+        source_count,
+        is_verified:       false,
+        published_at:      now,
+        updated_at:        now,
+      });
+
+    if (insertErr) throw new Error(`story insert: ${insertErr.message}`);
+
+    console.log(JSON.stringify({
+      event:       'story_written',
+      cluster_id:  cluster.id,
+      story_score,
+      disposition,
+    }));
+  }
+
+  await setClusterStatus(supabase, cluster.id, 'PROCESSED');
+  return { written: true, disposition, reason: null };
 }
 
 // ── Public entry point ───────────────────────────────────────────────────────
@@ -425,8 +403,10 @@ async function synthesizeCluster(supabase, ai, cluster, articles) {
  *   1. Fetch eligible PENDING clusters (cluster_score ≥ threshold, arrays ≥ 2), cap at 50.
  *   2. Mark all selected clusters PROCESSING.
  *   3. Batch-fetch all article data in one query.
- *   4. Synthesize clusters concurrently (max 10).
- *   5. Mark each cluster PROCESSED or FAILED as synthesis completes.
+ *      On failure: reset all claimed clusters to PENDING before throwing.
+ *   4a. Phase A — concurrent Claude API calls (no DB writes).
+ *   4b. Phase B — serial quality gates + River lookup + DB writes.
+ *   5. Aggregate and return run summary.
  *
  * @returns {{
  *   clusters_fetched:    number,
@@ -494,6 +474,7 @@ export async function runSynthesis() {
   }
 
   // ── 3. Batch-fetch all article data in one query ──────────────────────────
+  // On failure: reset claimed clusters to PENDING so the next run can retry.
   const allArticleIds = [...new Set(clusters.flatMap(c => c.article_ids))];
 
   const { data: allArticles, error: artErr } = await supabase
@@ -501,19 +482,88 @@ export async function runSynthesis() {
     .select('id, title, description, content, domain')
     .in('id', allArticleIds);
 
-  if (artErr) throw new Error(`[synthesizer] fetch articles: ${artErr.message}`);
+  if (artErr) {
+    // Reset claimed clusters so they are not stranded as PROCESSING
+    await supabase
+      .from('clusters')
+      .update({ status: 'PENDING', updated_at: new Date().toISOString() })
+      .in('id', clusterIds);
+
+    throw new Error(`[synthesizer] fetch articles: ${artErr.message}`);
+  }
 
   const articleMap = new Map((allArticles ?? []).map(a => [a.id, a]));
 
-  // ── 4. Synthesize concurrently ────────────────────────────────────────────
-  const tasks = clusters.map(cluster => () => {
+  // ── 4a. Phase A: concurrent Claude API calls (no DB writes) ───────────────
+  const phaseAResults = await runConcurrent(MAX_CONCURRENCY, clusters.map(cluster => async () => {
     const articles = cluster.article_ids
       .map(id => articleMap.get(id))
       .filter(Boolean);
-    return synthesizeCluster(supabase, ai, cluster, articles);
-  });
 
-  const results = await runConcurrent(MAX_CONCURRENCY, tasks);
+    if (articles.length === 0) {
+      return { cluster, skipped: 'NO_ARTICLES' };
+    }
+
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const { facts, narrative } = await runClaudePasses(ai, cluster, articles);
+        return { cluster, facts, narrative };
+      } catch (err) {
+        lastErr = err;
+        console.error(JSON.stringify({
+          event:      'synthesis_attempt_failed',
+          cluster_id: cluster.id,
+          attempt,
+          error:      err.message,
+        }));
+      }
+    }
+
+    return { cluster, error: lastErr };
+  }));
+
+  // ── 4b. Phase B: serial quality gates + River lookup + DB writes ──────────
+  const writeResults = [];
+
+  for (const item of phaseAResults) {
+    const { cluster } = item;
+
+    if (item.skipped === 'NO_ARTICLES') {
+      console.warn(JSON.stringify({ event: 'synthesis_no_articles', cluster_id: cluster.id }));
+      await setClusterStatus(supabase, cluster.id, 'PROCESSED');
+      writeResults.push({ written: false, disposition: null, reason: 'NO_ARTICLES' });
+      continue;
+    }
+
+    if (item.error) {
+      await setClusterStatus(supabase, cluster.id, 'FAILED');
+      console.error(JSON.stringify({
+        event:             'synthesis_failed',
+        cluster_id:        cluster.id,
+        error:             item.error.message,
+        article_ids:       cluster.article_ids,
+        primary_entities:  cluster.primary_entities,
+      }));
+      writeResults.push({ written: false, disposition: null, reason: 'ERROR' });
+      continue;
+    }
+
+    try {
+      const result = await writeStoryResult(supabase, cluster, item.facts, item.narrative);
+      writeResults.push(result);
+    } catch (err) {
+      await setClusterStatus(supabase, cluster.id, 'FAILED');
+      console.error(JSON.stringify({
+        event:             'synthesis_failed',
+        cluster_id:        cluster.id,
+        error:             err.message,
+        article_ids:       cluster.article_ids,
+        primary_entities:  cluster.primary_entities,
+      }));
+      writeResults.push({ written: false, disposition: null, reason: 'ERROR' });
+    }
+  }
 
   // ── 5. Aggregate summary ──────────────────────────────────────────────────
   let stories_written     = 0;
@@ -524,7 +574,7 @@ export async function runSynthesis() {
   let disposition_publish = 0;
   let disposition_review  = 0;
 
-  for (const r of results) {
+  for (const r of writeResults) {
     if (r.written) {
       stories_written++;
       if (r.disposition === 'publish') disposition_publish++;
@@ -551,4 +601,3 @@ export async function runSynthesis() {
   console.log(JSON.stringify({ event: 'synthesis_complete', ...summary }));
   return summary;
 }
-
