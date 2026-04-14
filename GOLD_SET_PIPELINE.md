@@ -164,12 +164,14 @@ story_score = (2 × source_count) + (4 × consistency_score × 10)
 | 4.2 | Create `api/cron/cluster.js` — Vercel Function handler | ✅ |
 | 4.3 | Add to `vercel.json`: `"30 6 * * *"` schedule for `/api/cron/cluster` | ✅ |
 | 4.4 | Call `computeClusterScore` after every INSERT or UPDATE; write `cluster_score` + `last_scored_at` | ✅ |
-| 4.5 | Smoke-test: call `/api/cron/cluster` manually, verify `clusters` table fills with `cluster_score` populated | ⬜ |
-| 4.6 | Run twice — confirm River model updates existing clusters (no duplicates, score recalculated) | ⬜ |
-| 4.7 | Spot-check: verify clusters with `cluster_score < 5` are not queued for synthesis | ⬜ |
+| 4.5 | Smoke-test: call `/api/cron/cluster` manually, verify `clusters` table fills with `cluster_score` populated | ✅ |
+| 4.6 | Run twice — confirm River model updates existing clusters (no duplicates, score recalculated) | ✅ |
+| 4.7 | Spot-check: verify clusters with `cluster_score < 5` are not queued for synthesis | ✅ |
 
 **Output per run:** `{ articles_processed, clusters_updated, clusters_created, clusters_eligible }`
 **Eligibility for synthesis:** `cluster_score ≥ 20` (FLAGS.scoring.cluster.eligible) AND `article_ids.length ≥ 2` AND `unique_domains.length ≥ 2` OR any article `authority_score ≥ 0.8`
+
+**Smoke-test fix (2026-04-14):** Article window filter changed from `published_at` to `scraped_at` — RSS feeds pull articles published days ago, so `published_at` missed ~98% of processed articles. `scraped_at` is when the article entered the pipeline.
 
 ---
 
