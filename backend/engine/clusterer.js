@@ -108,7 +108,7 @@ export async function runClustering() {
     .from('raw_articles')
     .select('id, title, description, domain, category_id, authority_score, published_at')
     .eq('status', 'DONE')
-    .gte('updated_at', articleSince)
+    .gte('scraped_at', articleSince)
     .order('authority_score', { ascending: false })
     .order('published_at',    { ascending: false });
 
