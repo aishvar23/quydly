@@ -94,10 +94,18 @@ raw_articles (Supabase)
 | 2.1 | Create `backend/utils/nlp.js` — `normalizeEntity`, `extractEntities`, `hasHighSignalEntity` | ✅ |
 | 2.2 | Unit test: verify entity normalization ("U.S." → "us", "United Kingdom" → "uk") | ✅ |
 | 2.3 | Unit test: verify extraction on 3 real news headlines | ✅ |
+| 2.4 | Review: incorporate nlp.js review findings (critical + high severity) | ✅ |
 
-**Entity extraction:** regex `/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g` — no external NLP lib
-**High-signal:** `entity.length > 3` after normalization
-**Equivalence map:** `"U.S." / "United States" → "us"`, `"U.K." / "United Kingdom" → "uk"`, `"EU" / "European Union" → "eu"`
+**Review applied (2026-04-14):** All critical and high issues from the nlp.js review incorporated.
+
+**Entity extraction:** two-pass regex — title-case phrases + all-caps acronyms (`WHO`, `NATO`, `U.S.`) — no external NLP lib
+**Cleaning:** `cleanEntity` helper strips leading/trailing punctuation, removes leading articles (`The/A/An`), normalises whitespace — runs before lowercasing in `normalizeEntity`
+**High-signal:** multi-word entities OR 2–4 char tokens (treated as acronyms) OR words > 4 chars — replaces the broken `length > 3` heuristic
+**Stop-entity filter:** weekdays + generic publishing words (`breaking`, `news`, `update`, etc.) removed after normalization
+**Overlap resolution:** shorter entity dropped when it is a strict substring of a longer retained entity (`New York` ⊂ `New York Times`)
+**Output cap:** top 10 entities returned, ranked by word count then length
+**Equivalence map:** `"U.S." / "u.s" / "United States" → "us"`, `"U.K." / "u.k" / "United Kingdom" → "uk"`, `"EU" / "European Union" → "eu"`
+**Tests (43/43):** normalizeEntity (equivalence + cleaning), hasHighSignalEntity (new rule-based logic), extractEntities (title-case, all-caps acronyms, stop filtering, overlap resolution, output cap)
 
 ---
 

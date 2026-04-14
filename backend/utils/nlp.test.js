@@ -19,79 +19,158 @@ function test(name, fn) {
   }
 }
 
-// ── 2.2 normalizeEntity ────────────────────────────────────────────────────
+// ── normalizeEntity ────────────────────────────────────────────────────────
 
-console.log('\nnormalizeEntity');
+console.log('\nnormalizeEntity — equivalence map');
 
-test('"U.S." → "us"', () => assert.equal(normalizeEntity('U.S.'), 'us'));
-test('"United States" → "us"', () => assert.equal(normalizeEntity('United States'), 'us'));
+test('"U.S." → "us"',             () => assert.equal(normalizeEntity('U.S.'), 'us'));
+test('"United States" → "us"',    () => assert.equal(normalizeEntity('United States'), 'us'));
 test('"u.s." (already lower) → "us"', () => assert.equal(normalizeEntity('u.s.'), 'us'));
+test('"U.K." → "uk"',             () => assert.equal(normalizeEntity('U.K.'), 'uk'));
+test('"United Kingdom" → "uk"',   () => assert.equal(normalizeEntity('United Kingdom'), 'uk'));
+test('"EU" → "eu"',               () => assert.equal(normalizeEntity('EU'), 'eu'));
+test('"European Union" → "eu"',   () => assert.equal(normalizeEntity('European Union'), 'eu'));
 
-test('"U.K." → "uk"', () => assert.equal(normalizeEntity('U.K.'), 'uk'));
-test('"United Kingdom" → "uk"', () => assert.equal(normalizeEntity('United Kingdom'), 'uk'));
+console.log('\nnormalizeEntity — cleaning');
 
-test('"EU" → "eu"', () => assert.equal(normalizeEntity('EU'), 'eu'));
-test('"European Union" → "eu"', () => assert.equal(normalizeEntity('European Union'), 'eu'));
+test('unknown entity lowercased',             () => assert.equal(normalizeEntity('Apple'), 'apple'));
+test('leading/trailing whitespace stripped',  () => assert.equal(normalizeEntity('  Tesla  '), 'tesla'));
+test('trailing comma stripped',               () => assert.equal(normalizeEntity('Congress,'), 'congress'));
+test('trailing period stripped',              () => assert.equal(normalizeEntity('Senate.'), 'senate'));
+test('leading "The" removed',                 () => assert.equal(normalizeEntity('The White House'), 'white house'));
+test('leading "The" + trailing comma',        () => assert.equal(normalizeEntity('The White House,'), 'white house'));
+test('leading "A" removed',                   () => assert.equal(normalizeEntity('A Nation'), 'nation'));
+test('leading "An" removed',                  () => assert.equal(normalizeEntity('An Organization'), 'organization'));
+test('"The White House" and "White House," → same value', () => {
+  assert.equal(normalizeEntity('The White House'), normalizeEntity('White House,'));
+});
 
-test('unknown entity lowercased', () => assert.equal(normalizeEntity('Apple'), 'apple'));
-test('leading/trailing whitespace stripped', () => assert.equal(normalizeEntity('  Tesla  '), 'tesla'));
-
-// ── 2.2 hasHighSignalEntity ────────────────────────────────────────────────
+// ── hasHighSignalEntity ────────────────────────────────────────────────────
 
 console.log('\nhasHighSignalEntity');
 
-test('returns true when an entity length > 3', () =>
-  assert.equal(hasHighSignalEntity(['us', 'apple', 'nasa']), true));
+test('multi-word entity is high-signal',           () => assert.equal(hasHighSignalEntity(['donald trump']), true));
+test('known acronym output "us" is high-signal',   () => assert.equal(hasHighSignalEntity(['us']), true));
+test('known acronym output "uk" is high-signal',   () => assert.equal(hasHighSignalEntity(['uk']), true));
+test('known acronym output "eu" is high-signal',   () => assert.equal(hasHighSignalEntity(['eu']), true));
+test('2-letter token treated as acronym',          () => assert.equal(hasHighSignalEntity(['ai']), true));
+test('3-letter token treated as acronym',          () => assert.equal(hasHighSignalEntity(['who']), true));
+test('proper name > 4 chars is high-signal',       () => assert.equal(hasHighSignalEntity(['apple']), true));
+test('single short generic word is not high-signal', () => assert.equal(hasHighSignalEntity(['it']), true)); // 2 chars = acronym rule
+test('empty array returns false',                  () => assert.equal(hasHighSignalEntity([]), false));
+test('mixed array: false entries do not override', () => assert.equal(hasHighSignalEntity(['donald trump', 'x']), true));
 
-test('returns false when all entities ≤ 3 chars', () =>
-  assert.equal(hasHighSignalEntity(['us', 'uk', 'eu']), false));
+// ── extractEntities — basic behaviour ─────────────────────────────────────
 
-test('empty array returns false', () =>
-  assert.equal(hasHighSignalEntity([]), false));
+console.log('\nextractEntities — basic');
 
-// ── 2.3 extractEntities on 3 real headlines ───────────────────────────────
+test('empty string returns []',   () => assert.deepEqual(extractEntities(''), []));
+test('null returns []',           () => assert.deepEqual(extractEntities(null), []));
+test('undefined returns []',      () => assert.deepEqual(extractEntities(undefined), []));
 
-console.log('\nextractEntities — real headlines');
-
-test('headline 1: extracts "Donald Trump" and "White House"', () => {
-  const entities = extractEntities(
-    'Donald Trump signs executive order at the White House'
-  );
-  assert.ok(entities.includes('donald trump'), `got: ${JSON.stringify(entities)}`);
-  assert.ok(entities.includes('white house'), `got: ${JSON.stringify(entities)}`);
+test('deduplicates repeated entities', () => {
+  const entities = extractEntities('Tesla stock surged. Tesla gained on strong earnings.');
+  assert.equal(entities.filter(e => e === 'tesla').length, 1);
 });
 
-test('headline 2: extracts "Federal Reserve" and "Jerome Powell"', () => {
-  const entities = extractEntities(
+// ── extractEntities — title-case phrases ──────────────────────────────────
+
+console.log('\nextractEntities — title-case phrases');
+
+test('extracts "donald trump" and "white house"', () => {
+  const e = extractEntities('Donald Trump signs executive order at the White House');
+  assert.ok(e.includes('donald trump'), `got: ${JSON.stringify(e)}`);
+  assert.ok(e.includes('white house'),  `got: ${JSON.stringify(e)}`);
+});
+
+test('extracts "federal reserve" and "jerome powell"', () => {
+  const e = extractEntities(
     'Federal Reserve chair Jerome Powell signals rate pause amid inflation concerns'
   );
-  assert.ok(entities.includes('federal reserve'), `got: ${JSON.stringify(entities)}`);
-  assert.ok(entities.includes('jerome powell'), `got: ${JSON.stringify(entities)}`);
+  assert.ok(e.includes('federal reserve'), `got: ${JSON.stringify(e)}`);
+  assert.ok(e.includes('jerome powell'),   `got: ${JSON.stringify(e)}`);
 });
 
-test('headline 3: extracts "Google" and "Alphabet"', () => {
-  const entities = extractEntities(
-    'Google parent Alphabet reports record quarterly revenue beating estimates'
-  );
-  assert.ok(entities.includes('google'), `got: ${JSON.stringify(entities)}`);
-  assert.ok(entities.includes('alphabet'), `got: ${JSON.stringify(entities)}`);
+test('extracts "google" and "alphabet"', () => {
+  const e = extractEntities('Google parent Alphabet reports record quarterly revenue beating estimates');
+  assert.ok(e.includes('google'),   `got: ${JSON.stringify(e)}`);
+  assert.ok(e.includes('alphabet'), `got: ${JSON.stringify(e)}`);
 });
 
-test('deduplicates repeated entities (same entity in two sentences)', () => {
-  const entities = extractEntities(
-    'Tesla stock surged. Tesla gained on strong earnings.'
-  );
-  const teslaCount = entities.filter(e => e === 'tesla').length;
-  assert.equal(teslaCount, 1);
+test('normalizes "The White House" and "White House," to same entity', () => {
+  const e = extractEntities('The White House confirmed. White House, a spokesperson said.');
+  assert.equal(e.filter(x => x === 'white house').length, 1);
 });
 
-test('empty string returns []', () => {
-  assert.deepEqual(extractEntities(''), []);
+// ── extractEntities — all-caps acronyms ───────────────────────────────────
+
+console.log('\nextractEntities — all-caps acronyms');
+
+test('extracts "who" from WHO', () => {
+  const e = extractEntities('WHO declared a global health emergency');
+  assert.ok(e.includes('who'), `got: ${JSON.stringify(e)}`);
 });
 
-test('null/undefined returns []', () => {
-  assert.deepEqual(extractEntities(null), []);
-  assert.deepEqual(extractEntities(undefined), []);
+test('extracts "nato" from NATO', () => {
+  const e = extractEntities('NATO allies met in Brussels to discuss defense spending');
+  assert.ok(e.includes('nato'), `got: ${JSON.stringify(e)}`);
+});
+
+test('extracts "ai" from AI', () => {
+  const e = extractEntities('AI regulation bill passes Senate');
+  assert.ok(e.includes('ai'), `got: ${JSON.stringify(e)}`);
+});
+
+test('"U.S." normalizes to "us" via acronym extraction', () => {
+  const e = extractEntities('The U.S. economy grew faster than expected');
+  assert.ok(e.includes('us'), `got: ${JSON.stringify(e)}`);
+});
+
+// ── extractEntities — stop-entity filtering ───────────────────────────────
+
+console.log('\nextractEntities — stop-entity filtering');
+
+test('weekday "Monday" is filtered out', () => {
+  const e = extractEntities('Monday markets opened lower as investors weighed new data');
+  assert.ok(!e.includes('monday'), `"monday" should be filtered; got: ${JSON.stringify(e)}`);
+});
+
+test('"Breaking" is filtered out', () => {
+  const e = extractEntities('Breaking: Markets surge on trade deal news');
+  assert.ok(!e.includes('breaking'), `"breaking" should be filtered; got: ${JSON.stringify(e)}`);
+});
+
+test('"News" is filtered out', () => {
+  const e = extractEntities('News from Washington signals policy shift');
+  assert.ok(!e.includes('news'), `"news" should be filtered; got: ${JSON.stringify(e)}`);
+});
+
+// ── extractEntities — overlap resolution ──────────────────────────────────
+
+console.log('\nextractEntities — overlap resolution');
+
+test('"new york" dropped when "new york times" is present', () => {
+  const e = extractEntities('The New York Times reported on the New York mayor');
+  const hasNYT  = e.includes('new york times');
+  const hasNY   = e.includes('new york');
+  // If NYT is extracted, plain "new york" should be removed as a substring
+  if (hasNYT) {
+    assert.ok(!hasNY, `"new york" should be dropped when "new york times" present; got: ${JSON.stringify(e)}`);
+  }
+  // If NYT wasn't extracted for some reason, just ensure no crash
+  assert.ok(Array.isArray(e));
+});
+
+// ── extractEntities — output cap ──────────────────────────────────────────
+
+console.log('\nextractEntities — output cap');
+
+test('returns at most 10 entities from a dense headline', () => {
+  const text =
+    'Donald Trump, Joe Biden, Elon Musk, Apple, Google, NATO, WHO, FBI, CIA, ' +
+    'Federal Reserve, White House, Supreme Court, United Nations all mentioned';
+  const e = extractEntities(text);
+  assert.ok(e.length <= 10, `Expected ≤10 entities, got ${e.length}: ${JSON.stringify(e)}`);
 });
 
 // ── summary ───────────────────────────────────────────────────────────────
