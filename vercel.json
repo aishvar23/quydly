@@ -26,10 +26,17 @@
     {
       "path": "/api/cron/cluster",
       "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/synthesize",
+      "schedule": "45 6 * * *"
     }
   ],
   "functions": {
     "api/cron/process.js": {
+      "maxDuration": 300
+    },
+    "api/cron/synthesize.js": {
       "maxDuration": 300
     }
   }
