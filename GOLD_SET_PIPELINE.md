@@ -105,11 +105,11 @@ raw_articles (Supabase)
 
 | # | Task | Status |
 |---|------|--------|
-| 3.1 | Create `backend/utils/scoring.js` — `computeClusterScore`, `clusterDisposition`, `computeStoryScore`, `storyDisposition` | ⬜ |
-| 3.2 | Unit test: `computeClusterScore` — verify log scaling, recency tiers, weighted sum | ⬜ |
-| 3.3 | Unit test: `clusterDisposition` — verify ≥8/5–8/<5 boundaries | ⬜ |
-| 3.4 | Unit test: `computeStoryScore` — verify entity penalty (< 2 → 0, > 6 → cap), consistency ratio | ⬜ |
-| 3.5 | Unit test: `storyDisposition` — verify ≥12/8–12/<8 boundaries | ⬜ |
+| 3.1 | Create `backend/utils/scoring.js` — `computeClusterScore`, `clusterDisposition`, `computeStoryScore`, `storyDisposition` | ✅ |
+| 3.2 | Unit test: `computeClusterScore` — verify log scaling, recency tiers, weighted sum | ✅ |
+| 3.3 | Unit test: `clusterDisposition` — verify ≥8/5–8/<5 boundaries | ✅ |
+| 3.4 | Unit test: `computeStoryScore` — verify entity penalty (< 2 → 0, > 6 → cap), consistency ratio | ✅ |
+| 3.5 | Unit test: `storyDisposition` — verify ≥12/8–12/<8 boundaries | ✅ |
 
 **`computeClusterScore(cluster)` formula:**
 ```
