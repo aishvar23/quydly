@@ -17,7 +17,7 @@ import { computeStoryScore, storyDisposition } from '../utils/scoring.js';
 import FLAGS from '../../config/flags.js';
 
 const MODEL             = 'claude-sonnet-4-20250514';
-const MAX_CONCURRENCY   = 10;
+const MAX_CONCURRENCY   = 3;    // 10 caused 429s: 2 passes × 1024 tokens × 10 concurrent > 8k TPM org limit
 const MAX_RETRIES       = 2;
 const CONTENT_TRUNCATE  = 500;   // chars of cleaned content passed to Claude per article
 const RIVER_WINDOW_MS   = 24 * 60 * 60 * 1000;

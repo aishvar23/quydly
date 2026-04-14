@@ -187,7 +187,7 @@ story_score = (2 × source_count) + (4 × consistency_score × 10)
 | 5.6 | Pass 2: narrative generation — output `{ headline, summary, key_points, confidence_score }` | ✅ |
 | 5.7 | Call `computeStoryScore`; write `story_score`, `consistency_score`, `source_count` to story row | ✅ |
 | 5.8 | Apply `storyDisposition`: skip write if reject, log `LOW_STORY_SCORE`; log `LOW_CONFIDENCE` if confidence < 6 | ✅ |
-| 5.9 | Smoke-test: call `/api/cron/synthesize` manually, verify `stories` table fills with scores populated | ⬜ |
+| 5.9 | Smoke-test: call `/api/cron/synthesize` manually, verify `stories` table fills with scores populated | ✅ |
 | 5.10 | Verify River model: second run updates existing stories (merges key_points, refreshes summary + scores) | ⬜ |
 | 5.11 | Verify failed clusters are marked FAILED and logged with cluster.id + prompt payload | ⬜ |
 
