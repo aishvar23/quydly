@@ -91,9 +91,9 @@ raw_articles (Supabase)
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | Create `backend/utils/nlp.js` — `normalizeEntity`, `extractEntities`, `hasHighSignalEntity` | ⬜ |
-| 2.2 | Unit test: verify entity normalization ("U.S." → "us", "United Kingdom" → "uk") | ⬜ |
-| 2.3 | Unit test: verify extraction on 3 real news headlines | ⬜ |
+| 2.1 | Create `backend/utils/nlp.js` — `normalizeEntity`, `extractEntities`, `hasHighSignalEntity` | ✅ |
+| 2.2 | Unit test: verify entity normalization ("U.S." → "us", "United Kingdom" → "uk") | ✅ |
+| 2.3 | Unit test: verify extraction on 3 real news headlines | ✅ |
 
 **Entity extraction:** regex `/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g` — no external NLP lib
 **High-signal:** `entity.length > 3` after normalization
