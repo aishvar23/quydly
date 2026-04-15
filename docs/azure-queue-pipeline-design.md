@@ -2,7 +2,7 @@
 
 **Feature:** Replace Vercel Cron-limited workers with Azure Service Bus + Azure Functions
 **Branch:** `infra/azure-queue-pipeline`
-**Status:** Design v2 — review fixes incorporated
+**Status:** Design v3 — review fixes incorporated
 **Authors:** Aishvarya Suhane
 
 ---
@@ -233,7 +233,6 @@ Name:    quydly-pipeline-fn
 Runtime: Node.js 22 (LTS)
 Plan:    Consumption (serverless, pay-per-execution)
 Region:  same as namespace
-Identity: System-assigned Managed Identity (enabled at creation)
 
 Functions:
   discover          TimerTrigger — "0 */30 * * * *"
@@ -324,28 +323,34 @@ Algorithm:
 
   7. UPDATE scrape_queue SET status = final_status, processed_at = now()
 
-  8. DECR "domain_inflight:{source_domain}" in Redis
+  8. DECR "domain_inflight:{source_domain}" in Redis (in finally block — always released)
 
-  9. Complete Service Bus message (context.done() / return without throw)
+  9. Complete Service Bus message (return without throw)
+
+  NOTE: article-scraper writes ONLY to raw_articles and scrape_queue.
+        It does NOT enqueue to any downstream queue.
+        The article-clusterer timer (section 5.3) later reads raw_articles
+        for articles WHERE clustered_at IS NULL — this is the handoff point.
 
 Error handling:
   - Do NOT catch errors silently — throw on network/parse/DB failure
   - Service Bus retries automatically (up to maxDeliveryCount=5)
   - After 5 failures: message dead-lettered
-  - DECR Redis key in a finally block so inflight count is always released
+  - DECR Redis key in finally block so inflight count is always released
 ```
 
 **Per-domain rate limiting:**
 
-`maxConcurrentCalls` in `host.json` is a per-instance cap. When Azure Functions scales to multiple instances (triggered by queue depth), each instance runs up to `maxConcurrentCalls` concurrent invocations — all potentially against the same domain. The Redis-based semaphore is cross-instance: a Redis INCR/DECR pair with TTL acts as a distributed counter visible to all instances.
+`maxConcurrentCalls` in `host.json` is a per-instance cap, not a global cap. Azure Functions on Consumption can scale out by adding more instances as queue depth grows. This means total outbound concurrency against a single publisher domain can exceed `maxConcurrentCalls` when multiple instances are active simultaneously. The Redis-based semaphore is cross-instance — all instances share the same Redis — and acts as a true distributed counter.
 
 ```
-Global throughput cap: maxConcurrentCalls in host.json (see 5.5)
-Per-domain cap:        MAX_DOMAIN_CONCURRENCY = 2 (Redis semaphore)
+Global throughput cap: maxConcurrentCalls in host.json (see 5.5) × active instances
+Per-domain cap:        MAX_DOMAIN_CONCURRENCY = 2 (Redis INCR/DECR semaphore)
 
-If per-domain cap reached: message is abandoned, not failed.
-  → SB redelivers after lockDuration (5 min) — domain backpressure without burning delivery count.
-  → This does NOT increment the SB delivery counter (the message is only abandoned, not dead-lettered).
+If per-domain cap reached: message is abandoned (NOT failed).
+  → SB redelivers after lockDuration expires (5 min).
+  → Abandonment does NOT increment the SB delivery count.
+  → The domain is de-pressured and the message retries without burning its retry budget.
 ```
 
 ---
@@ -370,16 +375,30 @@ Algorithm (identical to existing clusterer.js with two targeted changes):
       (cluster_score ≥ 20 AND article_ids.length ≥ 2 AND unique_domains.length ≥ 2)
       AND (synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours')
 
-      Ordering:
+      Ordering (DB update BEFORE queue send):
         a. UPDATE clusters SET synthesis_queued_at = NOW() WHERE id = $cluster_id
-           — written BEFORE queue send
-           — if queue send fails: synthesis_queued_at is set, no message sent
-           — next clusterer run (2h later) will re-evaluate: synthesis_queued_at < NOW()-4h → re-enqueue
         b. Send message to synthesize-queue: { cluster_id, category_id }
 
-      Duplicate messages to synthesize-queue are acceptable and harmless:
-        story-synthesizer checks cluster.status on receipt;
-        if already PROCESSED, it completes the message without work.
+      **Contract (explicit):**
+      This ordering is intentionally best-effort — there is no distributed transaction
+      between the DB write and the queue send. The two failure cases are:
+
+        Case 1 — DB update succeeds, queue send fails:
+          synthesis_queued_at is set, no message delivered.
+          Next clusterer run (2h later): synthesis_queued_at < NOW()-4h → re-enqueue.
+          Effect: up to 4h delay before retry. Acceptable.
+
+        Case 2 — Queue send succeeds, DB update fails:
+          Message is in queue, synthesis_queued_at is not set.
+          Next clusterer run may re-enqueue a second message (synthesis_queued_at IS NULL).
+          Effect: duplicate message delivered to synthesize-queue.
+          This is acceptable: story-synthesizer is idempotent.
+
+      **Idempotency contract for story-synthesizer:**
+      On receiving a cluster_id message, story-synthesizer does:
+        SELECT * FROM clusters WHERE id = $cluster_id AND status = 'PENDING'
+      If cluster is not PENDING (already PROCESSED), complete the message and return.
+      Duplicate messages produce no duplicate writes.
 
   Per-article write after clustering:
     UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id
@@ -450,7 +469,7 @@ Error handling:
 
 **`autoComplete: false`** — functions must explicitly settle messages (complete or abandon). This is required for correct retry behavior: a throw causes message abandonment and SB retry; a successful return causes completion.
 
-**`function.json` for Service Bus triggers** contains only binding metadata — no concurrency settings:
+**`function.json` for Service Bus triggers** contains only binding metadata — no concurrency settings. The `connection` field names the env var holding the connection string:
 
 ```json
 {
@@ -465,6 +484,7 @@ Error handling:
   ]
 }
 ```
+`AZURE_SERVICE_BUS_CONNECTION_STRING` is set in Function App Application settings (see Section 7).
 
 ---
 
@@ -507,23 +527,23 @@ Result: 20–50 stories built up continuously throughout the day
 
 ## 7. Environment Variables
 
-### Azure Function App settings (steady state)
+### Azure Function App settings
 
 ```
 SUPABASE_URL=
-SUPABASE_SERVICE_KEY=          # matches process.env.SUPABASE_SERVICE_KEY in backend code
+SUPABASE_SERVICE_KEY=                   # matches process.env.SUPABASE_SERVICE_KEY in backend code
 REDIS_URL=
 ANTHROPIC_API_KEY=
+AZURE_SERVICE_BUS_CONNECTION_STRING=    # RootManageSharedAccessKey connection string (MVP)
 ```
-
-**Service Bus connection: Managed Identity (no connection string in steady state)**
-See Section 8 for auth staging details.
 
 ### Vercel env additions (migration phase only — remove after Phase C cutover)
 
 ```
 AZURE_SERVICE_BUS_CONNECTION_STRING=   # Send-only SAS token for shadow enqueue from Vercel discover
 ```
+
+**Note:** The Azure Function App uses the full `RootManageSharedAccessKey` string (Send + Receive); Vercel uses a Send-only SAS — different values for the same variable name.
 
 ### Vercel env removals
 
@@ -533,51 +553,9 @@ None. Existing `SUPABASE_SERVICE_KEY`, `ANTHROPIC_API_KEY`, etc. remain for `gen
 
 ## 8. Authentication Model
 
-### Migration Phase (temporary)
+**MVP:** Azure Function App uses `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageSharedAccessKey) in Application settings. Vercel uses a separate Send-only SAS token during the migration phase (revoked at Phase C cutover). This is acceptable for MVP.
 
-During migration, Vercel `api/cron/discover.js` needs to enqueue messages to Azure Service Bus. This requires a connection string in Vercel's env.
-
-```
-SAS Policy: quydly-pipeline-discover-send
-Permissions: Send only (not Listen, not Manage)
-Scope: Namespace level (access to scrape-queue send)
-Used in: Vercel env as AZURE_SERVICE_BUS_CONNECTION_STRING
-Lifetime: Until Phase C cutover — then revoked and removed from Vercel env
-```
-
-### Steady State (target)
-
-Azure Functions use **Managed Identity + RBAC** — no connection strings in application config.
-
-```
-1. Enable system-assigned managed identity on Function App:
-   az functionapp identity assign \
-     --name quydly-pipeline-fn \
-     --resource-group quydly-pipeline-rg
-
-2. Assign Service Bus roles to the managed identity:
-   # Sender role (for discover → scrape-queue, clusterer → synthesize-queue)
-   az role assignment create \
-     --role "Azure Service Bus Data Sender" \
-     --assignee <managed-identity-principal-id> \
-     --scope /subscriptions/.../resourceGroups/quydly-pipeline-rg/providers/Microsoft.ServiceBus/namespaces/quydly-pipeline
-
-   # Receiver role (for scraper and synthesizer to consume messages)
-   az role assignment create \
-     --role "Azure Service Bus Data Receiver" \
-     --assignee <managed-identity-principal-id> \
-     --scope /subscriptions/.../resourceGroups/quydly-pipeline-rg/providers/Microsoft.ServiceBus/namespaces/quydly-pipeline
-
-3. In function.json connection field, use the namespace URI format:
-   "connection": "AZURE_SERVICE_BUS_NAMESPACE"   (env var = "quydly-pipeline.servicebus.windows.net")
-   Azure Functions SDK resolves this via DefaultAzureCredential → Managed Identity automatically.
-
-4. Do NOT set AZURE_SERVICE_BUS_CONNECTION_STRING in the Function App settings in steady state.
-```
-
-**Why Managed Identity over connection strings for Azure Functions?**
-
-Connection strings are long-lived shared secrets with broad permissions. Managed Identity credentials rotate automatically and are scoped to the specific resource — if the Function App is compromised, the blast radius is limited to Service Bus operations on this namespace only.
+**Target hardening (post-MVP):** Replace the connection string in Function App settings with Managed Identity + RBAC (`Azure Service Bus Data Sender` and `Azure Service Bus Data Receiver` roles on the namespace). Managed Identity credentials rotate automatically and require no secret management. This is not a blocker for initial deployment.
 
 ---
 

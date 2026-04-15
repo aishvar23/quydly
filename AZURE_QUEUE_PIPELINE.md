@@ -93,12 +93,12 @@ Note: `maxConcurrentCalls` and `autoComplete` are host-level settings — they a
 | 1.3 | Create queue: `scrape-queue` — maxDelivery: 5, TTL: 7d, lock: 5 min | ⬜ |
 | 1.4 | Create queue: `synthesize-queue` — maxDelivery: 3, TTL: 2d, lock: 5 min | ⬜ |
 | 1.5 | Create Storage Account: `quydlypipelinesa` (Standard LRS) | ⬜ |
-| 1.6 | Create Function App: `quydly-pipeline-fn` (Consumption, Node 22, system-assigned managed identity enabled) | ⬜ |
+| 1.6 | Create Function App: `quydly-pipeline-fn` (Consumption, Node 22) | ⬜ |
 | 1.7 | Create Application Insights + link to Function App | ⬜ |
-| 1.8 | Assign Service Bus RBAC roles to Function App managed identity: "Azure Service Bus Data Sender" + "Azure Service Bus Data Receiver" on namespace | ⬜ |
-| 1.9 | Set Function App env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, `ANTHROPIC_API_KEY`, `AZURE_SERVICE_BUS_NAMESPACE` (= `quydly-pipeline.servicebus.windows.net`) | ⬜ |
-| 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — scoped to Send only, for Vercel migration phase | ⬜ |
-| 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS) to Vercel env — migration phase only | ⬜ |
+| 1.8 | Fetch `RootManageSharedAccessKey` connection string from Service Bus namespace | ⬜ |
+| 1.9 | Set Function App env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, `ANTHROPIC_API_KEY`, `AZURE_SERVICE_BUS_CONNECTION_STRING` (= RootManageSharedAccessKey connection string) | ⬜ |
+| 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ⬜ |
+| 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ⬜ |
 | 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ⬜ |
 
 **Azure CLI reference:**
@@ -122,7 +122,7 @@ az servicebus queue create --name synthesize-queue \
   --namespace-name quydly-pipeline --resource-group quydly-pipeline-rg \
   --max-delivery-count 3 --default-message-time-to-live P2D --lock-duration PT5M
 
-# Storage + Function App (with managed identity)
+# Storage + Function App
 az storage account create --name quydlypipelinesa \
   --resource-group quydly-pipeline-rg --sku Standard_LRS
 
@@ -132,29 +132,16 @@ az functionapp create \
   --storage-account quydlypipelinesa \
   --consumption-plan-location eastus2 \
   --runtime node --runtime-version 22 \
-  --functions-version 4 \
-  --assign-identity [system]
+  --functions-version 4
 
-# Assign RBAC roles to managed identity
-PRINCIPAL_ID=$(az functionapp identity show \
-  --name quydly-pipeline-fn \
+# Fetch RootManageSharedAccessKey for Function App env
+az servicebus namespace authorization-rule keys list \
+  --name RootManageSharedAccessKey \
+  --namespace-name quydly-pipeline \
   --resource-group quydly-pipeline-rg \
-  --query principalId -o tsv)
+  --query primaryConnectionString -o tsv
 
-SB_SCOPE=$(az servicebus namespace show \
-  --name quydly-pipeline \
-  --resource-group quydly-pipeline-rg \
-  --query id -o tsv)
-
-az role assignment create \
-  --role "Azure Service Bus Data Sender" \
-  --assignee $PRINCIPAL_ID --scope $SB_SCOPE
-
-az role assignment create \
-  --role "Azure Service Bus Data Receiver" \
-  --assignee $PRINCIPAL_ID --scope $SB_SCOPE
-
-# Send-only SAS for Vercel migration bridge
+# Send-only SAS for Vercel migration bridge (different policy, different key)
 az servicebus namespace authorization-rule create \
   --name quydly-pipeline-discover-send \
   --namespace-name quydly-pipeline \
@@ -199,8 +186,8 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 3.1 | Create `azure-functions/` top-level directory in repo | ⬜ |
 | 3.2 | Init Azure Functions v4 Node.js project in `azure-functions/` | ⬜ |
 | 3.3 | Create `azure-functions/host.json` with `autoComplete: false` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ⬜ |
-| 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@azure/identity`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ⬜ |
-| 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), SB sender via DefaultAzureCredential, Redis client | ⬜ |
+| 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ⬜ |
+| 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), Service Bus sender via connection string, Redis client | ⬜ |
 | 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ⬜ |
 | 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ⬜ |
 | 3.8 | Set up `.funcignore` | ⬜ |
@@ -215,12 +202,12 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
       "type": "serviceBusTrigger",
       "direction": "in",
       "queueName": "scrape-queue",
-      "connection": "AZURE_SERVICE_BUS_NAMESPACE"
+      "connection": "AZURE_SERVICE_BUS_CONNECTION_STRING"
     }
   ]
 }
 ```
-`connection` refers to env var `AZURE_SERVICE_BUS_NAMESPACE` = `quydly-pipeline.servicebus.windows.net`. Azure Functions resolves this via Managed Identity (DefaultAzureCredential) automatically in steady state.
+`connection` names the env var (`AZURE_SERVICE_BUS_CONNECTION_STRING`) set in Function App Application settings.
 
 ---
 
@@ -350,24 +337,13 @@ az servicebus queue message peek \
 
 ---
 
-## Phase 12 — Auth Hardening (Managed Identity)
+## Phase 12 — Cleanup
 
 | # | Task | Status |
 |---|------|--------|
-| 12.1 | Confirm managed identity is active and RBAC roles are assigned (Phase 1.8) | ⬜ |
-| 12.2 | Confirm Function App env uses `AZURE_SERVICE_BUS_NAMESPACE` (URI) not `AZURE_SERVICE_BUS_CONNECTION_STRING` | ⬜ |
-| 12.3 | Confirm `@azure/identity` DefaultAzureCredential resolves Managed Identity in all 4 functions | ⬜ |
-| 12.4 | Verify: no connection string in Function App settings (Application settings tab — should not be present) | ⬜ |
-
----
-
-## Phase 13 — Cleanup
-
-| # | Task | Status |
-|---|------|--------|
-| 13.1 | Delete Vercel handler files: `api/cron/discover.js`, `api/cron/process.js`, `api/cron/cluster.js`, `api/cron/synthesize.js` | ⬜ |
-| 13.2 | Update `CLAUDE.md`: add `azure-functions/` to repo structure; note shared utils duplication | ⬜ |
-| 13.3 | Update `docs/rss-pipeline-design.md` and `docs/gold-set-pipeline-design.md`: add migration note, link to this design doc | ⬜ |
+| 12.1 | Delete Vercel handler files: `api/cron/discover.js`, `api/cron/process.js`, `api/cron/cluster.js`, `api/cron/synthesize.js` | ⬜ |
+| 12.2 | Update `CLAUDE.md`: add `azure-functions/` to repo structure; note shared utils duplication | ⬜ |
+| 12.3 | Update `docs/rss-pipeline-design.md` and `docs/gold-set-pipeline-design.md`: add migration note, link to this design doc | ⬜ |
 
 ---
 
@@ -392,10 +368,10 @@ az servicebus queue message peek \
 | MODIFY | `backend/db/migration_gold_set.sql` — add clustered_at + synthesis_queued_at | 2 |
 | MODIFY | `api/cron/discover.js` — add SB shadow enqueue (migration phase only) | 9 |
 | MODIFY | `vercel.json` — remove 4 cron entries | 11 |
-| DELETE | `api/cron/discover.js` | 13 |
-| DELETE | `api/cron/process.js` | 13 |
-| DELETE | `api/cron/cluster.js` | 13 |
-| DELETE | `api/cron/synthesize.js` | 13 |
+| DELETE | `api/cron/discover.js` | 12 |
+| DELETE | `api/cron/process.js` | 12 |
+| DELETE | `api/cron/cluster.js` | 12 |
+| DELETE | `api/cron/synthesize.js` | 12 |
 | NO TOUCH | `backend/engine/clusterer.js` — logic ported verbatim | — |
 | NO TOUCH | `backend/engine/synthesizer.js` — logic ported verbatim | — |
 | NO TOUCH | `backend/services/claude.js` | — |
@@ -413,8 +389,7 @@ az servicebus queue message peek \
 | `SUPABASE_SERVICE_KEY` | existing | copy same value (note: `SERVICE_KEY`, not `SERVICE_ROLE_KEY`) |
 | `REDIS_URL` | existing | copy same value |
 | `ANTHROPIC_API_KEY` | existing | copy same value |
-| `AZURE_SERVICE_BUS_NAMESPACE` | — | `quydly-pipeline.servicebus.windows.net` (used with Managed Identity) |
-| `AZURE_SERVICE_BUS_CONNECTION_STRING` | migration phase only → delete after Phase 11 | — (not needed — Managed Identity used) |
+| `AZURE_SERVICE_BUS_CONNECTION_STRING` | migration phase only (Send-only SAS) → delete after Phase 11 | RootManageSharedAccessKey — different value |
 
 ---
 
