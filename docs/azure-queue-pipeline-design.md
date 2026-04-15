@@ -2,7 +2,7 @@
 
 **Feature:** Replace Vercel Cron-limited workers with Azure Service Bus + Azure Functions
 **Branch:** `infra/azure-queue-pipeline`
-**Status:** Design v1
+**Status:** Design v2 — review fixes incorporated
 **Authors:** Aishvarya Suhane
 
 ---
@@ -16,10 +16,11 @@
 5. [Component Design](#5-component-design)
 6. [Data Flow](#6-data-flow)
 7. [Environment Variables](#7-environment-variables)
-8. [Cost Analysis](#8-cost-analysis)
-9. [Migration Strategy](#9-migration-strategy)
-10. [Drawbacks & Concerns](#10-drawbacks--concerns)
-11. [Out of Scope for MVP](#11-out-of-scope-for-mvp)
+8. [Authentication Model](#8-authentication-model)
+9. [Cost Analysis](#9-cost-analysis)
+10. [Migration Strategy](#10-migration-strategy)
+11. [Drawbacks & Concerns](#11-drawbacks--concerns)
+12. [Out of Scope for MVP](#12-out-of-scope-for-mvp)
 
 ---
 
@@ -63,74 +64,126 @@ Pro plan restores cron frequency but still runs crons as Vercel Function invocat
 - Auto-scaling consumers (process messages as fast as they arrive, not on a fixed schedule)
 - At-least-once delivery semantics (built-in retry without manual retry_count logic)
 
-Azure Service Bus + Azure Functions provides all three and fits within the existing $120/month Azure budget for approximately **$15/month** in new resources.
+Azure Service Bus + Azure Functions provides all three and fits within the existing $120/month Azure budget for approximately **$11/month** in new resources.
 
 ---
 
 ## 3. Proposed Architecture
 
-### Overview
+### 3.1 Steady State (target after full migration)
 
-The pipeline splits into two tiers. Vercel retains what it is good at: serving HTTP API routes and light once-daily crons. Azure handles what Vercel Hobby cannot: continuous background processing with auto-scaling workers.
+Vercel retains HTTP API routes and the two once-daily crons (generate + cleanup). All background pipeline workers move to Azure.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  VERCEL (stays here)                                             │
+│  VERCEL (retained)                                               │
 │                                                                  │
 │  GET /api/questions      — unchanged                             │
 │  POST /api/complete      — unchanged                             │
 │  GET /api/cron/generate  — 7:00 AM, once/day, unchanged         │
 │  GET /api/cron/cleanup   — 3:00 AM, once/day, unchanged         │
-│                                                                  │
-│  GET /api/cron/discover  — MODIFIED: enqueues to Azure SB       │
-│                            instead of writing to scrape_queue   │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │  enqueue messages
-                               ▼
+└─────────────────────────────────────────────────────────────────┘
+
 ┌─────────────────────────────────────────────────────────────────┐
-│  AZURE SERVICE BUS (new)                                         │
+│  AZURE FUNCTION APP: quydly-pipeline-fn                          │
 │                                                                  │
-│  Namespace: quydly-pipeline                                      │
-│  Tier: Standard (required for queues)                            │
-│                                                                  │
-│  Queue: scrape-queue     maxDeliveryCount: 5, TTL: 7 days       │
-│  Queue: cluster-queue    maxDeliveryCount: 3, TTL: 2 days       │
-│  Queue: synthesize-queue maxDeliveryCount: 3, TTL: 2 days       │
-└────────┬────────────┬────────────────────────┬──────────────────┘
-         │            │                         │
-         ▼            ▼                         ▼
-┌────────────┐ ┌────────────────┐ ┌─────────────────────────────┐
-│  article-  │ │   article-     │ │      story-synthesizer       │
-│  scraper   │ │   clusterer    │ │                              │
-│            │ │                │ │  Two-pass Claude API         │
-│ Readability│ │ Entity extract │ │  confidence_score gate       │
-│ → raw_     │ │ → clusters     │ │  story_score gate            │
-│   articles │ │   (Supabase)   │ │  → stories (Supabase)       │
-│            │ │                │ │                              │
-│ AZURE FN   │ │ AZURE FN       │ │  AZURE FN                   │
-│ SB Trigger │ │ Timer: 2h      │ │  SB Trigger                 │
-└────────────┘ └────────────────┘ └─────────────────────────────┘
-         │                │                        ▲
-         │ on success     │ cluster eligible         │ enqueue
-         │ enqueue        │ → enqueue                │
-         └───────────────►│──────────────────────────┘
-                          ▼
-                   Supabase (unchanged)
-                   raw_articles · clusters · stories
+│  discover        Timer, every 30 min                             │
+│  article-scraper Service Bus trigger: scrape-queue               │
+│  article-clusterer Timer, every 2 hours                          │
+│  story-synthesizer Service Bus trigger: synthesize-queue         │
+└──────────────────┬──────────────────────────────┬───────────────┘
+                   │ enqueue                       │ enqueue
+                   ▼                               ▼
+┌──────────────────────────────────┐   ┌──────────────────────────┐
+│  scrape-queue                    │   │  synthesize-queue         │
+│  maxDelivery: 5 · TTL: 7d        │   │  maxDelivery: 3 · TTL: 2d│
+└──────────────────────────────────┘   └──────────────────────────┘
+         │ triggers                              │ triggers
+         ▼                                       ▼
+┌────────────────────┐              ┌────────────────────────────┐
+│  article-scraper   │              │  story-synthesizer          │
+│  fetch + parse     │              │  two-pass Claude API        │
+│  → raw_articles    │              │  → stories (Supabase)       │
+│  per-domain cap:   │              │  maxConcurrentCalls: 3      │
+│  2 via Redis       │              └────────────────────────────┘
+└────────────────────┘
+         │ DONE articles accumulate in raw_articles
+         │
+         ▼
+┌────────────────────────────────────────────────────────────────┐
+│  article-clusterer  (Timer, every 2 hours)                      │
+│  SELECT raw_articles WHERE clustered_at IS NULL AND status=DONE │
+│  entity extraction + cluster matching → clusters (Supabase)     │
+│  UPDATE raw_articles SET clustered_at = NOW()                   │
+│  if cluster eligible: → synthesize-queue                        │
+└────────────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+          Supabase (unchanged)
+          raw_articles · clusters · stories
 ```
 
-### Daily Cron Order After Migration
+**Queue inventory in steady state: 2 queues only**
+
+| Queue | Producer | Consumer |
+|-------|----------|----------|
+| `scrape-queue` | discover (Azure Timer) | article-scraper (Azure SB trigger) |
+| `synthesize-queue` | article-clusterer (Azure Timer) | story-synthesizer (Azure SB trigger) |
+
+There is no `cluster-queue`. Article clustering is timer-driven (every 2 hours), polling for unclustered articles via `WHERE clustered_at IS NULL`. A message queue for per-article clustering would introduce race conditions where two concurrently processed messages for the same topic create duplicate clusters instead of merging. The timer-batch model avoids this without coordination overhead.
+
+**Vercel crons removed after full migration:**
+```
+api/cron/discover.js    ← Azure Timer Function takes over
+api/cron/process.js     ← article-scraper Service Bus Function
+api/cron/cluster.js     ← article-clusterer Timer Function
+api/cron/synthesize.js  ← story-synthesizer Service Bus Function
+```
+
+**Vercel crons retained:**
+```
+api/cron/generate  — 0 7 * * *
+api/cron/cleanup   — 0 3 * * *
+```
+
+---
+
+### 3.2 Migration Architecture (temporary, removed after cutover)
+
+During migration, Vercel and Azure workers run in parallel. All DB operations are idempotent (`ON CONFLICT DO NOTHING`), so both systems can safely write to the same tables simultaneously.
 
 ```
-3:00 AM   cleanup     — Vercel Cron (once/day — unchanged)
-~all day  discover    — Azure Timer Function (every 30 min) ← MOVED
-~all day  scrape      — Azure Function, Service Bus trigger (continuous) ← NEW
-~all day  cluster     — Azure Function, Service Bus trigger (continuous) ← NEW
-~all day  synthesize  — Azure Function, Service Bus trigger (continuous) ← NEW
-7:00 AM   generate    — Vercel Cron (once/day — unchanged)
+Phase A — parallel scraping (both Vercel + Azure active):
+  Vercel discover (once/day, Hobby) + Azure discover (every 30 min)
+    → both write to scrape_queue (audit) + send to scrape-queue (Azure SB)
+  Vercel process.js (once/day) + Azure article-scraper (continuous)
+    → both insert into raw_articles ON CONFLICT DO NOTHING
+  Compare counts after 24h — Azure should show 5–8× more articles
+
+Phase B — parallel clustering + synthesis:
+  Vercel cluster.js (once/day) + Azure article-clusterer (every 2h)
+  Vercel synthesize.js (once/day) + Azure story-synthesizer (continuous)
+  Verify stories quality and volume
+
+Phase C — cutover:
+  Remove Vercel process/cluster/synthesize/discover crons from vercel.json
+  Azure is now sole producer + consumer
 ```
 
-Discovery, scraping, clustering, and synthesis all now happen throughout the day rather than in a single burst window.
+Vercel `api/cron/discover.js` in migration phase needs `AZURE_SERVICE_BUS_CONNECTION_STRING` added to Vercel env to send shadow messages to Service Bus. This credential is removed from Vercel after Phase C.
+
+---
+
+### 3.3 Daily Timeline (Steady State Target)
+
+```
+3:00 AM   cleanup       — Vercel Cron (once/day)
+Continuous: discover    — Azure Timer (every 30 min) → scrape-queue
+Continuous: scraping    — article-scraper drains scrape-queue
+Every 2h: clustering    — article-clusterer clusters DONE articles → synthesize-queue
+Continuous: synthesis   — story-synthesizer drains synthesize-queue
+7:00 AM   generate      — Vercel Cron (once/day, unchanged)
+```
 
 ---
 
@@ -147,20 +200,15 @@ Region: East US 2  (low latency to Supabase US-East, Anthropic API)
 
 ```
 Name:   quydly-pipeline
-SKU:    Standard  (Basic does not support topics; Standard supports queues + dead-letter)
+SKU:    Standard  (Basic does not support dead-letter queues)
 Region: same as resource group
 
 Queues:
   scrape-queue
-    maxDeliveryCount:       5       (5 delivery attempts before dead-letter)
-    defaultMessageTTL:      7 days  (messages expire if not processed)
+    maxDeliveryCount:       5       (5 attempts before dead-letter)
+    defaultMessageTTL:      7 days
     lockDuration:           5 min   (worker has 5 min to complete or renew)
     enableDeadLetteringOnMessageExpiration: true
-
-  cluster-queue
-    maxDeliveryCount:       3
-    defaultMessageTTL:      2 days  (clusters stale after 48h anyway)
-    lockDuration:           2 min
 
   synthesize-queue
     maxDeliveryCount:       3
@@ -168,14 +216,14 @@ Queues:
     lockDuration:           5 min   (Claude API calls can take 30–60s)
 ```
 
-**Dead-letter queues** are automatically created by Azure Service Bus for each queue (`scrape-queue/$deadletterqueue`, etc.). These hold messages that exceeded `maxDeliveryCount` or expired. Inspect via Azure Portal or Azure CLI for debugging.
+Dead-letter queues are created automatically: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue`.
 
 ### 4.3 Azure Storage Account
 
 ```
-Name:   quydlypipelinesa  (alphanumeric, 3-24 chars)
+Name:   quydlypipelinesa
 SKU:    Standard LRS
-Required by Azure Functions runtime for host coordination and blob triggers.
+Required by Azure Functions runtime.
 ```
 
 ### 4.4 Azure Function App
@@ -185,12 +233,13 @@ Name:    quydly-pipeline-fn
 Runtime: Node.js 22 (LTS)
 Plan:    Consumption (serverless, pay-per-execution)
 Region:  same as namespace
+Identity: System-assigned Managed Identity (enabled at creation)
 
-Functions hosted here:
-  - article-scraper      (Service Bus trigger: scrape-queue)
-  - article-clusterer    (Timer trigger: every 2 hours)
-  - story-synthesizer    (Service Bus trigger: synthesize-queue)
-  - discover             (Timer trigger: every 30 min)  ← moved from Vercel
+Functions:
+  discover          TimerTrigger — "0 */30 * * * *"
+  article-scraper   ServiceBusTrigger — scrape-queue
+  article-clusterer TimerTrigger — "0 0 */2 * * *"
+  story-synthesizer ServiceBusTrigger — synthesize-queue
 ```
 
 ### 4.5 Application Insights
@@ -198,7 +247,7 @@ Functions hosted here:
 ```
 Name: quydly-pipeline-insights
 Connected to: quydly-pipeline-fn
-Purpose: structured logs, invocation traces, dead-letter alerts
+Purpose: invocation logs, dead-letter alerts
 ```
 
 ---
@@ -207,291 +256,339 @@ Purpose: structured logs, invocation traces, dead-letter alerts
 
 ### 5.1 `discover` — Azure Timer Function (every 30 min)
 
-**Moved from Vercel.** Logic is identical to the existing `api/cron/discover.js` with one change: instead of `INSERT INTO scrape_queue`, it sends messages to Azure Service Bus.
+Moved from Vercel. Logic identical to existing `api/cron/discover.js`, with Service Bus replacing direct Supabase queue writes.
 
 ```
-Trigger: TimerTrigger — "0 */30 * * * *"  (every 30 min, Azure cron syntax)
+Trigger: TimerTrigger — "0 */30 * * * *"
 
 Algorithm:
   1. Fetch all RSS feeds: Promise.allSettled in batches of 10
   2. For each item in each feed:
      a. canonicaliseUrl(item.link) → canonical_url
      b. url_hash = SHA256(canonical_url)
-     c. CHECK if url_hash exists in scrape_queue (Supabase)
-        → SELECT 1 FROM scrape_queue WHERE url_hash = $hash LIMIT 1
+     c. SELECT 1 FROM scrape_queue WHERE url_hash = $hash LIMIT 1
      d. If new:
         i.  INSERT INTO scrape_queue (status='QUEUED', ...) ON CONFLICT DO NOTHING
-            — record metadata immediately; Service Bus is the work queue
+            — audit record written immediately
         ii. Send message to scrape-queue:
-            {
-              url_hash, canonical_url, raw_url, title, summary,
-              source_domain, category_id, authority_score, published_at
-            }
-     e. If known: skip (already queued or processed)
-  3. Log: { feeds_attempted, feeds_ok, feeds_failed, urls_queued, urls_skipped }
+              { url_hash, canonical_url, raw_url, title, summary,
+                source_domain, category_id, authority_score, published_at }
+     e. If known: skip
+  3. Log structured metrics (event: "discover_run")
 
-Error handling: same as existing discover.js — per-feed isolation, no batch abort
+Error handling: per-feed isolation — one broken feed never stops the run
 ```
 
-**Why move discovery to Azure?**
-On Vercel Hobby, `*/30 * * * *` is silently reduced to once/day. Moving it to Azure restores the intended frequency and ensures we discover articles throughout the day, not just once.
-
-**`scrape_queue` table role after migration:**
-- Written at discovery time (status=QUEUED) — preserved for audit and reprocessing
-- Updated by article-scraper (status=PROCESSING / DONE / PARTIAL / FAILED)
-- No longer read by a Vercel cron worker
-- Service Bus `scrape-queue` is the actual work trigger; `scrape_queue` is the audit log
+**`scrape_queue` table role:** written at discovery time (audit). Updated by article-scraper with final status. Service Bus is the work trigger; the table is the audit log and reprocessing surface.
 
 ---
 
 ### 5.2 `article-scraper` — Azure Function (Service Bus Trigger)
 
-Replaces the Vercel `api/cron/process.js` cron. Triggered per message — no batching required.
+Replaces `api/cron/process.js`. Triggered per message.
 
 ```
-Trigger: ServiceBusTrigger on "scrape-queue"
-         maxConcurrentCalls: 16  (16 parallel scrapes per function instance)
-         Azure Functions Consumption scales instances to demand
+Trigger: ServiceBusTrigger — scrape-queue
+         Concurrency: controlled by host.json (see Section 5.5)
 
-Input message (JSON):
-  { url_hash, canonical_url, source_domain, category_id, authority_score,
-    published_at, title, summary }
+Input message: { url_hash, canonical_url, source_domain, category_id,
+                 authority_score, published_at, title, summary }
 
 Algorithm:
-  1. UPDATE scrape_queue SET status = 'PROCESSING' WHERE url_hash = $url_hash
+  1. Per-domain rate limit check (Redis):
+       key = "domain_inflight:{source_domain}"
+       count = INCR key  (atomic)
+       EXPIRE key 30  (30s TTL — resets on function completion or crash)
+       if count > MAX_DOMAIN_CONCURRENCY (2):
+         DECR key
+         abandon message (do NOT complete — SB redelivers after lockDuration)
+         return
 
-  2. Fetch article:
+  2. UPDATE scrape_queue SET status = 'PROCESSING' WHERE url_hash = $url_hash
+
+  3. Fetch:
        fetch(canonical_url, {
          signal: AbortSignal.timeout(9000),
          headers: { 'User-Agent': 'QuydlyBot/1.0 (+https://quydly.com/bot)' }
        })
 
-  3. Parse with jsdom + @mozilla/readability:
+  4. Parse: jsdom + @mozilla/readability
        const dom = new JSDOM(html, { url: canonical_url })
        const article = new Readability(dom.window.document).parse()
 
-  4. cleaned = article?.textContent?.trim() ?? null
+  5. cleaned = article?.textContent?.trim() ?? null
      content_hash = cleaned ? SHA256(cleaned) : null
-     final_status = determine (DONE / PARTIAL / LOW_QUALITY)
+     final_status = DONE | PARTIAL | LOW_QUALITY
 
-  5. INSERT INTO raw_articles (..., is_verified=false) ON CONFLICT (url_hash) DO NOTHING
+  6. INSERT INTO raw_articles (..., is_verified=false) ON CONFLICT (url_hash) DO NOTHING
 
-  6. UPDATE scrape_queue SET status = final_status, processed_at = now()
+  7. UPDATE scrape_queue SET status = final_status, processed_at = now()
 
-  7. On DONE: send message to cluster-queue:
-       { article_id, category_id, url_hash }
-     On PARTIAL/LOW_QUALITY: do not enqueue to cluster-queue
-     (partial articles may still cluster via the article-clusterer timer pass)
+  8. DECR "domain_inflight:{source_domain}" in Redis
+
+  9. Complete Service Bus message (context.done() / return without throw)
 
 Error handling:
-  - Network/parse error: throw — Service Bus retries automatically (up to maxDeliveryCount=5)
-  - After 5 delivery attempts: message moves to dead-letter queue
-  - DB error: throw — same retry behavior
-  - Do NOT catch errors silently — let Service Bus own the retry budget
+  - Do NOT catch errors silently — throw on network/parse/DB failure
+  - Service Bus retries automatically (up to maxDeliveryCount=5)
+  - After 5 failures: message dead-lettered
+  - DECR Redis key in a finally block so inflight count is always released
 ```
 
-**Key difference from Vercel process.js:**
-- No manual `retry_count` management — Service Bus handles delivery attempts
-- No `SELECT ... FOR UPDATE SKIP LOCKED` batch query — each message is independently locked
-- No per-domain concurrency cap needed at the function level — Azure Functions scales instances; per-domain rate limiting can be added via a simple in-memory counter if needed
+**Per-domain rate limiting:**
+
+`maxConcurrentCalls` in `host.json` is a per-instance cap. When Azure Functions scales to multiple instances (triggered by queue depth), each instance runs up to `maxConcurrentCalls` concurrent invocations — all potentially against the same domain. The Redis-based semaphore is cross-instance: a Redis INCR/DECR pair with TTL acts as a distributed counter visible to all instances.
+
+```
+Global throughput cap: maxConcurrentCalls in host.json (see 5.5)
+Per-domain cap:        MAX_DOMAIN_CONCURRENCY = 2 (Redis semaphore)
+
+If per-domain cap reached: message is abandoned, not failed.
+  → SB redelivers after lockDuration (5 min) — domain backpressure without burning delivery count.
+  → This does NOT increment the SB delivery counter (the message is only abandoned, not dead-lettered).
+```
 
 ---
 
 ### 5.3 `article-clusterer` — Azure Timer Function (every 2 hours)
 
-Replaces the Vercel `api/cron/cluster.js` cron. Runs every 2 hours instead of once at 6:30 AM.
+Replaces `api/cron/cluster.js`. Runs every 2 hours as a batch over unclustered articles.
 
 ```
-Trigger: TimerTrigger — "0 0 */2 * * *"  (every 2 hours)
+Trigger: TimerTrigger — "0 0 */2 * * *"
 
-Algorithm:
-  Identical to existing clusterer.js with two changes:
+Algorithm (identical to existing clusterer.js with two targeted changes):
 
-  Change 1 — Article window:
-    Instead of: ingested_at > NOW() - INTERVAL '12 hours'
-    Use:        clustered_at IS NULL OR clustered_at < NOW() - INTERVAL '2 hours'
-    Requires:   new column raw_articles.clustered_at (nullable timestamptz)
-    Set to NOW() after an article is assigned to any cluster.
-    This prevents re-processing the same article every 2h.
+  Change 1 — Article window filter:
+    Before: ingested_at > NOW() - INTERVAL '12 hours'
+    After:  clustered_at IS NULL AND status = 'DONE'
+    — Processes every newly scraped article exactly once.
+    — Articles are never re-selected after clustered_at is set.
 
-  Change 2 — After cluster is updated/created:
-    If cluster becomes newly eligible (cluster_score ≥ 20 AND article_ids.length ≥ 2
-    AND unique_domains.length ≥ 2):
-      Send message to synthesize-queue: { cluster_id, category_id }
-      Mark cluster.synthesis_queued_at = NOW() to prevent duplicate messages
+  Change 2 — Synthesize-queue enqueue with idempotency:
+    After cluster INSERT or UPDATE, if cluster becomes eligible:
+      (cluster_score ≥ 20 AND article_ids.length ≥ 2 AND unique_domains.length ≥ 2)
+      AND (synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours')
+
+      Ordering:
+        a. UPDATE clusters SET synthesis_queued_at = NOW() WHERE id = $cluster_id
+           — written BEFORE queue send
+           — if queue send fails: synthesis_queued_at is set, no message sent
+           — next clusterer run (2h later) will re-evaluate: synthesis_queued_at < NOW()-4h → re-enqueue
+        b. Send message to synthesize-queue: { cluster_id, category_id }
+
+      Duplicate messages to synthesize-queue are acceptable and harmless:
+        story-synthesizer checks cluster.status on receipt;
+        if already PROCESSED, it completes the message without work.
+
+  Per-article write after clustering:
+    UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id
+    — Executed after the article is appended to a cluster (or a new cluster is created).
+    — Strictly IS NULL check at SELECT time prevents re-selection on next timer run.
 
 Output: { articles_processed, clusters_updated, clusters_created, clusters_eligible }
-```
-
-**New column on `raw_articles`:**
-```sql
-ALTER TABLE raw_articles ADD COLUMN clustered_at timestamptz;
-CREATE INDEX idx_raw_articles_unprocessed ON raw_articles (ingested_at)
-  WHERE clustered_at IS NULL AND status = 'DONE';
-```
-
-**New column on `clusters`:**
-```sql
-ALTER TABLE clusters ADD COLUMN synthesis_queued_at timestamptz;
 ```
 
 ---
 
 ### 5.4 `story-synthesizer` — Azure Function (Service Bus Trigger)
 
-Replaces the Vercel `api/cron/synthesize.js` cron. Triggered when a cluster becomes eligible.
+Replaces `api/cron/synthesize.js`. Triggered per eligible cluster message.
 
 ```
-Trigger: ServiceBusTrigger on "synthesize-queue"
-         maxConcurrentCalls: 3  (Claude API rate limit — same as existing synthesizer)
+Trigger: ServiceBusTrigger — synthesize-queue
+         Concurrency: 3 (host.json — see 5.5)
 
-Input message (JSON):
-  { cluster_id, category_id }
+Input message: { cluster_id, category_id }
 
-Algorithm:
-  Identical to existing synthesizer.js — no changes to Claude prompts, scoring,
-  River model upsert, or quality gates.
+Algorithm (identical to existing synthesizer.js, only entry point changes):
 
-  Only change: entry point is a Service Bus message, not a SELECT of PENDING clusters.
-  The cluster_id is known from the message — fetch it directly:
-    SELECT * FROM clusters WHERE id = $cluster_id AND status = 'PENDING'
-  If not found (already processed by a duplicate message): complete message, return.
+  1. SELECT * FROM clusters WHERE id = $cluster_id AND status = 'PENDING'
+     If not PENDING (already PROCESSED by a duplicate message): complete message, return.
+
+  2. Pass 1 — fact extraction per article (same prompts, same structure)
+  3. Pass 2 — narrative generation (same prompts, same scoring)
+  4. computeStoryScore → storyDisposition gate
+  5. River model upsert → stories (Supabase)
+  6. UPDATE clusters SET status = 'PROCESSED'
+  7. Complete Service Bus message
 
 Error handling:
-  - Claude API error: throw — Service Bus retries up to maxDeliveryCount=3
-  - After 3 attempts: dead-letter with cluster_id for manual inspection
-  - DB error: throw — same retry
-  - Exponential backoff between retries: Azure Service Bus handles this via
-    lockDuration release (message reappears after lock expires, 5 min)
+  - Claude API error: throw — SB retries (up to maxDeliveryCount=3)
+  - After 3 failures: dead-lettered with cluster_id for manual inspection
+  - DB error: throw — same behavior
 ```
 
 ---
 
-### 5.5 Vercel `api/cron/discover.js` — Removed (moved to Azure)
+### 5.5 `host.json` — Concurrency Configuration
 
-The existing Vercel cron handler is deleted after the Azure Timer Function is deployed and validated.
+`maxConcurrentCalls` and `autoComplete` are **host-level settings** for JavaScript Azure Functions. They are set in `host.json` — they are not valid bindings properties in `function.json` for Node.js functions.
 
+```json
+{
+  "version": "2.0",
+  "extensions": {
+    "serviceBus": {
+      "messageHandlerOptions": {
+        "autoComplete": false,
+        "maxConcurrentCalls": 8
+      }
+    }
+  },
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": { "isEnabled": false }
+    }
+  }
+}
 ```
-Removed: api/cron/discover.js
-Removed: /api/cron/process.js
-Removed: /api/cron/cluster.js
-Removed: /api/cron/synthesize.js
 
-Unchanged in vercel.json:
-  /api/cron/generate   — 0 7 * * *
-  /api/cron/cleanup    — 0 3 * * *
+**`maxConcurrentCalls: 8`** — applies to all Service Bus triggered functions in this app.
+- article-scraper: 8 concurrent scrapes per instance (adequate; Redis per-domain cap limits publisher pressure)
+- story-synthesizer: 3 Claude calls in flight at once (enforced internally via p-limit, not by host.json — host.json cap is a ceiling, not a guarantee)
+
+**`autoComplete: false`** — functions must explicitly settle messages (complete or abandon). This is required for correct retry behavior: a throw causes message abandonment and SB retry; a successful return causes completion.
+
+**`function.json` for Service Bus triggers** contains only binding metadata — no concurrency settings:
+
+```json
+{
+  "bindings": [
+    {
+      "name": "message",
+      "type": "serviceBusTrigger",
+      "direction": "in",
+      "queueName": "scrape-queue",
+      "connection": "AZURE_SERVICE_BUS_CONNECTION_STRING"
+    }
+  ]
+}
 ```
 
 ---
 
 ## 6. Data Flow
 
-### 6.1 Article Scraping (Revised)
+### 6.1 Article Scraping
 
 ```
-Every 30 min:
-  Azure Timer Function: discover
-    ├─ parse 65+ RSS feeds
-    ├─ canonicalise + deduplicate URLs
-    ├─ INSERT into scrape_queue (status=QUEUED)
-    └─ send N messages → Azure Service Bus: scrape-queue
+Every 30 min — discover (Azure Timer):
+  parse 65+ RSS feeds → canonicalise → dedup via scrape_queue
+  new URLs: INSERT scrape_queue (QUEUED) + send to scrape-queue
 
-Continuously:
-  Azure Function: article-scraper (triggered by each message)
-    ├─ fetch + Readability parse
-    ├─ INSERT into raw_articles (is_verified=false)
-    ├─ UPDATE scrape_queue status = DONE|PARTIAL|FAILED
-    └─ send message → Azure Service Bus: cluster-queue (if DONE)
+Continuously — article-scraper (Azure SB trigger):
+  receive message → per-domain Redis check
+  fetch + Readability → INSERT raw_articles (DONE/PARTIAL/LOW_QUALITY)
+  UPDATE scrape_queue status
 
 Result: all 1,500+ daily articles processed within 30–60 min of discovery
+        compared to 200/day today
 ```
 
-### 6.2 Gold Set Pipeline (Revised)
+### 6.2 Gold Set Pipeline
 
 ```
-Continuously (after article scraping):
-  Azure Function: article-clusterer (Timer, every 2 hours)
-    ├─ SELECT unclustered raw_articles (clustered_at IS NULL)
-    ├─ entity extraction + cluster matching
-    ├─ UPDATE raw_articles SET clustered_at = NOW()
-    ├─ UPDATE/INSERT clusters
-    └─ send message → Azure Service Bus: synthesize-queue (if cluster eligible)
+Every 2 hours — article-clusterer (Azure Timer):
+  SELECT raw_articles WHERE clustered_at IS NULL AND status = 'DONE'
+  entity extraction + cluster matching → clusters
+  UPDATE raw_articles SET clustered_at = NOW()
+  eligible clusters → synthesize-queue
 
-Continuously (after clustering):
-  Azure Function: story-synthesizer (triggered by each message)
-    ├─ fetch cluster + article content
-    ├─ Pass 1: Claude fact extraction
-    ├─ Pass 2: Claude narrative generation
-    ├─ computeStoryScore → quality gate
-    └─ upsert into stories (River model)
+Continuously — story-synthesizer (Azure SB trigger):
+  receive cluster_id → fetch articles → two-pass Claude
+  computeStoryScore + quality gate → upsert stories (River model)
 
-Result: 20–50 stories available before 7 AM generate cron
-        Stories update continuously as new articles arrive throughout the day
-```
-
-### 6.3 Complete Daily Timeline (Target)
-
-```
-Midnight–7AM:
-  30-min: discover → scrape-queue messages enqueued
-  Continuous: article-scraper drains scrape-queue
-  Every 2h: article-clusterer runs on newly scraped articles
-  Continuous: story-synthesizer drains synthesize-queue
-
-7:00 AM:
-  generate cron reads from stories (as planned, future wiring)
-  OR reads from raw_articles (current behaviour — unchanged)
+Result: 20–50 stories built up continuously throughout the day
+        by 7AM generate cron, stories table is populated
 ```
 
 ---
 
 ## 7. Environment Variables
 
-### Added to Azure Function App settings
+### Azure Function App settings (steady state)
 
 ```
-# Supabase (same values as existing Vercel env)
 SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=    # use service role — Azure Functions are server-side
-
-# Redis (same values)
+SUPABASE_SERVICE_KEY=          # matches process.env.SUPABASE_SERVICE_KEY in backend code
 REDIS_URL=
-
-# Anthropic (same values)
 ANTHROPIC_API_KEY=
-
-# Azure Service Bus (new)
-AZURE_SERVICE_BUS_CONNECTION_STRING=
-# Full connection string from Azure Portal: Shared access policy → RootManageSharedAccessKey
-
-# RSS feeds config (referenced by discover function)
-# No extra env var — uses config/rss-feeds.js bundled into the function package
-
-# Optional: Vercel webhook (so Azure can call Vercel generate if needed — not required)
 ```
 
-### Added to Vercel env (for discover.js during transition period)
+**Service Bus connection: Managed Identity (no connection string in steady state)**
+See Section 8 for auth staging details.
+
+### Vercel env additions (migration phase only — remove after Phase C cutover)
 
 ```
-AZURE_SERVICE_BUS_CONNECTION_STRING=   # same value — Vercel discover.js enqueues during cutover
+AZURE_SERVICE_BUS_CONNECTION_STRING=   # Send-only SAS token for shadow enqueue from Vercel discover
 ```
 
-### Removed from Vercel env (after cutover)
+### Vercel env removals
 
-```
-# None removed — ANTHROPIC_API_KEY and SUPABASE keys are still used by generate cron
-```
+None. Existing `SUPABASE_SERVICE_KEY`, `ANTHROPIC_API_KEY`, etc. remain for `generate` and `cleanup` crons.
 
 ---
 
-## 8. Cost Analysis
+## 8. Authentication Model
+
+### Migration Phase (temporary)
+
+During migration, Vercel `api/cron/discover.js` needs to enqueue messages to Azure Service Bus. This requires a connection string in Vercel's env.
+
+```
+SAS Policy: quydly-pipeline-discover-send
+Permissions: Send only (not Listen, not Manage)
+Scope: Namespace level (access to scrape-queue send)
+Used in: Vercel env as AZURE_SERVICE_BUS_CONNECTION_STRING
+Lifetime: Until Phase C cutover — then revoked and removed from Vercel env
+```
+
+### Steady State (target)
+
+Azure Functions use **Managed Identity + RBAC** — no connection strings in application config.
+
+```
+1. Enable system-assigned managed identity on Function App:
+   az functionapp identity assign \
+     --name quydly-pipeline-fn \
+     --resource-group quydly-pipeline-rg
+
+2. Assign Service Bus roles to the managed identity:
+   # Sender role (for discover → scrape-queue, clusterer → synthesize-queue)
+   az role assignment create \
+     --role "Azure Service Bus Data Sender" \
+     --assignee <managed-identity-principal-id> \
+     --scope /subscriptions/.../resourceGroups/quydly-pipeline-rg/providers/Microsoft.ServiceBus/namespaces/quydly-pipeline
+
+   # Receiver role (for scraper and synthesizer to consume messages)
+   az role assignment create \
+     --role "Azure Service Bus Data Receiver" \
+     --assignee <managed-identity-principal-id> \
+     --scope /subscriptions/.../resourceGroups/quydly-pipeline-rg/providers/Microsoft.ServiceBus/namespaces/quydly-pipeline
+
+3. In function.json connection field, use the namespace URI format:
+   "connection": "AZURE_SERVICE_BUS_NAMESPACE"   (env var = "quydly-pipeline.servicebus.windows.net")
+   Azure Functions SDK resolves this via DefaultAzureCredential → Managed Identity automatically.
+
+4. Do NOT set AZURE_SERVICE_BUS_CONNECTION_STRING in the Function App settings in steady state.
+```
+
+**Why Managed Identity over connection strings for Azure Functions?**
+
+Connection strings are long-lived shared secrets with broad permissions. Managed Identity credentials rotate automatically and are scoped to the specific resource — if the Function App is compromised, the blast radius is limited to Service Bus operations on this namespace only.
+
+---
+
+## 9. Cost Analysis
 
 ### Azure Service Bus (Standard tier)
 
 ```
 Namespace: $10/month flat
-Operations: 1,500 articles/day × 3 queues (scrape/cluster/synthesize)
-            = 4,500 operations/day = ~135,000/month
+Operations: 1,500 articles/day × 2 queues (scrape/synthesize)
+            = 3,000 operations/day = ~90,000/month
             First 10M operations/month: included in Standard flat fee
 Cost: $10/month
 ```
@@ -500,23 +597,19 @@ Cost: $10/month
 
 ```
 Free grant: 1,000,000 executions/month + 400,000 GB-s compute
-Article scraper: 1,500 invocations/day × 30 days = 45,000/month  → free tier
-Clusterer: 12 timer runs/day × 30 = 360/month                    → free tier
-Synthesizer: ~50 stories/day × 30 = 1,500/month                  → free tier
-Total executions: ~47,000/month — well within 1M free grant
-Cost: $0/month (within free tier)
+Scraper: 1,500 invocations/day × 30 = 45,000/month     → free tier
+Clusterer: 12 timer runs/day × 30 = 360/month           → free tier
+Synthesizer: ~50 stories/day × 30 = 1,500/month         → free tier
+Discover: 48 timer runs/day × 30 = 1,440/month          → free tier
+Total: ~48,300/month — well within 1M free grant
+Cost: $0/month
 ```
 
-### Azure Storage Account (required by Functions)
+### Storage + Application Insights
 
 ```
-LRS, minimal usage (runtime state only): ~$1/month
-```
-
-### Application Insights
-
-```
-5 GB free data ingestion/month. Pipeline logs are lightweight JSON: ~$0/month
+Storage Account LRS: ~$1/month
+Application Insights (< 5GB logs): $0/month
 ```
 
 ### Summary
@@ -529,125 +622,84 @@ LRS, minimal usage (runtime state only): ~$1/month
 | Application Insights | $0 |
 | **Total** | **~$11/month** |
 
-Well within the $120/month Azure budget. ~$109/month remains for other Azure resources.
-
 ---
 
-## 9. Migration Strategy
+## 10. Migration Strategy
 
-### Phase 0: Pre-migration (no user impact)
+### Phase A — Parallel scraping (shadow mode)
 
-Deploy Azure resources. Azure Functions are idle — no Vercel crons are changed yet.
+1. Deploy Azure Function App with `discover` timer + `article-scraper` SB function
+2. Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS) to Vercel env
+3. Modify Vercel `api/cron/discover.js` to send to Azure SB in addition to its existing flow
+4. Run both Vercel process.js cron + Azure article-scraper in parallel for 48h
+5. Validate: `SELECT COUNT(*), DATE_TRUNC('hour', ingested_at) FROM raw_articles GROUP BY 2 ORDER BY 2` should show continuous growth, not a single batch spike
 
-### Phase 1: Parallel run (shadow mode)
+### Phase B — Parallel clustering + synthesis
 
-1. Deploy Azure discover timer + article-scraper function
-2. Keep existing Vercel `api/cron/discover` and `api/cron/process` running
-3. Azure functions run independently — both pipelines write to the same `scrape_queue` and `raw_articles` tables
-4. `ON CONFLICT DO NOTHING` on both insert paths prevents duplicates
-5. Monitor: compare scrape counts from Vercel vs Azure after 24h
-   - Vercel: ~200 articles/day
-   - Azure: should reach 1,000–1,500 articles/day
+1. Deploy `article-clusterer` timer + `story-synthesizer` SB function
+2. Run alongside Vercel cluster + synthesize crons for 48h
+3. Validate: `stories` table fills with 20–50/day; spot-check 5 stories for quality
 
-### Phase 2: Vercel process cron cutover
+### Phase C — Cutover
 
-1. Remove `api/cron/process.js` and its `vercel.json` entry
-2. Azure article-scraper is now the sole scraping worker
-3. Verify: `raw_articles` count growing through the day, not just at process cron time
-
-### Phase 3: Clusterer + synthesizer cutover
-
-1. Deploy Azure article-clusterer (timer) + story-synthesizer (Service Bus trigger)
-2. Run parallel with Vercel cluster + synthesize crons for 2 days
-3. Verify: `clusters` and `stories` tables fill correctly
-4. Remove Vercel `api/cron/cluster.js` and `api/cron/synthesize.js`
-
-### Phase 4: Discovery cutover
-
-1. Deploy Azure discover timer function
-2. Run parallel with Vercel discover cron for 24h
-3. Both discover functions hit the same `scrape_queue` dedup — no double-processing
-4. Remove Vercel `api/cron/discover.js` and its `vercel.json` entry
+1. Remove from `vercel.json` crons: discover, process, cluster, synthesize
+2. Deploy Vercel (generate + cleanup crons retained)
+3. Revoke Send-only SAS token; remove `AZURE_SERVICE_BUS_CONNECTION_STRING` from Vercel env
+4. Monitor generate cron at 7AM next day — confirm quiz generation unchanged
+5. Monitor for 48h post-cutover
 
 ### Rollback at any phase
 
-- Phase 1–2: re-add `api/cron/process` to `vercel.json` → Vercel cron restores immediately
-- Phase 3: re-add cluster + synthesize crons → same
-- Phase 4: re-add discover cron → same
-- Azure Functions can be disabled per-function in Azure Portal without deleting anything
+- Before Phase C: re-add cron entries to `vercel.json` → Vercel crons restore immediately. Azure Functions can be disabled per-function in Azure Portal.
+- After Phase C: re-add the 4 cron entries to `vercel.json` + redeploy. Azure Functions keep running in parallel — data is preserved.
 
 ---
 
-## 10. Drawbacks & Concerns
+## 11. Drawbacks & Concerns
 
-### 10.1 Two Runtimes to Maintain
+### 11.1 Two Runtimes to Maintain
 
-**Problem:** Backend code now lives in both Vercel (API routes, generate cron) and Azure (pipeline workers). Two deployment targets, two sets of env vars, two monitoring tools.
-
-**Mitigation:**
-- Both runtimes run Node.js — shared utility modules (`nlp.js`, `scoring.js`, `canonicalise.js`) can be imported from a shared path or published as a local package
-- Azure Functions are thin workers — most logic stays in `backend/engine/` and `backend/services/`, unchanged
-- Keep Azure Function App code in a new top-level directory `azure-functions/` in the same repo
-
-### 10.2 Clustering Race Conditions
-
-**Problem:** The article-clusterer timer runs every 2 hours. If two timer invocations overlap (unlikely but possible with long runs), two workers might assign the same article to different clusters.
+**Problem:** Backend code now lives in both Vercel (API routes, generate + cleanup crons) and Azure (pipeline workers). Two deployment targets, two env var sets, two monitoring dashboards.
 
 **Mitigation:**
-- `raw_articles.clustered_at`: once set by the first worker, the article is skipped by subsequent runs
-- `SELECT ... WHERE clustered_at IS NULL` combined with an atomic `UPDATE ... RETURNING` pattern prevents double-processing
-- Azure Timer Functions on Consumption plan do not run concurrent instances by default
+- All Azure Function logic is a thin wrapper over existing `backend/engine/` modules, which remain the source of truth
+- Shared utilities (`nlp.js`, `scoring.js`, `canonicalise.js`) are copied into `azure-functions/lib/` at scaffold time
+- If these utilities change, they must be updated in both locations — document this in `CLAUDE.md`
+- Azure Function App code lives in `azure-functions/` in the same repo — same PR flow
 
-### 10.3 Synthesizer Duplicate Triggering
+### 11.2 Clustering Race Conditions (Timer-Based Mitigation)
 
-**Problem:** If a cluster receives two new articles in the same 2-hour window, article-clusterer may enqueue the cluster to `synthesize-queue` twice (once when it first became eligible, once when the second article was appended).
+**Why not queue-triggered clustering?** If article-scraper enqueued each DONE article to a cluster-queue, two messages for the same topic processed concurrently could create two separate clusters (both seed new clusters instead of one seeding and the other appending). Resolving this requires distributed locking per category.
 
-**Mitigation:**
-- `clusters.synthesis_queued_at`: before enqueuing, check if `synthesis_queued_at > NOW() - INTERVAL '2 hours'` — if so, skip
-- story-synthesizer: on receiving a cluster_id, SELECT the cluster fresh from DB. If already PROCESSED within the last 2 hours, complete the message and return (idempotent)
+**Timer-based approach:** article-clusterer processes all unclustered articles in a single sequential pass per run. Within a run, cluster state is held in memory for the duration — no concurrent writes to the same cluster within one timer invocation.
 
-### 10.4 Service Bus Connection String in Vercel (Transition Only)
+**`clustered_at IS NULL` filter:** strictly unclustered articles only. No OR clause, no time-window reopening. An article processed in run N will never be re-selected in run N+1.
 
-**Problem:** During Phase 1 (parallel run), Vercel's discover cron needs the Service Bus connection string to enqueue. This is an Azure credential in Vercel env.
+### 11.3 synthesize-queue Duplicate Messages
 
-**Mitigation:**
-- Use a SAS policy with `Send` permission only (not `Manage`) — minimal privilege
-- Remove from Vercel env after Phase 4 cutover
+**Scenario:** article-clusterer runs at 10AM and 12PM. At 10AM a cluster becomes eligible — `synthesis_queued_at = NOW()` is set and a message is sent. At 12PM the cluster gains a new article, `synthesis_queued_at < NOW() - 4h` is false (only 2h elapsed) → no second message.
 
-### 10.5 Dead-Letter Queue Monitoring
+**If the 4h window is too short** (cluster becomes eligible again before story-synthesizer processes it): a second message is sent. story-synthesizer checks `cluster.status = 'PENDING'` at the time of processing; if already PROCESSED it completes the message with no work. Duplicates are acceptable and harmless.
 
-**Problem:** Failed messages accumulate in dead-letter queues silently unless monitored.
+### 11.4 Dead-Letter Queue Monitoring
 
-**Mitigation:**
-- Azure Monitor alert: dead-letter message count > 0 → email alert to `aishvar.suhane@gmail.com`
-- Weekly manual review via Azure Portal or `az servicebus queue show`
+**Problem:** failed messages accumulate silently without an active alert.
+
+**Mitigation:** Azure Monitor alert on dead-letter message count > 0 → email alert. Weekly review via Azure Portal. Document reprocessing procedure (receive from DLQ, re-enqueue to main queue, complete DLQ message).
+
+### 11.5 Bootstrap Order
+
+Azure Function App must be deployed before any messages are enqueued. If discover runs before article-scraper is deployed, messages queue up safely (TTL: 7 days) and drain once the consumer is deployed.
 
 ---
 
-## 11. Out of Scope for MVP
+## 12. Out of Scope for MVP
 
 | Feature | Rationale for deferral |
 |---------|----------------------|
-| Azure API Management | Not needed — Azure Functions are internal workers, not public endpoints |
-| Azure Event Grid (topics/subscriptions) | Service Bus queues are sufficient; topics add complexity for no benefit at this scale |
-| Per-domain rate limiting in article-scraper | maxConcurrentCalls=16 is already gentle; per-domain cap can be added if any domain returns 429 |
-| Azure Key Vault | Env vars in Function App settings are sufficient; Key Vault adds complexity |
-| Bicep / Terraform IaC | Manual Azure Portal setup for MVP; IaC is a v2 concern |
-| VNet integration | Not required — Supabase and Anthropic are public endpoints |
-| Separate staging Function App | Use a naming convention (quydly-pipeline-fn-staging) if needed; not required for MVP |
-
----
-
-## Summary
-
-| Dimension | Current (Vercel Hobby) | After Azure Migration |
-|-----------|------------------------|----------------------|
-| Discovery frequency | Once/day (Hobby limit) | Every 30 min (Azure Timer) |
-| Articles scraped/day | ~200 | 1,500+ (Azure SB trigger, continuous) |
-| Clustering frequency | Once/day at 6:30 AM | Every 2 hours (Azure Timer) |
-| Synthesis frequency | Once/day at 6:45 AM | Continuous (Azure SB trigger) |
-| Stories/day | ~8 (estimated) | 20–50 (target met) |
-| Dead-letter handling | Manual `retry_count` in DB | Azure Service Bus DLQ |
-| New monthly cost | $0 | ~$11/month |
-| Vercel crons retained | 4 | 2 (generate + cleanup) |
-| New Azure resources | 0 | 1 resource group, 1 SB namespace, 3 queues, 1 function app, 1 storage account |
+| Bicep / Terraform IaC | Manual Azure Portal + CLI setup for MVP |
+| VNet integration | Supabase and Anthropic are public endpoints; private networking not required |
+| Separate staging Function App | Naming convention (quydly-pipeline-fn-staging) is sufficient for MVP |
+| Azure API Management | Functions are internal workers, not public endpoints |
+| Automatic DLQ reprocessing | Manual review via Azure Portal; automation is v2 |
+| Per-function concurrency overrides | Single host.json setting sufficient; separate function apps are v2 if needed |
