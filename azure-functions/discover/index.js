@@ -113,7 +113,7 @@ export default async function discover(context, timer) {
       category_id:    c.category_id,
       authority_score: c.authority_score,
       published_at:   c.published_at,
-      status:         "QUEUED",
+      status:         "PENDING",
     }));
 
     const { error } = await supabase
