@@ -2,7 +2,6 @@
   "name": "quydly-pipeline-fn",
   "version": "1.0.0",
   "description": "Azure Functions for the Quydly article pipeline",
-  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "func start",
