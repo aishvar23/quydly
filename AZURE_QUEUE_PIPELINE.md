@@ -7,6 +7,8 @@ Full design: [`docs/azure-queue-pipeline-design.md`](docs/azure-queue-pipeline-d
 **Branch:** `infra/azure-queue-pipeline`
 **Status legend:** ⬜ todo · 🔄 in progress · ✅ done · ❌ blocked
 
+**Note:** All local verification steps (smoke tests, load tests, `func start`) will be performed on a separate dev machine via code pull. Pending items marked ⬜ reflect steps awaiting execution on that machine.
+
 ---
 
 ## Architecture (Steady State)
@@ -100,6 +102,9 @@ Note: `maxConcurrentCalls` and `autoComplete` are host-level settings — they a
 | 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ✅ |
 | 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ✅ |
 | 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ✅ |
+| 1.13 | Create Azure Cache for Redis: `quydly-pipeline-redis` (Basic C0) | ⬜ |
+| 1.14 | Get Redis connection string and set `REDIS_URL` in Function App env vars | ⬜ |
+| 1.15 | Add `REDIS_URL` to `local.settings.json` for local dev | ⬜ |
 
 **Azure CLI reference:**
 ```bash
@@ -153,6 +158,26 @@ az servicebus namespace authorization-rule keys list \
   --namespace-name quydly-pipeline \
   --resource-group quydly-pipeline-rg \
   --query primaryConnectionString -o tsv
+
+# Azure Cache for Redis (Basic C0 = 250MB, ~$16/mo)
+az redis create \
+  --name quydly-pipeline-redis \
+  --resource-group quydly-pipeline-rg \
+  --location eastus2 \
+  --sku Basic \
+  --vm-size C0
+
+az redis show \
+  --name quydly-pipeline-redis \
+  --resource-group quydly-pipeline-rg \
+  --query "[hostName,sslPort]" -o tsv
+
+az redis list-keys \
+  --name quydly-pipeline-redis \
+  --resource-group quydly-pipeline-rg \
+  --query primaryKey -o tsv
+
+# REDIS_URL format: rediss://:<accessKey>@<hostName>:<sslPort>
 ```
 
 ---
@@ -191,7 +216,14 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ✅ |
 | 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ✅ |
 | 3.8 | Set up `.funcignore` | ✅ |
-| 3.9 | Verify local: `func start` runs without errors | ⬜ |
+| 3.9 | Verify local: `cd azure-functions && npm install && func start` runs without errors | ⬜ |
+
+**Prerequisites before Phase 3.9:**
+- **Azure Functions Core Tools** installed globally (`func` command available)
+  - Windows: `choco install azure-functions-core-tools-4` or download MSI from [releases](https://github.com/Azure/azure-functions-core-tools/releases)
+  - macOS/Linux: `brew tap azure/azure && brew install azure-functions-core-tools@4`
+- Run `npm install` in `azure-functions/` directory
+- Ensure `AZURE_SERVICE_BUS_CONNECTION_STRING`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, and `ANTHROPIC_API_KEY` are set in local `.env` or shell environment
 
 **`function.json` template (Service Bus trigger — no concurrency settings here):**
 ```json
