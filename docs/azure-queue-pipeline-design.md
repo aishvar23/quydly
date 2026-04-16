@@ -300,7 +300,12 @@ Algorithm:
        EXPIRE key 30  (30s TTL — resets on function completion or crash)
        if count > MAX_DOMAIN_CONCURRENCY (2):
          DECR key
-         abandon message (do NOT complete — SB redelivers after lockDuration)
+         // complete + schedule re-enqueue (do NOT abandon — explicit abandon increments deliveryCount)
+         await completeMessage(message)
+         await sender.scheduleMessages(
+           { body: message.body, messageId: message.messageId },
+           new Date(Date.now() + 5 * 60 * 1000)  // re-appear in 5 min, deliveryCount reset to 0
+         )
          return
 
   2. UPDATE scrape_queue SET status = 'PROCESSING' WHERE url_hash = $url_hash
@@ -347,10 +352,13 @@ Error handling:
 Global throughput cap: maxConcurrentCalls in host.json (see 5.5) × active instances
 Per-domain cap:        MAX_DOMAIN_CONCURRENCY = 2 (Redis INCR/DECR semaphore)
 
-If per-domain cap reached: message is abandoned (NOT failed).
-  → SB redelivers after lockDuration expires (5 min).
-  → Abandonment does NOT increment the SB delivery count.
-  → The domain is de-pressured and the message retries without burning its retry budget.
+If per-domain cap reached: message is completed + scheduled for re-enqueue (NOT abandoned).
+  → Explicit abandon() DOES increment deliveryCount in Azure Service Bus.
+  → Abandoning throttled messages burns the retry budget — hot domains hit DLQ without ever failing.
+  → Instead: completeMessage() removes the in-flight message, then scheduleMessages() injects a
+    fresh copy with deliveryCount = 0, re-appearing in 5 minutes once domain pressure clears.
+  → MVP fallback: if the extra send operation is a concern, raise maxDeliveryCount from 5 to 20
+    on scrape-queue to give more headroom (still converges, just slower).
 ```
 
 ---
