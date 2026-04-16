@@ -232,7 +232,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 |---|------|--------|
 | 5.1 | Create `azure-functions/article-scraper/index.js` — ServiceBusTrigger on `scrape-queue` | ⬜ |
 | 5.2 | Port scraping logic from `backend/services/scraper.js` + `processor.js` | ⬜ |
-| 5.3 | Implement Redis per-domain semaphore: INCR `domain_inflight:{domain}` with 30s TTL, cap at MAX_DOMAIN_CONCURRENCY=2; abandon message if over cap | ⬜ |
+| 5.3 | Implement Redis per-domain semaphore: INCR `domain_inflight:{domain}` with 30s TTL, cap at MAX_DOMAIN_CONCURRENCY=2; if over cap: `completeMessage()` + `scheduleMessages()` 5 min out (do NOT abandon — explicit abandon increments deliveryCount) | ⬜ |
 | 5.4 | DECR Redis key in finally block — always released on completion or error | ⬜ |
 | 5.5 | On failure: `throw` (not silent catch) — SB owns retry budget | ⬜ |
 | 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ⬜ |
