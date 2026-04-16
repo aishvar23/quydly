@@ -161,9 +161,9 @@ az servicebus namespace authorization-rule keys list \
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | Add `clustered_at timestamptz` column to `raw_articles` | ⬜ |
-| 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (ingested_at) WHERE clustered_at IS NULL AND status='DONE'` | ⬜ |
-| 2.3 | Add `synthesis_queued_at timestamptz` column to `clusters` | ⬜ |
+| 2.1 | Add `clustered_at timestamptz` column to `raw_articles` | ✅ |
+| 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (ingested_at) WHERE clustered_at IS NULL AND status='DONE'` | ✅ |
+| 2.3 | Add `synthesis_queued_at timestamptz` column to `clusters` | ✅ |
 | 2.4 | Confirm: all existing `raw_articles` rows have `clustered_at = NULL` (correct — no backfill needed) | ⬜ |
 
 **Migration SQL:**
@@ -183,14 +183,14 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 3.1 | Create `azure-functions/` top-level directory in repo | ⬜ |
-| 3.2 | Init Azure Functions v4 Node.js project in `azure-functions/` | ⬜ |
-| 3.3 | Create `azure-functions/host.json` with `autoComplete: false` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ⬜ |
-| 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ⬜ |
-| 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), Service Bus sender via connection string, Redis client | ⬜ |
-| 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ⬜ |
-| 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ⬜ |
-| 3.8 | Set up `.funcignore` | ⬜ |
+| 3.1 | Create `azure-functions/` top-level directory in repo | ✅ |
+| 3.2 | Init Azure Functions v4 Node.js project in `azure-functions/` | ✅ |
+| 3.3 | Create `azure-functions/host.json` with `autoComplete: false` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ✅ |
+| 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ✅ |
+| 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), Service Bus sender via connection string, Redis client | ✅ |
+| 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ✅ |
+| 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ✅ |
+| 3.8 | Set up `.funcignore` | ✅ |
 | 3.9 | Verify local: `func start` runs without errors | ⬜ |
 
 **`function.json` template (Service Bus trigger — no concurrency settings here):**
@@ -215,11 +215,11 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 4.1 | Create `azure-functions/discover/index.js` — TimerTrigger, `"0 */30 * * * *"` | ⬜ |
-| 4.2 | Port RSS fetch + canonicalise logic from `api/cron/discover.js` | ⬜ |
-| 4.3 | Dedup: `SELECT 1 FROM scrape_queue WHERE url_hash = $hash` — skip if exists | ⬜ |
-| 4.4 | For new URLs: INSERT scrape_queue (status=QUEUED) + send to scrape-queue SB | ⬜ |
-| 4.5 | Structured log: `{ event: "discover_run", feeds_attempted, feeds_ok, urls_queued, urls_skipped }` | ⬜ |
+| 4.1 | Create `azure-functions/discover/index.js` — TimerTrigger, `"0 */30 * * * *"` | ✅ |
+| 4.2 | Port RSS fetch + canonicalise logic from `api/cron/discover.js` | ✅ |
+| 4.3 | Dedup: `SELECT 1 FROM scrape_queue WHERE url_hash = $hash` — skip if exists | ✅ |
+| 4.4 | For new URLs: INSERT scrape_queue (status=QUEUED) + send to scrape-queue SB | ✅ |
+| 4.5 | Structured log: `{ event: "discover_run", feeds_attempted, feeds_ok, urls_queued, urls_skipped }` | ✅ |
 | 4.6 | Local smoke test: temporarily set schedule to `"0 * * * * *"`, trigger manually, verify messages appear in scrape-queue | ⬜ |
 | 4.7 | Deploy to Function App, verify invocations in Application Insights | ⬜ |
 | 4.8 | Restore schedule to `"0 */30 * * * *"` before final deploy | ⬜ |
@@ -230,13 +230,13 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 5.1 | Create `azure-functions/article-scraper/index.js` — ServiceBusTrigger on `scrape-queue` | ⬜ |
-| 5.2 | Port scraping logic from `backend/services/scraper.js` + `processor.js` | ⬜ |
-| 5.3 | Implement Redis per-domain semaphore: INCR `domain_inflight:{domain}` with 30s TTL, cap at MAX_DOMAIN_CONCURRENCY=2; if over cap: `completeMessage()` + `scheduleMessages()` 5 min out (do NOT abandon — explicit abandon increments deliveryCount) | ⬜ |
-| 5.4 | DECR Redis key in finally block — always released on completion or error | ⬜ |
-| 5.5 | On failure: `throw` (not silent catch) — SB owns retry budget | ⬜ |
-| 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ⬜ |
-| 5.7 | UPDATE `scrape_queue` status: PROCESSING → DONE / PARTIAL / LOW_QUALITY / FAILED | ⬜ |
+| 5.1 | Create `azure-functions/article-scraper/index.js` — ServiceBusTrigger on `scrape-queue` | ✅ |
+| 5.2 | Port scraping logic from `backend/services/scraper.js` + `processor.js` | ✅ |
+| 5.3 | Implement Redis per-domain semaphore: INCR `domain_inflight:{domain}` with 30s TTL, cap at MAX_DOMAIN_CONCURRENCY=2; if over cap: `completeMessage()` + `scheduleMessages()` 5 min out (do NOT abandon — explicit abandon increments deliveryCount) | ✅ |
+| 5.4 | DECR Redis key in finally block — always released on completion or error | ✅ |
+| 5.5 | On failure: `throw` (not silent catch) — SB owns retry budget | ✅ |
+| 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ✅ |
+| 5.7 | UPDATE `scrape_queue` status: PROCESSING → DONE / PARTIAL / LOW_QUALITY / FAILED | ✅ |
 | 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ⬜ |
 | 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ⬜ |
 | 5.10 | Deploy to Function App | ⬜ |
@@ -248,12 +248,12 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Create `azure-functions/article-clusterer/index.js` — TimerTrigger, `"0 0 */2 * * *"` | ⬜ |
-| 6.2 | Port clustering logic from `backend/engine/clusterer.js` | ⬜ |
-| 6.3 | Article SELECT: `WHERE clustered_at IS NULL AND status = 'DONE'` — strictly unclustered only (no OR clause, no time-window reopening) | ⬜ |
-| 6.4 | After each cluster INSERT/UPDATE: `UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id` | ⬜ |
-| 6.5 | Synthesize-queue enqueue guard: send only if `synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours'` | ⬜ |
-| 6.6 | Ordering: `UPDATE clusters SET synthesis_queued_at = NOW()` BEFORE `send to synthesize-queue` | ⬜ |
+| 6.1 | Create `azure-functions/article-clusterer/index.js` — TimerTrigger, `"0 0 */2 * * *"` | ✅ |
+| 6.2 | Port clustering logic from `backend/engine/clusterer.js` | ✅ |
+| 6.3 | Article SELECT: `WHERE clustered_at IS NULL AND status = 'DONE'` — strictly unclustered only (no OR clause, no time-window reopening) | ✅ |
+| 6.4 | After each cluster INSERT/UPDATE: `UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id` | ✅ |
+| 6.5 | Synthesize-queue enqueue guard: send only if `synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours'` | ✅ |
+| 6.6 | Ordering: `UPDATE clusters SET synthesis_queued_at = NOW()` BEFORE `send to synthesize-queue` | ✅ |
 | 6.7 | Local smoke test: seed 50 raw_articles rows (clustered_at=NULL, status=DONE), trigger timer, verify clusters created and synthesize-queue has messages | ⬜ |
 | 6.8 | Deploy to Function App | ⬜ |
 | 6.9 | Monitor 24h: verify clusters populate on 2h cadence, not just at 6:30AM | ⬜ |
@@ -264,12 +264,12 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 7.1 | Create `azure-functions/story-synthesizer/index.js` — ServiceBusTrigger on `synthesize-queue` | ⬜ |
-| 7.2 | Port synthesis logic from `backend/engine/synthesizer.js` — prompts, scoring, River model unchanged | ⬜ |
-| 7.3 | Entry point: receive `{ cluster_id }`, SELECT cluster by ID directly (not batch SELECT) | ⬜ |
-| 7.4 | Idempotency check: if `cluster.status ≠ 'PENDING'` → complete message, return | ⬜ |
-| 7.5 | Internal p-limit concurrency: 3 simultaneous Claude calls max (not host.json — p-limit applied inside the function) | ⬜ |
-| 7.6 | On Claude API error: throw — SB retries up to maxDeliveryCount=3 | ⬜ |
+| 7.1 | Create `azure-functions/story-synthesizer/index.js` — ServiceBusTrigger on `synthesize-queue` | ✅ |
+| 7.2 | Port synthesis logic from `backend/engine/synthesizer.js` — prompts, scoring, River model unchanged | ✅ |
+| 7.3 | Entry point: receive `{ cluster_id }`, SELECT cluster by ID directly (not batch SELECT) | ✅ |
+| 7.4 | Idempotency check: if `cluster.status ≠ 'PENDING'` → complete message, return | ✅ |
+| 7.5 | Internal p-limit concurrency: 3 simultaneous Claude calls max (not host.json — p-limit applied inside the function) | ✅ |
+| 7.6 | On Claude API error: throw — SB retries up to maxDeliveryCount=3 | ✅ |
 | 7.7 | Smoke test: manually enqueue 5 eligible cluster IDs → verify stories created | ⬜ |
 | 7.8 | Verify idempotency: enqueue same cluster_id twice — verify story is updated (River model), not duplicated | ⬜ |
 | 7.9 | Deploy to Function App | ⬜ |

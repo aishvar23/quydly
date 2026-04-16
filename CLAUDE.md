@@ -34,6 +34,20 @@ quydly/
 │       ├── RevealScreen.jsx
 │       ├── GateScreen.jsx
 │       └── EndScreen.jsx
+├── azure-functions/       ← Azure Function App (pipeline workers)
+│   ├── host.json          ← autoComplete: false, maxConcurrentCalls: 8
+│   ├── package.json
+│   ├── lib/               ← shared utils (COPIES — see duplication note below)
+│   │   ├── clients.js     ← lazy Supabase, ServiceBus, Redis clients
+│   │   ├── canonicalise.js
+│   │   ├── nlp.js
+│   │   ├── scoring.js
+│   │   ├── flags.js
+│   │   └── rss-feeds.js
+│   ├── discover/          ← TimerTrigger, every 30 min → scrape-queue
+│   ├── article-scraper/   ← ServiceBusTrigger on scrape-queue
+│   ├── article-clusterer/ ← TimerTrigger, every 2h → synthesize-queue
+│   └── story-synthesizer/ ← ServiceBusTrigger on synthesize-queue
 └── backend/
     ├── index.js
     ├── routes/
@@ -48,6 +62,18 @@ quydly/
     └── db/
         └── schema.sql     ← Supabase schema
 ```
+
+## Shared Utility Duplication (Azure Functions)
+
+`azure-functions/lib/` contains **copies** of:
+- `backend/utils/canonicalise.js` → `azure-functions/lib/canonicalise.js`
+- `backend/utils/nlp.js`          → `azure-functions/lib/nlp.js`
+- `backend/utils/scoring.js`      → `azure-functions/lib/scoring.js`
+- `config/flags.js`               → `azure-functions/lib/flags.js`
+- `config/rss-feeds.js`           → `azure-functions/lib/rss-feeds.js`
+
+**If any source file changes, update the copy in `azure-functions/lib/` too.**
+The Azure Functions package is a self-contained deployment unit — it cannot reach outside its directory.
 
 ## Non-Negotiable Architecture Rules
 1. **Config only** — never hardcode categories or mix in UI; always import from `config/`
