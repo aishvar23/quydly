@@ -88,18 +88,18 @@ Note: `maxConcurrentCalls` and `autoComplete` are host-level settings — they a
 
 | # | Task | Status |
 |---|------|--------|
-| 1.1 | Create resource group: `quydly-pipeline-rg` in East US 2 | ⬜ |
-| 1.2 | Create Service Bus Namespace: `quydly-pipeline` (Standard tier) | ⬜ |
-| 1.3 | Create queue: `scrape-queue` — maxDelivery: 5, TTL: 7d, lock: 5 min | ⬜ |
-| 1.4 | Create queue: `synthesize-queue` — maxDelivery: 3, TTL: 2d, lock: 5 min | ⬜ |
-| 1.5 | Create Storage Account: `quydlypipelinesa` (Standard LRS) | ⬜ |
-| 1.6 | Create Function App: `quydly-pipeline-fn` (Consumption, Node 22) | ⬜ |
-| 1.7 | Create Application Insights + link to Function App | ⬜ |
-| 1.8 | Fetch `RootManageSharedAccessKey` connection string from Service Bus namespace | ⬜ |
-| 1.9 | Set Function App env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, `ANTHROPIC_API_KEY`, `AZURE_SERVICE_BUS_CONNECTION_STRING` (= RootManageSharedAccessKey connection string) | ⬜ |
-| 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ⬜ |
-| 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ⬜ |
-| 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ⬜ |
+| 1.1 | Create resource group: `quydly-pipeline-rg` in East US 2 | ✅ |
+| 1.2 | Create Service Bus Namespace: `quydly-pipeline` (Standard tier) | ✅ |
+| 1.3 | Create queue: `scrape-queue` — maxDelivery: 5, TTL: 7d, lock: 5 min | ✅ |
+| 1.4 | Create queue: `synthesize-queue` — maxDelivery: 3, TTL: 2d, lock: 5 min | ✅ |
+| 1.5 | Create Storage Account: `quydlypipelinesa` (Standard LRS) | ✅ |
+| 1.6 | Create Function App: `quydly-pipeline-fn` (Consumption, Node 22) | ✅ |
+| 1.7 | Create Application Insights + link to Function App | ✅ |
+| 1.8 | Fetch `RootManageSharedAccessKey` connection string from Service Bus namespace | ✅ |
+| 1.9 | Set Function App env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, `ANTHROPIC_API_KEY`, `AZURE_SERVICE_BUS_CONNECTION_STRING` (= RootManageSharedAccessKey connection string) | ✅ |
+| 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ✅ |
+| 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ✅ |
+| 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ✅ |
 
 **Azure CLI reference:**
 ```bash
@@ -164,7 +164,7 @@ az servicebus namespace authorization-rule keys list \
 | 2.1 | Add `clustered_at timestamptz` column to `raw_articles` | ✅ |
 | 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (ingested_at) WHERE clustered_at IS NULL AND status='DONE'` | ✅ |
 | 2.3 | Add `synthesis_queued_at timestamptz` column to `clusters` | ✅ |
-| 2.4 | Confirm: all existing `raw_articles` rows have `clustered_at = NULL` (correct — no backfill needed) | ⬜ |
+| 2.4 | Confirm: all existing `raw_articles` rows have `clustered_at = NULL` (correct — no backfill needed) | ✅ |
 
 **Migration SQL:**
 ```sql
