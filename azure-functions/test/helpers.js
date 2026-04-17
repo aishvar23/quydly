@@ -33,6 +33,16 @@ export function fakeContext(name) {
 }
 
 export async function cleanup() {
-  await sbClient.close().catch(() => {});
-  redis.disconnect();
+  try {
+    await sbClient.close();
+  } catch (e) {
+    // ignore
+  }
+  try {
+    redis.disconnect();
+    // Give redis time to actually disconnect
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } catch (e) {
+    // ignore
+  }
 }

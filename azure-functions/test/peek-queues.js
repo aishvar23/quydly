@@ -55,4 +55,5 @@ try {
   process.exitCode = 1;
 } finally {
   await cleanup();
+  setTimeout(() => process.exit(process.exitCode ?? 0), 500);
 }

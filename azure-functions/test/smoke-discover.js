@@ -61,4 +61,6 @@ try {
   process.exitCode = 1;
 } finally {
   await cleanup();
+  // Force exit after a short timeout to prevent hanging Redis connections
+  setTimeout(() => process.exit(process.exitCode ?? 0), 500);
 }
