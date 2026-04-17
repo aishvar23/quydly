@@ -342,11 +342,10 @@ export default async function storySynthesizer(context, message) {
     context.log(JSON.stringify({ event: "story_written", cluster_id, story_score, disposition }));
   }
 
-  // ── 5. Mark cluster PROCESSED + complete SB message ──────────────────────
+  // ── 5. Mark cluster PROCESSED ─────────────────────────────────────────────
+  // autoComplete: true (host.json) — returning normally completes the SB message.
   await supabase
     .from("clusters")
     .update({ status: "PROCESSED", updated_at: now })
     .eq("id", cluster_id);
-
-  await context.bindings.message.completeMessage();
 }
