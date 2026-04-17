@@ -102,9 +102,9 @@ Note: `maxConcurrentCalls` and `autoComplete` are host-level settings — they a
 | 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ✅ |
 | 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ✅ |
 | 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ✅ |
-| 1.13 | Create Azure Cache for Redis: `quydly-pipeline-redis` (Basic C0) | ⬜ |
-| 1.14 | Get Redis connection string and set `REDIS_URL` in Function App env vars | ⬜ |
-| 1.15 | Add `REDIS_URL` to `local.settings.json` for local dev | ⬜ |
+| 1.13 | Create Azure Cache for Redis: `quydly-pipeline-redis` (Basic C0) | ✅ |
+| 1.14 | Get Redis connection string and set `REDIS_URL` in Function App env vars | ✅ |
+| 1.15 | Add `REDIS_URL` to `local.settings.json` for local dev | ✅ |
 
 **Azure CLI reference:**
 ```bash
@@ -187,7 +187,7 @@ az redis list-keys \
 | # | Task | Status |
 |---|------|--------|
 | 2.1 | Add `clustered_at timestamptz` column to `raw_articles` | ✅ |
-| 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (ingested_at) WHERE clustered_at IS NULL AND status='DONE'` | ✅ |
+| 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (scraped_at) WHERE clustered_at IS NULL AND status='DONE'` | ✅ |
 | 2.3 | Add `synthesis_queued_at timestamptz` column to `clusters` | ✅ |
 | 2.4 | Confirm: all existing `raw_articles` rows have `clustered_at = NULL` (correct — no backfill needed) | ✅ |
 
@@ -210,13 +210,13 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 |---|------|--------|
 | 3.1 | Create `azure-functions/` top-level directory in repo | ✅ |
 | 3.2 | Init Azure Functions v4 Node.js project in `azure-functions/` | ✅ |
-| 3.3 | Create `azure-functions/host.json` with `autoComplete: false` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ✅ |
+| 3.3 | Create `azure-functions/host.json` with `autoComplete: true` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ✅ |
 | 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ✅ |
 | 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), Service Bus sender via connection string, Redis client | ✅ |
 | 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ✅ |
 | 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ✅ |
 | 3.8 | Set up `.funcignore` | ✅ |
-| 3.9 | Verify local: `cd azure-functions && npm install && func start` runs without errors | ⬜ |
+| 3.9 | Verify local: `cd azure-functions && npm install && func start` runs without errors | ✅ |
 
 **Prerequisites before Phase 3.9:**
 - **Azure Functions Core Tools** installed globally (`func` command available)
