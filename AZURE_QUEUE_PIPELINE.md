@@ -196,7 +196,7 @@ az redis list-keys \
 ALTER TABLE raw_articles ADD COLUMN IF NOT EXISTS clustered_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_raw_articles_unprocessed
-  ON raw_articles (ingested_at)
+  ON raw_articles (scraped_at)
   WHERE clustered_at IS NULL AND status = 'DONE';
 
 ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;

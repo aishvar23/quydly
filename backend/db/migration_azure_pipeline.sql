@@ -8,7 +8,7 @@ ALTER TABLE raw_articles ADD COLUMN IF NOT EXISTS clustered_at timestamptz;
 -- 2.2 Partial index for the article-clusterer's SELECT
 --     Only covers rows that still need clustering — keeps the index small.
 CREATE INDEX IF NOT EXISTS idx_raw_articles_unprocessed
-  ON raw_articles (ingested_at)
+  ON raw_articles (scraped_at)
   WHERE clustered_at IS NULL AND status = 'DONE';
 
 -- 2.3 Add synthesis_queued_at to clusters
