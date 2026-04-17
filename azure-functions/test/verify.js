@@ -17,9 +17,14 @@ try {
 
   // ── scrape_queue ──────────────────────────────────────────────────────────
   console.log("── scrape_queue ──");
-  const { data: sqStats } = await supabase
-    .rpc("count_by_status", { table_name: "scrape_queue" })
-    .catch(() => ({ data: null }));
+  let sqStats = null;
+  try {
+    const { data } = await supabase
+      .rpc("count_by_status", { table_name: "scrape_queue" });
+    sqStats = data;
+  } catch (e) {
+    // RPC might not exist, use fallback
+  }
 
   if (sqStats) {
     for (const row of sqStats) console.log(`  ${row.status}: ${row.count}`);

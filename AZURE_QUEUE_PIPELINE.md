@@ -252,7 +252,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 4.3 | Dedup: `SELECT 1 FROM scrape_queue WHERE url_hash = $hash` — skip if exists | ✅ |
 | 4.4 | For new URLs: INSERT scrape_queue (status=QUEUED) + send to scrape-queue SB | ✅ |
 | 4.5 | Structured log: `{ event: "discover_run", feeds_attempted, feeds_ok, urls_queued, urls_skipped }` | ✅ |
-| 4.6 | Local smoke test: temporarily set schedule to `"0 * * * * *"`, trigger manually, verify messages appear in scrape-queue | ⬜ |
+| 4.6 | Local smoke test: temporarily set schedule to `"0 * * * * *"`, trigger manually, verify messages appear in scrape-queue | ✅ |
 | 4.7 | Deploy to Function App, verify invocations in Application Insights | ⬜ |
 | 4.8 | Restore schedule to `"0 */30 * * * *"` before final deploy | ⬜ |
 
@@ -269,7 +269,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 5.5 | On failure: `throw` (not silent catch) — SB owns retry budget | ✅ |
 | 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ✅ |
 | 5.7 | UPDATE `scrape_queue` status: PROCESSING → DONE / PARTIAL / LOW_QUALITY / FAILED | ✅ |
-| 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ⬜ |
+| 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ✅ |
 | 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ⬜ |
 | 5.10 | Deploy to Function App | ⬜ |
 | 5.11 | Monitor 24h: verify `raw_articles` count grows continuously (not in a single batch spike) | ⬜ |
