@@ -122,11 +122,14 @@ export default async function articleClusterer(context, timer) {
     if (!hasHighSignalEntity(entities)) {
       articles_skipped_no_signal++;
       // Still mark as clustered so we don't re-process on the next run.
-      await supabase
-        .from("raw_articles")
-        .update({ clustered_at: now })
-        .eq("id", article.id)
-        .catch(err => context.log.error(JSON.stringify({ event: "clustered_at_update_error", id: article.id, error: err.message })));
+      try {
+        await supabase
+          .from("raw_articles")
+          .update({ clustered_at: now })
+          .eq("id", article.id);
+      } catch (err) {
+        context.log.error(JSON.stringify({ event: "clustered_at_update_error", id: article.id, error: err.message }));
+      }
       continue;
     }
 
