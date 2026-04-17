@@ -270,7 +270,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ✅ |
 | 5.7 | UPDATE `scrape_queue` status: PROCESSING → DONE / PARTIAL / LOW_QUALITY / FAILED | ✅ |
 | 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ✅ |
-| 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ⬜ |
+| 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ✅ |
 | 5.10 | Deploy to Function App | ⬜ |
 | 5.11 | Monitor 24h: verify `raw_articles` count grows continuously (not in a single batch spike) | ⬜ |
 
@@ -286,7 +286,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 6.4 | After each cluster INSERT/UPDATE: `UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id` | ✅ |
 | 6.5 | Synthesize-queue enqueue guard: send only if `synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours'` | ✅ |
 | 6.6 | Ordering: `UPDATE clusters SET synthesis_queued_at = NOW()` BEFORE `send to synthesize-queue` | ✅ |
-| 6.7 | Local smoke test: seed 50 raw_articles rows (clustered_at=NULL, status=DONE), trigger timer, verify clusters created and synthesize-queue has messages | ⬜ |
+| 6.7 | Local smoke test: run clusterer against real unclustered articles, verify clusters created and synthesize-queue has messages | ✅ |
 | 6.8 | Deploy to Function App | ⬜ |
 | 6.9 | Monitor 24h: verify clusters populate on 2h cadence, not just at 6:30AM | ⬜ |
 
@@ -302,8 +302,8 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 7.4 | Idempotency check: if `cluster.status ≠ 'PENDING'` → complete message, return | ✅ |
 | 7.5 | Internal p-limit concurrency: 3 simultaneous Claude calls max (not host.json — p-limit applied inside the function) | ✅ |
 | 7.6 | On Claude API error: throw — SB retries up to maxDeliveryCount=3 | ✅ |
-| 7.7 | Smoke test: manually enqueue 5 eligible cluster IDs → verify stories created | ⬜ |
-| 7.8 | Verify idempotency: enqueue same cluster_id twice — verify story is updated (River model), not duplicated | ⬜ |
+| 7.7 | Smoke test: manually enqueue 5 eligible cluster IDs → verify stories created | ✅ |
+| 7.8 | Verify idempotency: enqueue same cluster_id twice — verify story is updated (River model), not duplicated | ✅ |
 | 7.9 | Deploy to Function App | ⬜ |
 | 7.10 | Monitor 24h: verify stories table populates throughout the day (not just before 7AM) | ⬜ |
 
