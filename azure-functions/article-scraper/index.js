@@ -162,7 +162,7 @@ export default async function articleScraper(context, message) {
       .from("scrape_queue")
       .update({ status: "FAILED", last_error: err.message })
       .eq("url_hash", url_hash)
-      .catch(() => {}); // best-effort — don't mask the original throw
+      .then(() => {}, () => {}); // best-effort — don't mask the original throw
 
     context.log.error(JSON.stringify({
       event: "scrape_error",
