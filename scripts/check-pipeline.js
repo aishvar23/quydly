@@ -101,7 +101,7 @@ async function checkSynthesizer() {
 
   console.log(`  ${label(total >= 5)} Stories published (last 24h): ${total} ${total < 5 ? "(target ≥20 steady state)" : ""}`);
   console.log(`  ${label(hours >= 2)} Distinct hours with stories: ${hours}`);
-  console.log(`  ${label(parseFloat(avgConf) >= 0.6 || avgConf === "n/a")} Avg confidence score: ${avgConf}`);
+  console.log(`  ${label(parseFloat(avgConf) >= 6.0 || avgConf === "n/a")} Avg confidence score: ${avgConf} / 10`);
 
   // Most recent story
   if (stories.length > 0) {

@@ -272,7 +272,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ✅ |
 | 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ✅ |
 | 5.10 | Deploy to Function App | ✅ |
-| 5.11 | Monitor 24h: verify `raw_articles` count grows continuously (not in a single batch spike) | ⬜ |
+| 5.11 | Monitor 24h: verify `raw_articles` count grows continuously (not in a single batch spike) | ✅ |
 
 ---
 
@@ -288,7 +288,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 6.6 | Ordering: `UPDATE clusters SET synthesis_queued_at = NOW()` BEFORE `send to synthesize-queue` | ✅ |
 | 6.7 | Local smoke test: run clusterer against real unclustered articles, verify clusters created and synthesize-queue has messages | ✅ |
 | 6.8 | Deploy to Function App | ✅ |
-| 6.9 | Monitor 24h: verify clusters populate on 2h cadence, not just at 6:30AM | ⬜ |
+| 6.9 | Monitor 24h: verify clusters populate on 2h cadence, not just at 6:30AM | ✅ |
 
 ---
 
@@ -305,7 +305,7 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 | 7.7 | Smoke test: manually enqueue 5 eligible cluster IDs → verify stories created | ✅ |
 | 7.8 | Verify idempotency: enqueue same cluster_id twice — verify story is updated (River model), not duplicated | ✅ |
 | 7.9 | Deploy to Function App | ✅ |
-| 7.10 | Monitor 24h: verify stories table populates throughout the day (not just before 7AM) | ⬜ |
+| 7.10 | Monitor 24h: verify stories table populates throughout the day (not just before 7AM) | ✅ |
 
 ---
 
