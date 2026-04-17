@@ -72,7 +72,7 @@ api/cron/synthesize.js  ← story-synthesizer SB Function
   "extensions": {
     "serviceBus": {
       "messageHandlerOptions": {
-        "autoComplete": false,
+        "autoComplete": true,
         "maxConcurrentCalls": 8
       }
     }

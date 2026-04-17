@@ -7,7 +7,7 @@
 // Idempotency: if cluster.status !== 'PENDING' at entry, complete and return.
 // Claude errors: throw — SB retries up to maxDeliveryCount=3 before dead-lettering.
 //
-// autoComplete: false (set in host.json) — every message is settled explicitly.
+// autoComplete: true (host.json) — return normally = complete, throw = abandon.
 // Internal concurrency: p-limit(3) applied via host.json maxConcurrentCalls=8;
 //   actual Claude concurrency is bounded by the 3 concurrent instances limit in
 //   the synthesizer logic below (mirroring backend/engine/synthesizer.js).
@@ -201,7 +201,7 @@ export default async function storySynthesizer(context, message) {
       cluster_id,
       status:     cluster?.status ?? "not_found",
     }));
-    await context.bindings.message.completeMessage();
+    // Return normally → runtime auto-completes the SB message
     return;
   }
 
@@ -232,7 +232,7 @@ export default async function storySynthesizer(context, message) {
       .from("clusters")
       .update({ status: "PROCESSED", updated_at: new Date().toISOString() })
       .eq("id", cluster_id);
-    await context.bindings.message.completeMessage();
+    // Return normally → runtime auto-completes the SB message
     return;
   }
 
@@ -268,7 +268,7 @@ export default async function storySynthesizer(context, message) {
   if (narrative.confidence_score < 6) {
     context.log(JSON.stringify({ event: "LOW_CONFIDENCE", cluster_id, confidence: narrative.confidence_score }));
     await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
-    await context.bindings.message.completeMessage();
+    // Return normally → runtime auto-completes the SB message
     return;
   }
 
@@ -276,7 +276,7 @@ export default async function storySynthesizer(context, message) {
   if (narrative.key_points.length < 3) {
     context.log(JSON.stringify({ event: "LOW_KEY_POINTS", cluster_id, count: narrative.key_points.length }));
     await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
-    await context.bindings.message.completeMessage();
+    // Return normally → runtime auto-completes the SB message
     return;
   }
 
@@ -288,7 +288,7 @@ export default async function storySynthesizer(context, message) {
   if (disposition === "reject") {
     context.log(JSON.stringify({ event: "LOW_STORY_SCORE", cluster_id, story_score, disposition }));
     await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
-    await context.bindings.message.completeMessage();
+    // Return normally → runtime auto-completes the SB message
     return;
   }
 

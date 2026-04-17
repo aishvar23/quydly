@@ -5,7 +5,7 @@
 // Per-domain Redis semaphore caps concurrent scrapes at MAX_DOMAIN_CONCURRENCY=2.
 // On domain cap hit: completeMessage() + scheduleMessages() 5 min out — never abandon().
 //
-// autoComplete: false (set in host.json) — this function settles every message explicitly.
+// autoComplete: true (host.json) — return normally = complete, throw = abandon.
 
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
@@ -51,17 +51,17 @@ export default async function articleScraper(context, message) {
 
     const sender = getSbSender("scrape-queue");
     try {
-      await context.bindings.message.completeMessage();
       await sender.scheduleMessages(
         {
           body:      message,
           messageId: url_hash,
         },
-        new Date(Date.now() + 5 * 60 * 1000)  // re-appear in 5 min; deliveryCount resets
+        new Date(Date.now() + 5 * 60 * 1000)
       );
     } finally {
       await sender.close();
     }
+    // Return normally → runtime auto-completes original message
     return;
   }
 
@@ -154,8 +154,7 @@ export default async function articleScraper(context, message) {
       status: final_status,
     }));
 
-    // ── 9. Complete the SB message ───────────────────────────────────────────
-    await context.bindings.message.completeMessage();
+    // Return normally → runtime auto-completes the SB message
 
   } catch (err) {
     // Update scrape_queue to FAILED so the audit row reflects the error
