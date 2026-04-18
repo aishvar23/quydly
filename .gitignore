@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+azure-functions/local.settings.json
 
 # Dependencies
 node_modules/
