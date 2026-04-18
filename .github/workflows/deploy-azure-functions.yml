@@ -1,0 +1,38 @@
+name: Deploy Azure Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'azure-functions/**'
+      - '.github/workflows/deploy-azure-functions.yml'
+  workflow_dispatch:
+
+jobs:
+  lint-and-deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: azure-functions
+        run: npm install
+
+      - name: Lint
+        working-directory: azure-functions
+        run: npm run lint
+
+      - name: Deploy to Azure Functions
+        uses: azure/functions-action@v1
+        with:
+          app-name: quydly-pipeline-fn
+          package: azure-functions
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
