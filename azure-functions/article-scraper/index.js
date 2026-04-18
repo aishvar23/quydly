@@ -76,13 +76,25 @@ export default async function articleScraper(context, message) {
     const res = await fetch(canonical_url, {
       signal:   AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
-        "User-Agent": "QuydlyBot/1.0 (+https://quydly.com/bot)",
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
         "Accept":     "text/html,application/xhtml+xml",
       },
       redirect: "follow",
     });
 
     if (!res.ok) {
+      // Non-retryable client errors (4xx except 429): complete immediately.
+      // Throwing here burns the retry budget and eventually DLQs — pointless for 403/404.
+      const isNonRetryable = res.status !== 429 && res.status >= 400 && res.status < 500;
+      if (isNonRetryable) {
+        await supabase
+          .from("scrape_queue")
+          .update({ status: "FAILED", last_error: `HTTP ${res.status}` })
+          .eq("url_hash", url_hash)
+          .then(() => {}, () => {});
+        context.log(JSON.stringify({ event: "scrape_skip", url: canonical_url, http_status: res.status }));
+        return; // auto-complete — no retry
+      }
       throw new Error(`HTTP ${res.status} from ${canonical_url}`);
     }
     const html = await res.text();
