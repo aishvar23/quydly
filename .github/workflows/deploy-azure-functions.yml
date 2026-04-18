@@ -21,10 +21,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: azure-functions/package-lock.json
 
       - name: Install dependencies
         working-directory: azure-functions
-        run: npm install
+        run: npm ci
 
       - name: Lint
         working-directory: azure-functions
