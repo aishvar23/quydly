@@ -1,6 +1,3 @@
-// Copy of backend/utils/nlp.js — kept in sync manually.
-// If backend/utils/nlp.js changes, update this file too (see CLAUDE.md).
-
 const EQUIVALENCE_MAP = {
   'u.s.':           'us',
   'u.s':            'us',
