@@ -169,9 +169,12 @@ CREATE INDEX IF NOT EXISTS raw_articles_geo_idx
 ```sql
 ALTER TABLE clusters ADD COLUMN IF NOT EXISTS primary_geos text[] NOT NULL DEFAULT '{}';
 ALTER TABLE clusters ADD COLUMN IF NOT EXISTS geo_scores jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS source_countries text[] NOT NULL DEFAULT '{}';
 ```
 
-Derived from member articles at each cluster INSERT/UPDATE — never a hard partition key, only metadata.
+All three are derived from member articles at each cluster INSERT/UPDATE — never a hard partition key, only metadata.
+
+**`source_countries`:** deduplicated union of `raw_articles.source_country` across `article_ids`. This is the cluster's counterpart to `unique_domains`, but at country granularity — lets audience scoring ask "does this cluster include any Indian-origin publisher?" without joining `raw_articles` back to the feed registry at score time. Mirrors the `unique_domains` derivation pattern already in `clusterer.js`.
 
 ### 5.4 `stories`
 
@@ -195,8 +198,14 @@ CREATE TABLE IF NOT EXISTS story_audiences (
   relevance_score  numeric(5,2) NOT NULL DEFAULT 0,
   rank_bucket      text NOT NULL DEFAULT 'standard'
                    CHECK (rank_bucket IN ('hero', 'standard', 'tail', 'filler')),
-  -- Coarse-grained ordering layer above raw score. Lets the serving layer mix buckets
-  -- deterministically (e.g. always lead with a hero) without re-sorting on every request.
+  -- Coarse-grained label for the serving mix (60/25/15 etc.) and for logs/debug.
+  rank_priority    smallint NOT NULL DEFAULT 2
+                   CHECK (rank_priority BETWEEN 1 AND 4),
+  -- Numeric counterpart to rank_bucket, used as the ORDER BY key in feed queries.
+  -- Fixed mapping (written together with rank_bucket, never stored independently):
+  --   hero = 1, standard = 2, tail = 3, filler = 4
+  -- Lexical ordering on rank_bucket text is wrong ('filler' < 'hero' alphabetically),
+  -- so the numeric column is the source of truth for sort order.
 
   reason           text,
   -- Human-readable one-liner: "India-origin source + India-entity mention"
@@ -208,8 +217,9 @@ CREATE TABLE IF NOT EXISTS story_audiences (
   UNIQUE (story_id, audience_geo)
 );
 
+-- Primary feed query: ORDER BY rank_priority ASC, relevance_score DESC
 CREATE INDEX IF NOT EXISTS story_audiences_feed_idx
-  ON story_audiences (audience_geo, relevance_score DESC);
+  ON story_audiences (audience_geo, rank_priority, relevance_score DESC);
 
 CREATE INDEX IF NOT EXISTS story_audiences_story_idx
   ON story_audiences (story_id);
@@ -217,7 +227,7 @@ CREATE INDEX IF NOT EXISTS story_audiences_story_idx
 
 **Cardinality:** for 50 stories/day × 2 audiences = 100 rows/day. At 7-day retention (aligned with existing `cleanup` cron), the table stays under ~1000 rows. No partitioning needed.
 
-**On story re-synthesis (River model):** the story-synthesizer upserts into `story_audiences` per audience. `ON CONFLICT (story_id, audience_geo) DO UPDATE SET relevance_score = EXCLUDED.relevance_score, rank_bucket = EXCLUDED.rank_bucket, reason = EXCLUDED.reason, updated_at = NOW()`.
+**On story re-synthesis (River model):** the story-synthesizer upserts into `story_audiences` per audience. `ON CONFLICT (story_id, audience_geo) DO UPDATE SET relevance_score = EXCLUDED.relevance_score, rank_bucket = EXCLUDED.rank_bucket, rank_priority = EXCLUDED.rank_priority, reason = EXCLUDED.reason, updated_at = NOW()`.
 
 ---
 
@@ -303,21 +313,26 @@ Change to the existing scraper (steps added after fetch/parse, before INSERT):
 After each cluster INSERT or UPDATE:
 
 ```
-// Aggregate primary_geos from member articles
+// Pull geo fields from member articles
 member_geos = SELECT mentioned_geos, source_country
               FROM raw_articles WHERE id = ANY(cluster.article_ids)
 
-// A geo is "primary" for a cluster if:
-//   strong signal: >= 50% of articles mention it, OR
-//   source evidence: >= 2 articles are from publishers in that country
+// (1) source_countries: deduplicated union of non-null source_country values.
+//     Mirrors the existing unique_domains derivation.
+source_countries = dedupe(member_geos.map(a => a.source_country).filter(Boolean))
+
+// (2) primary_geos: a geo is "primary" for a cluster if either:
+//     strong signal:  >= 50% of articles mention it, OR
+//     source evidence: >= 2 articles are from publishers in that country
 primary_geos = computePrimaryGeos(member_geos)
 
-// Cluster-level geo score: per-audience mean of article-level scores
+// (3) geo_scores: per-audience mean of article-level scores
 cluster.geo_scores = computeClusterGeoScores(member_geos)
 
 UPDATE clusters
-   SET primary_geos = $primary_geos,
-       geo_scores   = $geo_scores
+   SET primary_geos     = $primary_geos,
+       geo_scores       = $geo_scores,
+       source_countries = $source_countries
  WHERE id = $cluster_id
 ```
 
@@ -325,34 +340,102 @@ No change to the clustering match algorithm — geo is **not** a hard partition 
 
 ### 6.4 `story-synthesizer` — story geo + audience projection
 
-After the existing River-model upsert into `stories`:
+The synthesizer extends the existing Azure-queue flow with two additional writes: story-level geo metadata, and one `story_audiences` row per configured audience. The **cluster must not be marked `PROCESSED` until all three writes succeed** — otherwise a partial failure can leave a story without its audience projections, invisible to every geo-aware feed.
+
+#### Processing contract
+
+On receiving a `{ cluster_id }` message:
 
 ```
-// (a) Copy cluster-level geo metadata to the story row
-UPDATE stories
-   SET primary_geos = cluster.primary_geos,
-       geo_scores   = cluster.geo_scores,
-       global_significance_score = computeGlobalSignificance(cluster, synthesis)
- WHERE id = $story_id
+Step 0 — Idempotency short-circuit (unchanged from existing design):
+  SELECT status FROM clusters WHERE id = $cluster_id FOR UPDATE
+  If status = 'PROCESSED' → complete Service Bus message, return.
+  If status = 'PENDING'    → proceed.
+  If status = 'PROCESSING' → continue (same worker holds the implicit lock
+                              via Service Bus message lock; duplicate delivery
+                              is handled at the top-of-function SELECT).
 
-// (b) Write per-audience projection rows (one INSERT ... ON CONFLICT per audience)
-for (const audience of AUDIENCES) {
-  const { relevance_score, rank_bucket, reason } =
-    computeAudienceProjection(story, cluster, audience)
+Step 1 — Claude synthesis (Pass 1 + Pass 2)
+  Throws on API error → SB retry (maxDeliveryCount=3). No DB writes yet,
+  so retry is trivially safe.
 
-  INSERT INTO story_audiences (story_id, audience_geo, relevance_score, rank_bucket, reason)
+Step 2 — Story upsert (River model, with geo fields):
+  INSERT INTO stories (..., primary_geos, geo_scores, global_significance_score)
   VALUES (...)
-  ON CONFLICT (story_id, audience_geo) DO UPDATE SET
-    relevance_score = EXCLUDED.relevance_score,
-    rank_bucket     = EXCLUDED.rank_bucket,
-    reason          = EXCLUDED.reason,
-    updated_at      = NOW()
-}
+  ON CONFLICT (natural key via River model) DO UPDATE SET
+    headline = EXCLUDED.headline,
+    summary  = EXCLUDED.summary,
+    key_points = EXCLUDED.key_points,
+    primary_geos = EXCLUDED.primary_geos,
+    geo_scores   = EXCLUDED.geo_scores,
+    global_significance_score = EXCLUDED.global_significance_score,
+    story_score  = EXCLUDED.story_score,
+    updated_at   = NOW()
+  RETURNING id → story_id
+
+  On error → throw. Cluster remains PENDING. SB redelivers.
+
+Step 3 — Audience projection upserts (one per AUDIENCES entry):
+  for (const audience of AUDIENCES) {
+    const { relevance_score, rank_bucket, rank_priority, reason } =
+      computeAudienceProjection(story, cluster, audience)
+
+    INSERT INTO story_audiences
+      (story_id, audience_geo, relevance_score, rank_bucket, rank_priority, reason)
+    VALUES (...)
+    ON CONFLICT (story_id, audience_geo) DO UPDATE SET
+      relevance_score = EXCLUDED.relevance_score,
+      rank_bucket     = EXCLUDED.rank_bucket,
+      rank_priority   = EXCLUDED.rank_priority,
+      reason          = EXCLUDED.reason,
+      updated_at      = NOW()
+  }
+
+  On error at any iteration → throw. Cluster remains PENDING. SB redelivers.
+  (Already-written audience rows for this story from the failed run are
+  simply re-upserted on retry — no duplicates possible, UNIQUE(story_id,
+  audience_geo) is enforced.)
+
+Step 4 — Mark cluster PROCESSED (LAST — the commit point):
+  UPDATE clusters SET status = 'PROCESSED', updated_at = NOW()
+   WHERE id = $cluster_id
+
+  This is the single marker that all downstream writes succeeded.
+  If every prior step succeeded but this UPDATE fails, the next retry
+  re-runs steps 1–4; all upserts are idempotent so no duplicate rows
+  or divergent scores result.
+
+Step 5 — Complete Service Bus message.
 ```
 
-**Order of operations:** story upsert first (so `story_audiences.story_id` always has a target), then audience rows. Both are in the same Supabase client session — a failure between them is caught by synthesizer retry (Service Bus redelivers the message, idempotency check at top of synthesizer short-circuits if cluster is already PROCESSED).
+#### Why PROCESSED moves to the end
 
-**Idempotency contract:** if the synthesizer is re-invoked for the same cluster, `story_audiences` rows are re-upserted with fresh scores. This is intentional — scores should reflect current cluster state.
+The existing Azure-queue design already set `status = 'PROCESSED'` inside the synthesizer, but it was described before the story row was the only downstream write. With `story_audiences` added, `PROCESSED` now means "story AND every audience projection have been written for this cluster's current state." Moving the status update to the last step makes that invariant explicit.
+
+#### Failure-mode matrix
+
+| Failure point | Cluster state on retry | Data state | Retry outcome |
+|---|---|---|---|
+| Claude call (Step 1) | `PENDING` | no writes | Re-runs cleanly |
+| Story upsert (Step 2) | `PENDING` | no writes (transaction rolled back) | Re-runs cleanly |
+| One audience INSERT (Step 3) | `PENDING` | story row + some `story_audiences` rows present | Re-runs: story upsert is idempotent via River-model ON CONFLICT; each audience upsert is idempotent via `UNIQUE(story_id, audience_geo)`. No duplicates, no stale rows. |
+| Cluster PROCESSED UPDATE (Step 4) | `PENDING` | all writes present | Re-runs Steps 1–4. All writes re-upserted with identical values (Claude output is cached per-cluster within run; re-running is wasteful but safe). On third delivery attempt, Step 4 succeeds → PROCESSED. |
+
+#### Idempotency invariants (must be enforced by migrations)
+
+- `stories`: River-model upsert keyed on the story's natural-key query (category + primary_entities overlap, as defined in the Gold Set design). A retry never produces a second story row for the same cluster.
+- `story_audiences`: `UNIQUE (story_id, audience_geo)` enforces at most one row per (story, audience). A retry re-upserts — it never inserts a duplicate.
+- `clusters.status`: transition `PENDING → PROCESSED` is terminal for this message. Any subsequent delivery of the same cluster_id short-circuits at Step 0.
+
+#### Why no distributed transaction
+
+All writes go to the same Supabase Postgres instance, so Steps 2–4 could in principle be wrapped in a single transaction. We deliberately don't:
+
+- Steps 2 and 3 each touch multiple rows and issue multiple statements; holding a transaction across Claude-output-shaped writes would lengthen lock duration.
+- The per-step idempotency guarantees above mean a mid-sequence failure leaves the DB in a retry-safe state without transactional rollback.
+- Service Bus retries + the Step 0 short-circuit give us the equivalent of "at-least-once eventually-consistent" semantics at a lower complexity cost.
+
+If a transaction were desired, it would wrap only Steps 2–4. The `computeAudienceProjection` calls (Step 3 preamble) and the Claude calls (Step 1) must remain outside it.
 
 ### 6.5 `generateDaily.js` — audience-aware quiz generation
 
@@ -367,6 +450,7 @@ async function pickStoriesForAudience(categoryId, audience = 'global') {
     .eq('audience_geo', audience)
     .eq('stories.category_id', categoryId)
     .eq('stories.is_verified', true)
+    .order('rank_priority', { ascending: true })        // hero → filler
     .order('relevance_score', { ascending: false })
     .limit(10)
 }
@@ -426,27 +510,56 @@ Stored on `stories.global_significance_score`. Used as the primary ordering key 
 
 Per audience, per story. This is the ordering key for `story_audiences`.
 
+All inputs below are computed from fields that exist on the data model (`cluster.source_countries`, `cluster.primary_geos`, `cluster.geo_scores`, `cluster.primary_entities`, and `raw_articles` aggregates). No field references mix types (e.g. we never compare a country code against `unique_domains`, which holds domain strings).
+
 ```
 AudienceGeoScore(story, cluster, 'india') =
-    4 × mention_strength('in', aggregated across cluster articles)
-  + 3 × (source_country == 'in' present in cluster.unique_domains)
-  + 3 × ('in' ∈ cluster.primary_geos)
-  + 2 × india_entity_density   (entities from GEO_ALIASES.in.aliases in primary_entities)
-  + 2 × indian_publisher_support (count of distinct Indian domains / cluster.unique_domains.length)
-  + 1 × global_significance_with_india_mention
+    4 × mention_strength_in
+  + 3 × india_source_present
+  + 3 × india_is_primary_geo
+  + 2 × india_entity_density
+  + 2 × indian_article_fraction
+  + 1 × global_story_with_india_mention
+
+Where each term is defined as:
+
+  mention_strength_in
+    = cluster.geo_scores['in'] ∈ [0.0, 1.0]
+    (mean of member raw_articles.geo_scores['in'], already computed at cluster time)
+
+  india_source_present
+    = ('in' ∈ cluster.source_countries) ? 1 : 0
+    (at least one member article has source_country = 'in')
+
+  india_is_primary_geo
+    = ('in' ∈ cluster.primary_geos) ? 1 : 0
+
+  india_entity_density
+    = |cluster.primary_entities ∩ GEO_ALIASES.in.aliases| / |cluster.primary_entities|
+    (clamped to [0.0, 1.0])
+
+  indian_article_fraction
+    = count(raw_articles WHERE id = ANY(cluster.article_ids) AND source_country = 'in')
+      / array_length(cluster.article_ids, 1)
+    (how much of the cluster is Indian-origin reporting)
+
+  global_story_with_india_mention
+    = (story.global_significance_score ≥ 10 AND 'in' ∈ cluster.primary_geos) ? 1 : 0
 
 AudienceGeoScore(story, cluster, 'global') =
-    story.global_significance_score (re-used — already captures global signal)
+    story.global_significance_score   // re-used — already captures global signal
 ```
 
-**Rank bucket derivation** (deterministic from score):
+**Rank bucket derivation** (deterministic from score). `rank_priority` is written alongside `rank_bucket` and is the column used for ORDER BY in feed queries:
 
-| Rank bucket | Condition for `india` | Condition for `global` |
-|---|---|---|
-| `hero` | score ≥ 12 AND `'in' ∈ primary_geos` | `global_significance_score ≥ 14` |
-| `standard` | score ≥ 7 | `global_significance_score ≥ 10` |
-| `tail` | score ≥ 4 | `global_significance_score ≥ 6` |
-| `filler` | else | else |
+| `rank_bucket` | `rank_priority` | Condition for `india` | Condition for `global` |
+|---|---|---|---|
+| `hero`     | 1 | score ≥ 12 AND `'in' ∈ primary_geos` | `global_significance_score ≥ 14` |
+| `standard` | 2 | score ≥ 7 | `global_significance_score ≥ 10` |
+| `tail`     | 3 | score ≥ 4 | `global_significance_score ≥ 6` |
+| `filler`   | 4 | else | else |
+
+Both columns are derived from the same conditions in a single function call — they never diverge. The text column exists for human-readable logs/debugging; the numeric column is the sort key.
 
 **`reason` field** (one-liner, hand-picked from a small enum for observability):
 
@@ -485,8 +598,11 @@ SELECT sa.*, s.*
  WHERE sa.audience_geo = 'india'
    AND s.is_verified = true
    AND s.updated_at > NOW() - INTERVAL '24 hours'
- ORDER BY sa.rank_bucket, sa.relevance_score DESC
+ ORDER BY sa.rank_priority ASC,   -- hero(1) → standard(2) → tail(3) → filler(4)
+          sa.relevance_score DESC
 ```
+
+Ordering uses the numeric `rank_priority` column — never `rank_bucket` text — because lexical ordering on the bucket name is wrong (`'filler' < 'hero' < 'standard' < 'tail'` alphabetically, which would surface filler stories before hero stories). The `rank_priority` values are fixed: `hero=1, standard=2, tail=3, filler=4`. The text column is retained for logs and debugging; the numeric column is the sort key.
 
 The selector then applies the 60/25/15 mix across `rank_bucket` categories. Exact implementation is one SQL query + in-memory partitioning — no cross-table joins beyond `story_audiences → stories`.
 
