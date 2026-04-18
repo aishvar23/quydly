@@ -2,7 +2,7 @@
 // Usage: node scripts/peek-dlq.js
 // Requires: AZURE_SERVICE_BUS_CONNECTION_STRING in env (RootManageSharedAccessKey)
 
-const { ServiceBusClient } = require("@azure/service-bus");
+import { ServiceBusClient } from "@azure/service-bus";
 
 const QUEUE = "scrape-queue";
 const PEEK_COUNT = 10;
