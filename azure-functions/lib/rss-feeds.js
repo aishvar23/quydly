@@ -14,6 +14,14 @@ const RSS_FEEDS = [
   { url: "https://www.france24.com/en/rss",                               domain: "france24.com",         category: "world",   authority_score: 0.6, source_country: "fr", source_region: "western_europe", language: "en", is_global_source: true  },
   { url: "https://foreignpolicy.com/feed/",                               domain: "foreignpolicy.com",    category: "world",   authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
   { url: "https://abcnews.go.com/abcnews/internationalheadlines",         domain: "abcnews.go.com",       category: "world",   authority_score: 0.8, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  // India-origin world feeds
+  { url: "https://www.thehindu.com/news/national/feeder/default.rss",     domain: "thehindu.com",         category: "world",   authority_score: 0.8, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://indianexpress.com/feed/",                               domain: "indianexpress.com",    category: "world",   authority_score: 0.8, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml", domain: "hindustantimes.com", category: "world",   authority_score: 0.6, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://feeds.feedburner.com/ndtvnews-top-stories",             domain: "ndtv.com",             category: "world",   authority_score: 0.6, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",    domain: "timesofindia.indiatimes.com", category: "world", authority_score: 0.6, source_country: "in", source_region: "south_asia",  language: "en", is_global_source: false },
+  { url: "https://feeds.feedburner.com/ScrollinArticles.rss",             domain: "scroll.in",            category: "world",   authority_score: 0.6, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://www.indiatoday.in/rss/home",                            domain: "indiatoday.in",        category: "world",   authority_score: 0.6, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
 
   // ── Tech ───────────────────────────────────────────────────────────────────
   { url: "https://feeds.arstechnica.com/arstechnica/index",               domain: "arstechnica.com",      category: "tech",    authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
@@ -37,6 +45,10 @@ const RSS_FEEDS = [
   { url: "https://www.theguardian.com/business/rss",                      domain: "theguardian.com",      category: "finance", authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
   { url: "https://feeds.marketwatch.com/marketwatch/topstories/",         domain: "marketwatch.com",      category: "finance", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
   { url: "https://fortune.com/feed/",                                     domain: "fortune.com",          category: "finance", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  // India-origin finance feeds
+  { url: "https://economictimes.indiatimes.com/rssfeedsdefault.cms",      domain: "economictimes.indiatimes.com", category: "finance", authority_score: 0.6, source_country: "in", source_region: "south_asia", language: "en", is_global_source: false },
+  { url: "https://www.livemint.com/rss/news",                             domain: "livemint.com",         category: "finance", authority_score: 0.6, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://www.thehindubusinessline.com/feeder/default.rss",       domain: "thehindubusinessline.com", category: "finance", authority_score: 0.6, source_country: "in", source_region: "south_asia", language: "en", is_global_source: false },
 
   // ── Culture ────────────────────────────────────────────────────────────────
   { url: "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",  domain: "bbc.com",              category: "culture", authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
@@ -60,8 +72,10 @@ const RSS_FEEDS = [
 ];
 
 // ── Startup validation ────────────────────────────────────────────────────────
-// Throws on module load if any feed is missing the four geo fields. Catches
-// typos / forgotten entries at boot rather than at first scrape.
+// Throws on module load if any feed is missing the four geo fields or uses
+// non-canonical casing. Catches typos / forgotten entries at boot rather than
+// at first scrape. Lowercase invariants protect the lookupFeedByDomain index
+// from silent misses on future mixed-case edits.
 const REQUIRED_GEO_FIELDS = ["source_country", "source_region", "language", "is_global_source"];
 for (const feed of RSS_FEEDS) {
   for (const field of REQUIRED_GEO_FIELDS) {
@@ -69,11 +83,22 @@ for (const feed of RSS_FEEDS) {
       throw new Error(`rss-feeds.js: feed ${feed.url} is missing required geo field "${field}"`);
     }
   }
+  if (typeof feed.domain !== "string" || feed.domain !== feed.domain.toLowerCase()) {
+    throw new Error(`rss-feeds.js: feed ${feed.url} domain "${feed.domain}" must be lowercase`);
+  }
+  if (feed.source_country !== feed.source_country.toLowerCase() || feed.source_country.length !== 2) {
+    throw new Error(`rss-feeds.js: feed ${feed.url} source_country "${feed.source_country}" must be lowercase ISO 3166-1 alpha-2`);
+  }
+  if (feed.language !== feed.language.toLowerCase() || feed.language.length !== 2) {
+    throw new Error(`rss-feeds.js: feed ${feed.url} language "${feed.language}" must be lowercase ISO 639-1`);
+  }
 }
 
 // ── Domain lookup (indexed) ───────────────────────────────────────────────────
 // Same domain may appear under multiple categories (e.g. bbc.com). Source
-// fields are domain-invariant, so we return the first entry per domain.
+// fields are domain-invariant, so we return the first entry per domain. Keys
+// are guaranteed lowercase by the validation pass above, so callers can pass
+// any casing safely.
 const FEEDS_BY_DOMAIN = new Map();
 for (const feed of RSS_FEEDS) {
   if (!FEEDS_BY_DOMAIN.has(feed.domain)) {
