@@ -3,3 +3,7 @@
 node_modules
 *.test.js
 test/
+local.settings.json
+peek-dlq.js
+purge-dlq.js
+replay-dlq.js
