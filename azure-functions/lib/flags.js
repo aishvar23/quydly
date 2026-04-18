@@ -1,21 +1,16 @@
 const FLAGS = {
-  activeStrategy:        "editorial",
-  premiumEnabled:         false,
-  beatEnabled:            false,
-  customMixEnabled:       false,
-  showStrategyHint:       true,
-  freeQuestionsPerDay:    5,
-  premiumQuestionsPerDay: 10,
-
   scoring: {
     cluster: {
-      eligible: 20,
-      optional: 12,
+      eligible: 20, // cluster_score >= eligible → send to LLM
+      optional: 12, // cluster_score >= optional → conditional send
+      // < optional → discard
     },
     story: {
-      publish: 60,
-      review:  35,
+      publish: 60, // story_score >= publish → publish candidate
+      review:  35, // story_score >= review  → flag for manual review
+      // < review → reject
     },
   },
 };
+
 export default FLAGS;

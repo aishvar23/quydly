@@ -25,6 +25,7 @@ quydly/
 ├── SPEC.md                ← full architecture detail
 ├── quydly.jsx             ← working web prototype — UX source of truth
 ├── config/
+│   ├── flags.js           ← frontend feature flags (activeStrategy, premiumEnabled, etc.)
 │   └── categories.js      ← ALL category data (one place only)
 ├── frontend/              ← React Native (Expo)
 │   └── screens/
@@ -41,7 +42,7 @@ quydly/
 │   │   ├── canonicalise.js
 │   │   ├── nlp.js
 │   │   ├── scoring.js     ← imports FLAGS from ./flags.js
-│   │   ├── flags.js       ← ALL feature flags (pipeline)
+│   │   ├── flags.js       ← pipeline scoring thresholds only
 │   │   └── rss-feeds.js   ← ALL RSS feeds
 │   ├── discover/          ← TimerTrigger, every 30 min → scrape-queue
 │   ├── article-scraper/   ← ServiceBusTrigger on scrape-queue
@@ -68,7 +69,7 @@ quydly/
 2. **CreditManager is abstract** — `FreeCreditManager` implements it for pilot; `PremiumCreditManager` stubs for v2
 3. **ContentStrategy is injected** — 3 implementations, switched via `FLAGS.activeStrategy`
 4. **Question card is category-agnostic** — receives a question object, renders it, doesn't know how it was sourced
-5. **One flags file** — `azure-functions/lib/flags.js` is the only place pipeline feature flags live
+5. **Two flags files, separate concerns** — `config/flags.js` for frontend flags; `azure-functions/lib/flags.js` for pipeline scoring thresholds only
 6. **Stripe is a stub** — scaffold the webhook handler, leave implementation empty
 
 ## Key References
