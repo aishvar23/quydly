@@ -12,32 +12,8 @@
       "schedule": "0 7 * * *"
     },
     {
-      "path": "/api/cron/discover",
-      "schedule": "0 5 * * *"
-    },
-    {
-      "path": "/api/cron/process",
-      "schedule": "0 6 * * *"
-    },
-    {
       "path": "/api/cron/cleanup",
       "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/cron/cluster",
-      "schedule": "30 6 * * *"
-    },
-    {
-      "path": "/api/cron/synthesize",
-      "schedule": "45 6 * * *"
     }
-  ],
-  "functions": {
-    "api/cron/process.js": {
-      "maxDuration": 300
-    },
-    "api/cron/synthesize.js": {
-      "maxDuration": 300
-    }
-  }
+  ]
 }

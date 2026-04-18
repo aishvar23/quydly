@@ -332,23 +332,27 @@ All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageShare
 
 ## Phase 9 — Migration Phase A: Parallel Scraping
 
+> **Skipped** — hard cutover taken directly to Phase 11.
+
 | # | Task | Status |
 |---|------|--------|
-| 9.1 | Modify Vercel `api/cron/discover.js`: after existing flow, also send URLs to scrape-queue via AZURE_SERVICE_BUS_CONNECTION_STRING (Send-only SAS) | ⬜ |
-| 9.2 | Run both Vercel process.js + Azure article-scraper for 48h | ⬜ |
-| 9.3 | Validate continuous growth: `SELECT COUNT(*), DATE_TRUNC('hour', ingested_at) FROM raw_articles GROUP BY 2 ORDER BY 2` — should show growth across all hours, not just one spike | ⬜ |
-| 9.4 | Confirm article count: Azure should deliver 5–8× more articles than Vercel-only baseline | ⬜ |
+| 9.1 | Modify Vercel `api/cron/discover.js`: after existing flow, also send URLs to scrape-queue via AZURE_SERVICE_BUS_CONNECTION_STRING (Send-only SAS) | ❌ skipped |
+| 9.2 | Run both Vercel process.js + Azure article-scraper for 48h | ❌ skipped |
+| 9.3 | Validate continuous growth: `SELECT COUNT(*), DATE_TRUNC('hour', ingested_at) FROM raw_articles GROUP BY 2 ORDER BY 2` — should show growth across all hours, not just one spike | ❌ skipped |
+| 9.4 | Confirm article count: Azure should deliver 5–8× more articles than Vercel-only baseline | ❌ skipped |
 
 ---
 
 ## Phase 10 — Migration Phase B: Parallel Clustering + Synthesis
 
+> **Skipped** — hard cutover taken directly to Phase 11.
+
 | # | Task | Status |
 |---|------|--------|
-| 10.1 | Deploy article-clusterer + story-synthesizer | ⬜ |
-| 10.2 | Run alongside Vercel cluster + synthesize crons for 48h | ⬜ |
-| 10.3 | Validate: `SELECT COUNT(*) FROM stories WHERE published_at > NOW() - INTERVAL '24 hours'` ≥ 20 | ⬜ |
-| 10.4 | Spot-check 5 stories: verify headline accurate, summary neutral, category-appropriate | ⬜ |
+| 10.1 | Deploy article-clusterer + story-synthesizer | ❌ skipped |
+| 10.2 | Run alongside Vercel cluster + synthesize crons for 48h | ❌ skipped |
+| 10.3 | Validate: `SELECT COUNT(*) FROM stories WHERE published_at > NOW() - INTERVAL '24 hours'` ≥ 20 | ❌ skipped |
+| 10.4 | Spot-check 5 stories: verify headline accurate, summary neutral, category-appropriate | ❌ skipped |
 
 ---
 
@@ -356,7 +360,7 @@ All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageShare
 
 | # | Task | Status |
 |---|------|--------|
-| 11.1 | Remove from `vercel.json` crons: `api/cron/discover`, `api/cron/process`, `api/cron/cluster`, `api/cron/synthesize` | ⬜ |
+| 11.1 | Remove from `vercel.json` crons: `api/cron/discover`, `api/cron/process`, `api/cron/cluster`, `api/cron/synthesize` | ✅ |
 | 11.2 | Deploy Vercel — confirm generate + cleanup crons still present | ⬜ |
 | 11.3 | Revoke Send-only SAS policy `quydly-pipeline-discover-send` in Azure | ⬜ |
 | 11.4 | Remove `AZURE_SERVICE_BUS_CONNECTION_STRING` from Vercel env | ⬜ |
@@ -369,7 +373,7 @@ All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageShare
 
 | # | Task | Status |
 |---|------|--------|
-| 12.1 | Delete Vercel handler files: `api/cron/discover.js`, `api/cron/process.js`, `api/cron/cluster.js`, `api/cron/synthesize.js` | ⬜ |
+| 12.1 | Delete Vercel handler files: `api/cron/discover.js`, `api/cron/process.js`, `api/cron/cluster.js`, `api/cron/synthesize.js` | ✅ |
 | 12.2 | Update `CLAUDE.md`: add `azure-functions/` to repo structure; note shared utils duplication | ⬜ |
 | 12.3 | Update `docs/rss-pipeline-design.md` and `docs/gold-set-pipeline-design.md`: add migration note, link to this design doc | ⬜ |
 
