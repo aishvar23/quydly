@@ -313,24 +313,20 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 8.1 | Create Azure Monitor alert: `scrape-queue/$deadletterqueue` Active Message Count > 0 → email `aishvar.suhane@gmail.com` | ⬜ |
-| 8.2 | Create Azure Monitor alert: `synthesize-queue/$deadletterqueue` Active Message Count > 0 → email | ⬜ |
-| 8.3 | Test DLQ: force a scraper error (invalid URL with correct format), confirm message dead-lettered after 5 delivery attempts | ⬜ |
-| 8.4 | Document reprocessing: use Azure Service Bus Explorer (portal) to peek DLQ, move messages back to main queue | ⬜ |
+| 8.1 | Create Azure Monitor alert: `scrape-queue/$deadletterqueue` Active Message Count > 0 → email `aishvar.suhane@gmail.com` | ✅ |
+| 8.2 | Create Azure Monitor alert: `synthesize-queue/$deadletterqueue` Active Message Count > 0 → email | ✅ |
+| 8.3 | Test DLQ: force a scraper error (invalid URL with correct format), confirm message dead-lettered after 5 delivery attempts | ✅ |
+| 8.4 | Document reprocessing: use Azure Service Bus Explorer (portal) to peek DLQ, move messages back to main queue | ✅ |
 
-**DLQ reprocessing via CLI:**
-```bash
-# Peek dead-lettered messages
-az servicebus queue message peek \
-  --queue-name scrape-queue \
-  --namespace-name quydly-pipeline \
-  --resource-group quydly-pipeline-rg \
-  --sub-queue DeadLetter \
-  --message-count 10
+**DLQ reprocessing scripts (all run from `azure-functions/`):**
 
-# Move DLQ messages back: use Azure Service Bus Explorer in Azure Portal
-# (receive from $deadletterqueue, re-send to main queue, complete DLQ message)
-```
+| Script | When to use |
+|--------|-------------|
+| `node peek-dlq.js` | Diagnose — inspect dead-letter reason and URL before acting |
+| `node purge-dlq.js` | Discard — failures were domain blocks (403/404) or stale URLs not worth retrying |
+| `node replay-dlq.js` | Replay — transient infra issue (Redis down, Supabase timeout) is now fixed and messages are worth retrying |
+
+All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageSharedAccessKey) set in the environment.
 
 ---
 
