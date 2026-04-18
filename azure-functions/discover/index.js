@@ -25,7 +25,7 @@ export default async function discover(context, timer) {
   let feeds_ok        = 0;
   let feeds_failed    = 0;
   let urls_queued     = 0;
-  let urls_skipped    = 0;
+  let urls_skipped;
 
   // ── 1. Parse all RSS feeds in batches of FEED_BATCH_SIZE ──────────────────
   const candidates = []; // { url_hash, canonical_url, domain, category_id, authority_score, published_at, raw_url, title, summary }
