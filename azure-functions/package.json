@@ -1,0 +1,35 @@
+{
+  "name": "quydly-pipeline-fn",
+  "version": "1.0.0",
+  "description": "Azure Functions for the Quydly article pipeline",
+  "type": "module",
+  "scripts": {
+    "start": "func start",
+    "lint": "eslint .",
+    "test:discover": "node test/smoke-discover.js",
+    "test:scraper": "node test/smoke-scraper.js",
+    "test:scraper:send": "node test/send-scrape-messages.js",
+    "test:scraper:load": "node test/send-scrape-messages.js 200",
+    "test:clusterer": "node test/smoke-clusterer.js",
+    "test:synthesizer": "node test/send-synthesize-messages.js",
+    "test:synthesizer:idempotent": "node test/send-synthesize-messages.js --idempotent",
+    "test:verify": "node test/verify.js",
+    "test:peek": "node test/peek-queues.js",
+    "test:cleanup": "node test/cleanup-test-data.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@azure/service-bus": "^7.9.5",
+    "@mozilla/readability": "^0.5.0",
+    "@supabase/supabase-js": "^2.46.2",
+    "ioredis": "^5.4.1",
+    "jsdom": "^25.0.1",
+    "rss-parser": "^3.13.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

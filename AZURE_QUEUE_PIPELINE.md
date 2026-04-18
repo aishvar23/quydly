@@ -7,6 +7,8 @@ Full design: [`docs/azure-queue-pipeline-design.md`](docs/azure-queue-pipeline-d
 **Branch:** `infra/azure-queue-pipeline`
 **Status legend:** ⬜ todo · 🔄 in progress · ✅ done · ❌ blocked
 
+**Note:** All local verification steps (smoke tests, load tests, `func start`) will be performed on a separate dev machine via code pull. Pending items marked ⬜ reflect steps awaiting execution on that machine.
+
 ---
 
 ## Architecture (Steady State)
@@ -70,7 +72,7 @@ api/cron/synthesize.js  ← story-synthesizer SB Function
   "extensions": {
     "serviceBus": {
       "messageHandlerOptions": {
-        "autoComplete": false,
+        "autoComplete": true,
         "maxConcurrentCalls": 8
       }
     }
@@ -88,18 +90,21 @@ Note: `maxConcurrentCalls` and `autoComplete` are host-level settings — they a
 
 | # | Task | Status |
 |---|------|--------|
-| 1.1 | Create resource group: `quydly-pipeline-rg` in East US 2 | ⬜ |
-| 1.2 | Create Service Bus Namespace: `quydly-pipeline` (Standard tier) | ⬜ |
-| 1.3 | Create queue: `scrape-queue` — maxDelivery: 5, TTL: 7d, lock: 5 min | ⬜ |
-| 1.4 | Create queue: `synthesize-queue` — maxDelivery: 3, TTL: 2d, lock: 5 min | ⬜ |
-| 1.5 | Create Storage Account: `quydlypipelinesa` (Standard LRS) | ⬜ |
-| 1.6 | Create Function App: `quydly-pipeline-fn` (Consumption, Node 22) | ⬜ |
-| 1.7 | Create Application Insights + link to Function App | ⬜ |
-| 1.8 | Fetch `RootManageSharedAccessKey` connection string from Service Bus namespace | ⬜ |
-| 1.9 | Set Function App env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, `ANTHROPIC_API_KEY`, `AZURE_SERVICE_BUS_CONNECTION_STRING` (= RootManageSharedAccessKey connection string) | ⬜ |
-| 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ⬜ |
-| 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ⬜ |
-| 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ⬜ |
+| 1.1 | Create resource group: `quydly-pipeline-rg` in East US 2 | ✅ |
+| 1.2 | Create Service Bus Namespace: `quydly-pipeline` (Standard tier) | ✅ |
+| 1.3 | Create queue: `scrape-queue` — maxDelivery: 5, TTL: 7d, lock: 5 min | ✅ |
+| 1.4 | Create queue: `synthesize-queue` — maxDelivery: 3, TTL: 2d, lock: 5 min | ✅ |
+| 1.5 | Create Storage Account: `quydlypipelinesa` (Standard LRS) | ✅ |
+| 1.6 | Create Function App: `quydly-pipeline-fn` (Consumption, Node 22) | ✅ |
+| 1.7 | Create Application Insights + link to Function App | ✅ |
+| 1.8 | Fetch `RootManageSharedAccessKey` connection string from Service Bus namespace | ✅ |
+| 1.9 | Set Function App env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, `ANTHROPIC_API_KEY`, `AZURE_SERVICE_BUS_CONNECTION_STRING` (= RootManageSharedAccessKey connection string) | ✅ |
+| 1.10 | Create Send-only SAS policy `quydly-pipeline-discover-send` — for Vercel migration phase only | ✅ |
+| 1.11 | Add `AZURE_SERVICE_BUS_CONNECTION_STRING` (Send-only SAS value) to Vercel env — migration phase only, different value from Function App's | ✅ |
+| 1.12 | Verify dead-letter queues visible: `scrape-queue/$deadletterqueue`, `synthesize-queue/$deadletterqueue` | ✅ |
+| 1.13 | Create Azure Cache for Redis: `quydly-pipeline-redis` (Basic C0) | ✅ |
+| 1.14 | Get Redis connection string and set `REDIS_URL` in Function App env vars | ✅ |
+| 1.15 | Add `REDIS_URL` to `local.settings.json` for local dev | ✅ |
 
 **Azure CLI reference:**
 ```bash
@@ -153,6 +158,26 @@ az servicebus namespace authorization-rule keys list \
   --namespace-name quydly-pipeline \
   --resource-group quydly-pipeline-rg \
   --query primaryConnectionString -o tsv
+
+# Azure Cache for Redis (Basic C0 = 250MB, ~$16/mo)
+az redis create \
+  --name quydly-pipeline-redis \
+  --resource-group quydly-pipeline-rg \
+  --location eastus2 \
+  --sku Basic \
+  --vm-size C0
+
+az redis show \
+  --name quydly-pipeline-redis \
+  --resource-group quydly-pipeline-rg \
+  --query "[hostName,sslPort]" -o tsv
+
+az redis list-keys \
+  --name quydly-pipeline-redis \
+  --resource-group quydly-pipeline-rg \
+  --query primaryKey -o tsv
+
+# REDIS_URL format: rediss://:<accessKey>@<hostName>:<sslPort>
 ```
 
 ---
@@ -161,17 +186,17 @@ az servicebus namespace authorization-rule keys list \
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | Add `clustered_at timestamptz` column to `raw_articles` | ⬜ |
-| 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (ingested_at) WHERE clustered_at IS NULL AND status='DONE'` | ⬜ |
-| 2.3 | Add `synthesis_queued_at timestamptz` column to `clusters` | ⬜ |
-| 2.4 | Confirm: all existing `raw_articles` rows have `clustered_at = NULL` (correct — no backfill needed) | ⬜ |
+| 2.1 | Add `clustered_at timestamptz` column to `raw_articles` | ✅ |
+| 2.2 | Add partial index: `idx_raw_articles_unprocessed` on `raw_articles (scraped_at) WHERE clustered_at IS NULL AND status='DONE'` | ✅ |
+| 2.3 | Add `synthesis_queued_at timestamptz` column to `clusters` | ✅ |
+| 2.4 | Confirm: all existing `raw_articles` rows have `clustered_at = NULL` (correct — no backfill needed) | ✅ |
 
 **Migration SQL:**
 ```sql
 ALTER TABLE raw_articles ADD COLUMN IF NOT EXISTS clustered_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_raw_articles_unprocessed
-  ON raw_articles (ingested_at)
+  ON raw_articles (scraped_at)
   WHERE clustered_at IS NULL AND status = 'DONE';
 
 ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
@@ -183,15 +208,22 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 3.1 | Create `azure-functions/` top-level directory in repo | ⬜ |
-| 3.2 | Init Azure Functions v4 Node.js project in `azure-functions/` | ⬜ |
-| 3.3 | Create `azure-functions/host.json` with `autoComplete: false` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ⬜ |
-| 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ⬜ |
-| 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), Service Bus sender via connection string, Redis client | ⬜ |
-| 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ⬜ |
-| 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ⬜ |
-| 3.8 | Set up `.funcignore` | ⬜ |
-| 3.9 | Verify local: `func start` runs without errors | ⬜ |
+| 3.1 | Create `azure-functions/` top-level directory in repo | ✅ |
+| 3.2 | Init Azure Functions v4 Node.js project in `azure-functions/` | ✅ |
+| 3.3 | Create `azure-functions/host.json` with `autoComplete: true` and `maxConcurrentCalls: 8` (host-level, not per function.json) | ✅ |
+| 3.4 | Add `azure-functions/package.json`: `@azure/service-bus`, `@supabase/supabase-js`, `ioredis`, `@anthropic-ai/sdk`, `rss-parser`, `@mozilla/readability`, `jsdom` | ✅ |
+| 3.5 | Create `azure-functions/lib/clients.js` — lazy-init Supabase client (using `SUPABASE_SERVICE_KEY`), Service Bus sender via connection string, Redis client | ✅ |
+| 3.6 | Copy shared utilities into `azure-functions/lib/`: `canonicalise.js`, `nlp.js`, `scoring.js` | ✅ |
+| 3.7 | Add note to `CLAUDE.md`: these files are copies — if `backend/utils/*.js` changes, update `azure-functions/lib/` too | ✅ |
+| 3.8 | Set up `.funcignore` | ✅ |
+| 3.9 | Verify local: `cd azure-functions && npm install && func start` runs without errors | ✅ |
+
+**Prerequisites before Phase 3.9:**
+- **Azure Functions Core Tools** installed globally (`func` command available)
+  - Windows: `choco install azure-functions-core-tools-4` or download MSI from [releases](https://github.com/Azure/azure-functions-core-tools/releases)
+  - macOS/Linux: `brew tap azure/azure && brew install azure-functions-core-tools@4`
+- Run `npm install` in `azure-functions/` directory
+- Ensure `AZURE_SERVICE_BUS_CONNECTION_STRING`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `REDIS_URL`, and `ANTHROPIC_API_KEY` are set in local `.env` or shell environment
 
 **`function.json` template (Service Bus trigger — no concurrency settings here):**
 ```json
@@ -215,14 +247,14 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 4.1 | Create `azure-functions/discover/index.js` — TimerTrigger, `"0 */30 * * * *"` | ⬜ |
-| 4.2 | Port RSS fetch + canonicalise logic from `api/cron/discover.js` | ⬜ |
-| 4.3 | Dedup: `SELECT 1 FROM scrape_queue WHERE url_hash = $hash` — skip if exists | ⬜ |
-| 4.4 | For new URLs: INSERT scrape_queue (status=QUEUED) + send to scrape-queue SB | ⬜ |
-| 4.5 | Structured log: `{ event: "discover_run", feeds_attempted, feeds_ok, urls_queued, urls_skipped }` | ⬜ |
-| 4.6 | Local smoke test: temporarily set schedule to `"0 * * * * *"`, trigger manually, verify messages appear in scrape-queue | ⬜ |
-| 4.7 | Deploy to Function App, verify invocations in Application Insights | ⬜ |
-| 4.8 | Restore schedule to `"0 */30 * * * *"` before final deploy | ⬜ |
+| 4.1 | Create `azure-functions/discover/index.js` — TimerTrigger, `"0 */30 * * * *"` | ✅ |
+| 4.2 | Port RSS fetch + canonicalise logic from `api/cron/discover.js` | ✅ |
+| 4.3 | Dedup: `SELECT 1 FROM scrape_queue WHERE url_hash = $hash` — skip if exists | ✅ |
+| 4.4 | For new URLs: INSERT scrape_queue (status=QUEUED) + send to scrape-queue SB | ✅ |
+| 4.5 | Structured log: `{ event: "discover_run", feeds_attempted, feeds_ok, urls_queued, urls_skipped }` | ✅ |
+| 4.6 | Local smoke test: temporarily set schedule to `"0 * * * * *"`, trigger manually, verify messages appear in scrape-queue | ✅ |
+| 4.7 | Deploy to Function App, verify invocations in Application Insights | ✅ |
+| 4.8 | Restore schedule to `"0 */30 * * * *"` before final deploy | ✅ |
 
 ---
 
@@ -230,17 +262,17 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 5.1 | Create `azure-functions/article-scraper/index.js` — ServiceBusTrigger on `scrape-queue` | ⬜ |
-| 5.2 | Port scraping logic from `backend/services/scraper.js` + `processor.js` | ⬜ |
-| 5.3 | Implement Redis per-domain semaphore: INCR `domain_inflight:{domain}` with 30s TTL, cap at MAX_DOMAIN_CONCURRENCY=2; if over cap: `completeMessage()` + `scheduleMessages()` 5 min out (do NOT abandon — explicit abandon increments deliveryCount) | ⬜ |
-| 5.4 | DECR Redis key in finally block — always released on completion or error | ⬜ |
-| 5.5 | On failure: `throw` (not silent catch) — SB owns retry budget | ⬜ |
-| 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ⬜ |
-| 5.7 | UPDATE `scrape_queue` status: PROCESSING → DONE / PARTIAL / LOW_QUALITY / FAILED | ⬜ |
-| 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ⬜ |
-| 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ⬜ |
-| 5.10 | Deploy to Function App | ⬜ |
-| 5.11 | Monitor 24h: verify `raw_articles` count grows continuously (not in a single batch spike) | ⬜ |
+| 5.1 | Create `azure-functions/article-scraper/index.js` — ServiceBusTrigger on `scrape-queue` | ✅ |
+| 5.2 | Port scraping logic from `backend/services/scraper.js` + `processor.js` | ✅ |
+| 5.3 | Implement Redis per-domain semaphore: INCR `domain_inflight:{domain}` with 30s TTL, cap at MAX_DOMAIN_CONCURRENCY=2; if over cap: `completeMessage()` + `scheduleMessages()` 5 min out (do NOT abandon — explicit abandon increments deliveryCount) | ✅ |
+| 5.4 | DECR Redis key in finally block — always released on completion or error | ✅ |
+| 5.5 | On failure: `throw` (not silent catch) — SB owns retry budget | ✅ |
+| 5.6 | Idempotency: `INSERT INTO raw_articles ON CONFLICT (url_hash) DO NOTHING` | ✅ |
+| 5.7 | UPDATE `scrape_queue` status: PROCESSING → DONE / PARTIAL / LOW_QUALITY / FAILED | ✅ |
+| 5.8 | Local smoke test: manually send 10 messages to scrape-queue, verify `raw_articles` rows created | ✅ |
+| 5.9 | Load test: send 200 messages — verify all processed, Redis per-domain cap visible in logs | ✅ |
+| 5.10 | Deploy to Function App | ✅ |
+| 5.11 | Monitor 24h: verify `raw_articles` count grows continuously (not in a single batch spike) | ✅ |
 
 ---
 
@@ -248,15 +280,15 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Create `azure-functions/article-clusterer/index.js` — TimerTrigger, `"0 0 */2 * * *"` | ⬜ |
-| 6.2 | Port clustering logic from `backend/engine/clusterer.js` | ⬜ |
-| 6.3 | Article SELECT: `WHERE clustered_at IS NULL AND status = 'DONE'` — strictly unclustered only (no OR clause, no time-window reopening) | ⬜ |
-| 6.4 | After each cluster INSERT/UPDATE: `UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id` | ⬜ |
-| 6.5 | Synthesize-queue enqueue guard: send only if `synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours'` | ⬜ |
-| 6.6 | Ordering: `UPDATE clusters SET synthesis_queued_at = NOW()` BEFORE `send to synthesize-queue` | ⬜ |
-| 6.7 | Local smoke test: seed 50 raw_articles rows (clustered_at=NULL, status=DONE), trigger timer, verify clusters created and synthesize-queue has messages | ⬜ |
-| 6.8 | Deploy to Function App | ⬜ |
-| 6.9 | Monitor 24h: verify clusters populate on 2h cadence, not just at 6:30AM | ⬜ |
+| 6.1 | Create `azure-functions/article-clusterer/index.js` — TimerTrigger, `"0 0 */2 * * *"` | ✅ |
+| 6.2 | Port clustering logic from `backend/engine/clusterer.js` | ✅ |
+| 6.3 | Article SELECT: `WHERE clustered_at IS NULL AND status = 'DONE'` — strictly unclustered only (no OR clause, no time-window reopening) | ✅ |
+| 6.4 | After each cluster INSERT/UPDATE: `UPDATE raw_articles SET clustered_at = NOW() WHERE id = $article_id` | ✅ |
+| 6.5 | Synthesize-queue enqueue guard: send only if `synthesis_queued_at IS NULL OR synthesis_queued_at < NOW() - INTERVAL '4 hours'` | ✅ |
+| 6.6 | Ordering: `UPDATE clusters SET synthesis_queued_at = NOW()` BEFORE `send to synthesize-queue` | ✅ |
+| 6.7 | Local smoke test: run clusterer against real unclustered articles, verify clusters created and synthesize-queue has messages | ✅ |
+| 6.8 | Deploy to Function App | ✅ |
+| 6.9 | Monitor 24h: verify clusters populate on 2h cadence, not just at 6:30AM | ✅ |
 
 ---
 
@@ -264,16 +296,16 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 7.1 | Create `azure-functions/story-synthesizer/index.js` — ServiceBusTrigger on `synthesize-queue` | ⬜ |
-| 7.2 | Port synthesis logic from `backend/engine/synthesizer.js` — prompts, scoring, River model unchanged | ⬜ |
-| 7.3 | Entry point: receive `{ cluster_id }`, SELECT cluster by ID directly (not batch SELECT) | ⬜ |
-| 7.4 | Idempotency check: if `cluster.status ≠ 'PENDING'` → complete message, return | ⬜ |
-| 7.5 | Internal p-limit concurrency: 3 simultaneous Claude calls max (not host.json — p-limit applied inside the function) | ⬜ |
-| 7.6 | On Claude API error: throw — SB retries up to maxDeliveryCount=3 | ⬜ |
-| 7.7 | Smoke test: manually enqueue 5 eligible cluster IDs → verify stories created | ⬜ |
-| 7.8 | Verify idempotency: enqueue same cluster_id twice — verify story is updated (River model), not duplicated | ⬜ |
-| 7.9 | Deploy to Function App | ⬜ |
-| 7.10 | Monitor 24h: verify stories table populates throughout the day (not just before 7AM) | ⬜ |
+| 7.1 | Create `azure-functions/story-synthesizer/index.js` — ServiceBusTrigger on `synthesize-queue` | ✅ |
+| 7.2 | Port synthesis logic from `backend/engine/synthesizer.js` — prompts, scoring, River model unchanged | ✅ |
+| 7.3 | Entry point: receive `{ cluster_id }`, SELECT cluster by ID directly (not batch SELECT) | ✅ |
+| 7.4 | Idempotency check: if `cluster.status ≠ 'PENDING'` → complete message, return | ✅ |
+| 7.5 | Internal p-limit concurrency: 3 simultaneous Claude calls max (not host.json — p-limit applied inside the function) | ✅ |
+| 7.6 | On Claude API error: throw — SB retries up to maxDeliveryCount=3 | ✅ |
+| 7.7 | Smoke test: manually enqueue 5 eligible cluster IDs → verify stories created | ✅ |
+| 7.8 | Verify idempotency: enqueue same cluster_id twice — verify story is updated (River model), not duplicated | ✅ |
+| 7.9 | Deploy to Function App | ✅ |
+| 7.10 | Monitor 24h: verify stories table populates throughout the day (not just before 7AM) | ✅ |
 
 ---
 
@@ -281,24 +313,20 @@ ALTER TABLE clusters ADD COLUMN IF NOT EXISTS synthesis_queued_at timestamptz;
 
 | # | Task | Status |
 |---|------|--------|
-| 8.1 | Create Azure Monitor alert: `scrape-queue/$deadletterqueue` Active Message Count > 0 → email `aishvar.suhane@gmail.com` | ⬜ |
-| 8.2 | Create Azure Monitor alert: `synthesize-queue/$deadletterqueue` Active Message Count > 0 → email | ⬜ |
-| 8.3 | Test DLQ: force a scraper error (invalid URL with correct format), confirm message dead-lettered after 5 delivery attempts | ⬜ |
-| 8.4 | Document reprocessing: use Azure Service Bus Explorer (portal) to peek DLQ, move messages back to main queue | ⬜ |
+| 8.1 | Create Azure Monitor alert: `scrape-queue/$deadletterqueue` Active Message Count > 0 → email `aishvar.suhane@gmail.com` | ✅ |
+| 8.2 | Create Azure Monitor alert: `synthesize-queue/$deadletterqueue` Active Message Count > 0 → email | ✅ |
+| 8.3 | Test DLQ: force a scraper error (invalid URL with correct format), confirm message dead-lettered after 5 delivery attempts | ✅ |
+| 8.4 | Document reprocessing: use Azure Service Bus Explorer (portal) to peek DLQ, move messages back to main queue | ✅ |
 
-**DLQ reprocessing via CLI:**
-```bash
-# Peek dead-lettered messages
-az servicebus queue message peek \
-  --queue-name scrape-queue \
-  --namespace-name quydly-pipeline \
-  --resource-group quydly-pipeline-rg \
-  --sub-queue DeadLetter \
-  --message-count 10
+**DLQ reprocessing scripts (all run from `azure-functions/`):**
 
-# Move DLQ messages back: use Azure Service Bus Explorer in Azure Portal
-# (receive from $deadletterqueue, re-send to main queue, complete DLQ message)
-```
+| Script | When to use |
+|--------|-------------|
+| `node peek-dlq.js` | Diagnose — inspect dead-letter reason and URL before acting |
+| `node purge-dlq.js` | Discard — failures were domain blocks (403/404) or stale URLs not worth retrying |
+| `node replay-dlq.js` | Replay — transient infra issue (Redis down, Supabase timeout) is now fixed and messages are worth retrying |
+
+All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageSharedAccessKey) set in the environment.
 
 ---
 

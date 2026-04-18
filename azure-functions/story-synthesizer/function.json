@@ -1,0 +1,11 @@
+{
+  "bindings": [
+    {
+      "name": "message",
+      "type": "serviceBusTrigger",
+      "direction": "in",
+      "queueName": "synthesize-queue",
+      "connection": "AZURE_SERVICE_BUS_CONNECTION_STRING"
+    }
+  ]
+}
