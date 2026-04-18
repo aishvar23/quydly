@@ -1,6 +1,3 @@
-// Copy of backend/utils/canonicalise.js — kept in sync manually.
-// If backend/utils/canonicalise.js changes, update this file too (see CLAUDE.md).
-
 import { createHash } from "crypto";
 
 const STRIP_PARAMS = /^(utm_.*|ref|source|campaign|fbclid|gclid|mc_.*)$/i;

@@ -1,7 +1,3 @@
-// Copy of backend/utils/scoring.js — kept in sync manually.
-// If backend/utils/scoring.js changes, update this file too (see CLAUDE.md).
-// Import adjusted: FLAGS sourced from ./flags.js (not config/).
-
 import FLAGS from "./flags.js";
 
 const { cluster: CLUSTER_T, story: STORY_T } = FLAGS.scoring;

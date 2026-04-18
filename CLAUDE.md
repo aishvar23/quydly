@@ -25,7 +25,6 @@ quydly/
 ├── SPEC.md                ← full architecture detail
 ├── quydly.jsx             ← working web prototype — UX source of truth
 ├── config/
-│   ├── flags.js           ← ALL feature flags (one place only)
 │   └── categories.js      ← ALL category data (one place only)
 ├── frontend/              ← React Native (Expo)
 │   └── screens/
@@ -37,13 +36,13 @@ quydly/
 ├── azure-functions/       ← Azure Function App (pipeline workers)
 │   ├── host.json          ← autoComplete: false, maxConcurrentCalls: 8
 │   ├── package.json
-│   ├── lib/               ← shared utils (COPIES — see duplication note below)
+│   ├── lib/               ← canonical shared utils (authoritative — no backend copy)
 │   │   ├── clients.js     ← lazy Supabase, ServiceBus, Redis clients
 │   │   ├── canonicalise.js
 │   │   ├── nlp.js
-│   │   ├── scoring.js
-│   │   ├── flags.js
-│   │   └── rss-feeds.js
+│   │   ├── scoring.js     ← imports FLAGS from ./flags.js
+│   │   ├── flags.js       ← ALL feature flags (pipeline)
+│   │   └── rss-feeds.js   ← ALL RSS feeds
 │   ├── discover/          ← TimerTrigger, every 30 min → scrape-queue
 │   ├── article-scraper/   ← ServiceBusTrigger on scrape-queue
 │   ├── article-clusterer/ ← TimerTrigger, every 2h → synthesize-queue
@@ -56,6 +55,7 @@ quydly/
     ├── jobs/
     │   └── generateDaily.js  ← 7AM cron
     ├── services/
+    │   ├── articleStore.js   ← Supabase story fetch for quiz generation
     │   ├── newsdata.js    ← NewsData.io client
     │   ├── claude.js      ← Claude API question generator
     │   └── stripe.js      ← STUB ONLY — do not implement
@@ -63,24 +63,12 @@ quydly/
         └── schema.sql     ← Supabase schema
 ```
 
-## Shared Utility Duplication (Azure Functions)
-
-`azure-functions/lib/` contains **copies** of:
-- `backend/utils/canonicalise.js` → `azure-functions/lib/canonicalise.js`
-- `backend/utils/nlp.js`          → `azure-functions/lib/nlp.js`
-- `backend/utils/scoring.js`      → `azure-functions/lib/scoring.js`
-- `config/flags.js`               → `azure-functions/lib/flags.js`
-- `config/rss-feeds.js`           → `azure-functions/lib/rss-feeds.js`
-
-**If any source file changes, update the copy in `azure-functions/lib/` too.**
-The Azure Functions package is a self-contained deployment unit — it cannot reach outside its directory.
-
 ## Non-Negotiable Architecture Rules
 1. **Config only** — never hardcode categories or mix in UI; always import from `config/`
 2. **CreditManager is abstract** — `FreeCreditManager` implements it for pilot; `PremiumCreditManager` stubs for v2
 3. **ContentStrategy is injected** — 3 implementations, switched via `FLAGS.activeStrategy`
 4. **Question card is category-agnostic** — receives a question object, renders it, doesn't know how it was sourced
-5. **One flags file** — `config/flags.js` is the only place feature flags live
+5. **One flags file** — `azure-functions/lib/flags.js` is the only place pipeline feature flags live
 6. **Stripe is a stub** — scaffold the webhook handler, leave implementation empty
 
 ## Key References

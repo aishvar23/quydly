@@ -1,6 +1,3 @@
-// Copy of config/flags.js — kept in sync manually.
-// If config/flags.js changes, update this file too (see CLAUDE.md).
-
 const FLAGS = {
   activeStrategy:        "editorial",
   premiumEnabled:         false,

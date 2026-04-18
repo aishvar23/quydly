@@ -361,10 +361,10 @@ All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageShare
 | # | Task | Status |
 |---|------|--------|
 | 11.1 | Remove from `vercel.json` crons: `api/cron/discover`, `api/cron/process`, `api/cron/cluster`, `api/cron/synthesize` | ✅ |
-| 11.2 | Deploy Vercel — confirm generate + cleanup crons still present | ⬜ |
-| 11.3 | Revoke Send-only SAS policy `quydly-pipeline-discover-send` in Azure | ⬜ |
-| 11.4 | Remove `AZURE_SERVICE_BUS_CONNECTION_STRING` from Vercel env | ⬜ |
-| 11.5 | Monitor 7AM generate cron — confirm quiz generation unchanged | ⬜ |
+| 11.2 | Deploy Vercel — confirm generate + cleanup crons still present | ✅ |
+| 11.3 | Revoke Send-only SAS policy `quydly-pipeline-discover-send` in Azure | ✅ |
+| 11.4 | Remove `AZURE_SERVICE_BUS_CONNECTION_STRING` from Vercel env | ✅ |
+| 11.5 | Monitor 7AM generate cron — confirm quiz generation unchanged | ✅ |
 | 11.6 | Monitor 48h post-cutover: no regressions | ⬜ |
 
 ---
@@ -374,7 +374,7 @@ All three scripts require `AZURE_SERVICE_BUS_CONNECTION_STRING` (RootManageShare
 | # | Task | Status |
 |---|------|--------|
 | 12.1 | Delete Vercel handler files: `api/cron/discover.js`, `api/cron/process.js`, `api/cron/cluster.js`, `api/cron/synthesize.js` | ✅ |
-| 12.2 | Update `CLAUDE.md`: add `azure-functions/` to repo structure; note shared utils duplication | ⬜ |
+| 12.2 | Update `CLAUDE.md`: updated repo structure; removed duplication note (lib/ files are now canonical, no backend copies) | ✅ |
 | 12.3 | Update `docs/rss-pipeline-design.md` and `docs/gold-set-pipeline-design.md`: add migration note, link to this design doc | ⬜ |
 
 ---
