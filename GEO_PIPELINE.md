@@ -120,8 +120,8 @@ All additive. No existing column semantics change.
 | # | Task | Status |
 |---|------|--------|
 | 4.1 | Create `backend/db/migration_geo_pipeline.sql` with all ALTER/CREATE statements below | ✅ |
-| 4.2 | Run migration in Supabase SQL editor | ⬜ |
-| 4.3 | Verify new columns visible on `raw_articles`, `clusters`, `stories`; verify `story_audiences` table + indexes | ⬜ |
+| 4.2 | Run migration in Supabase SQL editor | ✅ |
+| 4.3 | Verify new columns visible on `raw_articles`, `clusters`, `stories`; verify `story_audiences` table + indexes | ✅ |
 
 **Migration SQL:**
 ```sql
