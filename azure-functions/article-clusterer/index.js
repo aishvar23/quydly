@@ -14,6 +14,7 @@
 import { getSupabase, getSbSender } from "../lib/clients.js";
 import { extractEntities, hasHighSignalEntity } from "../lib/nlp.js";
 import { computeClusterScore } from "../lib/scoring.js";
+import { computePrimaryGeos, computeClusterGeoScores } from "../lib/geo.js";
 import FLAGS from "../lib/flags.js";
 
 const MIN_ARTICLE_COUNT    = 2;
@@ -66,7 +67,7 @@ export default async function articleClusterer(context, timer) {
   // No time-window reopening — an article processed here is never re-selected.
   const { data: articles, error: artError } = await supabase
     .from("raw_articles")
-    .select("id, title, description, domain, category_id, authority_score, published_at")
+    .select("id, title, description, domain, category_id, authority_score, published_at, mentioned_geos, source_country, geo_scores")
     .eq("status", "DONE")
     .is("clustered_at", null)
     .order("authority_score", { ascending: false })
@@ -103,9 +104,38 @@ export default async function articleClusterer(context, timer) {
     _isNew:               false,
     _dirty:               false,
     _newArticleIds:       [],   // articles added this run — mark their clustered_at after persist
+    _memberGeos:          [],   // { mentioned_geos, source_country, geo_scores } per member article
   }));
 
   const alreadyClustered = new Set(workingSet.flatMap(c => c.article_ids));
+
+  // ── 2b. Batch-load member geo data for existing PENDING clusters ──────────
+  // Needed so primary_geos / geo_scores / source_countries can be recomputed
+  // from the full member set (not just articles added this run). One SELECT,
+  // then indexed into each cluster's _memberGeos.
+  const allMemberIds = [...new Set(workingSet.flatMap(c => c.article_ids))];
+  if (allMemberIds.length > 0) {
+    const { data: memberRows, error: memErr } = await supabase
+      .from("raw_articles")
+      .select("id, mentioned_geos, source_country, geo_scores")
+      .in("id", allMemberIds);
+
+    if (memErr) throw new Error(`[article-clusterer] fetch member geos: ${memErr.message}`);
+
+    const geoById = new Map(
+      (memberRows ?? []).map(r => [r.id, {
+        mentioned_geos: Array.isArray(r.mentioned_geos) ? r.mentioned_geos : [],
+        source_country: r.source_country ?? null,
+        geo_scores:     r.geo_scores ?? {},
+      }]),
+    );
+    for (const c of workingSet) {
+      for (const id of c.article_ids) {
+        const g = geoById.get(id);
+        if (g) c._memberGeos.push(g);
+      }
+    }
+  }
 
   let articles_processed         = 0;
   let articles_skipped_no_signal = 0;
@@ -135,6 +165,12 @@ export default async function articleClusterer(context, timer) {
 
     const best = findBestMatch(entities, article.category_id, workingSet);
 
+    const articleGeo = {
+      mentioned_geos: Array.isArray(article.mentioned_geos) ? article.mentioned_geos : [],
+      source_country: article.source_country ?? null,
+      geo_scores:     article.geo_scores ?? {},
+    };
+
     if (best) {
       best.article_ids    = [...new Set([...best.article_ids, article.id])];
       best.unique_domains = [...new Set([...best.unique_domains, ...(article.domain ? [article.domain] : [])])];
@@ -142,6 +178,7 @@ export default async function articleClusterer(context, timer) {
       best.updated_at     = now;
       best._dirty         = true;
       best._newArticleIds.push(article.id);
+      best._memberGeos.push(articleGeo);
       alreadyClustered.add(article.id);
     } else {
       articles_skipped_no_match++;
@@ -157,6 +194,7 @@ export default async function articleClusterer(context, timer) {
         _isNew:              true,
         _dirty:              false,
         _newArticleIds:      [article.id],
+        _memberGeos:         [articleGeo],
       });
       alreadyClustered.add(article.id);
     }
@@ -174,6 +212,15 @@ export default async function articleClusterer(context, timer) {
   for (const cluster of workingSet) {
     const score = computeClusterScore(cluster);
 
+    // Geo aggregates — computed from the full member set (existing members
+    // loaded at start, plus any added this run). Helpers handle empty/missing
+    // fields as zero so pre-Phase-5 articles don't crash the pipeline.
+    const source_countries = [
+      ...new Set(cluster._memberGeos.map(g => g.source_country).filter(Boolean)),
+    ].sort();
+    const primary_geos = computePrimaryGeos(cluster._memberGeos);
+    const geo_scores   = computeClusterGeoScores(cluster._memberGeos);
+
     const writePayload = {
       primary_entities: cluster.primary_entities,
       article_ids:      cluster.article_ids,
@@ -182,6 +229,9 @@ export default async function articleClusterer(context, timer) {
       last_scored_at:   now,
       updated_at:       now,
       status:           "PENDING",
+      primary_geos,
+      geo_scores,
+      source_countries,
     };
 
     let persisted   = false;
