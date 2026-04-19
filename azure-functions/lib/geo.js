@@ -83,8 +83,14 @@ export const REGIONS = {
 // ── Intergovernmental / geopolitical entities (text-based detection) ─────────
 // Used by the `global` audience scorer — presence of any bumps the geopolitical
 // term. Lowercase, word-boundary matched.
+//
+// Bare "who" is omitted intentionally — it matches ordinary prose ("people
+// who…"), which would add a fixed 0.30 to every global-audience score on
+// articles that have nothing to do with the organization. Use the expanded
+// form so only real references trigger the term.
 const GEOPOLITICAL_ENTITIES = [
-  "united nations", "nato", "g7", "g20", "imf", "who", "wto",
+  "united nations", "nato", "g7", "g20", "imf", "wto",
+  "world health organization",
   "opec", "asean", "oecd", "brics", "european union", "eu summit",
   "world bank", "unhcr", "icc", "iaea", "unesco",
 ];
@@ -151,15 +157,31 @@ export function extractMentionedGeos(text) {
 
 // ── mentionStrength ──────────────────────────────────────────────────────────
 // Rough "how much of this article is about country X" signal.
-// Sums word-boundary match counts across X's aliases, then applies
-// min(1.0, count × 0.25). Three+ mentions saturate.
+// Match longest aliases first and mask their spans so overlapping aliases
+// (e.g. "new delhi" + "delhi", "sri lanka" + the word "sri") count as one hit
+// rather than two. Then apply min(1.0, count × 0.25) — three+ mentions saturate.
 export function mentionStrength(text, countryCode) {
   if (!text || !countryCode) return 0;
   const entry = GEO_ALIASES[countryCode];
   if (!entry) return 0;
-  const lower = text.toLowerCase();
+  const sorted = [...entry.aliases]
+    .map((a) => a.toLowerCase())
+    .sort((a, b) => {
+      const wa = a.split(/\s+/).length;
+      const wb = b.split(/\s+/).length;
+      if (wa !== wb) return wb - wa;
+      return b.length - a.length;
+    });
+  let scratch = text.toLowerCase();
   let total = 0;
-  for (const alias of entry.aliases) total += countMatches(lower, alias);
+  for (const alias of sorted) {
+    const re = new RegExp(`\\b${escapeRegex(alias)}\\b`, "g");
+    const m = scratch.match(re);
+    if (m) {
+      total += m.length;
+      scratch = scratch.replace(re, " ");
+    }
+  }
   return Math.min(1.0, total * 0.25);
 }
 
@@ -204,17 +226,22 @@ export function computeArticleAudienceScore(
   const lower = (text ?? "").toLowerCase();
 
   if (audience === "india") {
-    const indiaOrSouthAsiaMentioned =
-      mentions.includes("in") ||
-      REGIONS.south_asia.some((c) => c !== "in" && mentions.includes(c));
-    const strength = indiaOrSouthAsiaMentioned
-      ? Math.max(
-          mentionStrength(text, "in"),
-          ...REGIONS.south_asia
-            .filter((c) => c !== "in")
-            .map((c) => mentionStrength(text, c)),
-        )
-      : 0;
+    // Audience scope: India-primary with South Asia as a softened fallback
+    // (subcontinent events read as regionally relevant to Indian readers,
+    // but weaker than coverage of India itself). A peer-country mention
+    // (pk/bd/lk/np) contributes at SA_PEER_DISCOUNT × the equivalent India
+    // mention strength so a Pakistan-only article cannot score like an
+    // India-only article.
+    const SA_PEER_DISCOUNT = 0.5;
+    const indiaStrength = mentions.includes("in") ? mentionStrength(text, "in") : 0;
+    let peerStrength = 0;
+    for (const c of REGIONS.south_asia) {
+      if (c === "in") continue;
+      if (mentions.includes(c)) {
+        peerStrength = Math.max(peerStrength, mentionStrength(text, c) * SA_PEER_DISCOUNT);
+      }
+    }
+    const strength = Math.max(indiaStrength, peerStrength);
 
     const globalTopicWithIndiaHook =
       mentions.includes("in") && hasAnyKeyword(lower, GLOBAL_TOPIC_KEYWORDS)

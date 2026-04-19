@@ -84,6 +84,17 @@ test("mentionStrength: unknown country returns 0", () => {
   assert.equal(mentionStrength("India", "zz"), 0);
 });
 
+test("mentionStrength: overlapping aliases count once, not twice", () => {
+  // 'new delhi' must consume the 'delhi' span — one mention = 0.25,
+  // not 0.50 from matching both aliases independently.
+  assert.equal(mentionStrength("New Delhi hosted the talks.", "in"), 0.25);
+});
+
+test("mentionStrength: two distinct mentions still sum", () => {
+  // Separate India-alias mentions aren't overlapping, so they add up.
+  assert.equal(mentionStrength("Modi arrived in Mumbai.", "in"), 0.5);
+});
+
 // ── computeArticleAudienceScore ──────────────────────────────────────────────
 
 test("computeArticleAudienceScore india: domestic source hits 4 of 4 terms", () => {
@@ -96,6 +107,37 @@ test("computeArticleAudienceScore india: domestic source hits 4 of 4 terms", () 
   );
   // 0.40 + 0.35*mentionStrength + 0.15 + 0.10 (climate summit keyword + 'in' mentioned)
   assert.ok(score > 0.6, `expected > 0.6, got ${score}`);
+});
+
+test("computeArticleAudienceScore india: Pakistan-only article scored against india audience", () => {
+  // Documents the 'India-primary + discounted South Asia fallback' rule.
+  // A Pakistan-only article on a Pakistani source:
+  //   - source_country='in' term: 0
+  //   - mention term: peer SA strength × 0.5 discount
+  //   - source_region='south_asia' term: 0.15
+  //   - india-hook term: 0 (no 'in' in mentioned_geos)
+  const pkScore = computeArticleAudienceScore(
+    "pk",
+    ["pk"],
+    "india",
+    "Pakistan's prime minister landed in Islamabad.",
+    { source_region: "south_asia", is_global_source: false, authority_score: 0 },
+  );
+  // India-only comparable:
+  const inScore = computeArticleAudienceScore(
+    "in",
+    ["in"],
+    "india",
+    "India's prime minister landed in Delhi.",
+    { source_region: "south_asia", is_global_source: false, authority_score: 0 },
+  );
+  // Pakistan-only must score noticeably lower than India-only for India audience.
+  assert.ok(
+    pkScore < inScore - 0.3,
+    `expected pkScore well below inScore (pk=${pkScore}, in=${inScore})`,
+  );
+  // And it must stay bounded — no accidental 1.0 from SA fallback alone.
+  assert.ok(pkScore < 0.35, `pkScore ${pkScore} should stay modest`);
 });
 
 test("computeArticleAudienceScore global: wire-service multi-geo", () => {
