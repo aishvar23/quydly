@@ -24,14 +24,15 @@ const URLS = [
   { url: "https://www.hindustantimes.com/india-news",       domain: "hindustantimes.com",   category: "world",   authority_score: 0.6 },
 
   // Global source with an India beat — should still classify as global_source
-  // and likely mention 'in' in text.
-  { url: "https://www.reuters.com/world/india/",            domain: "reuters.com",          category: "world",   authority_score: 0.8 },
+  // and likely mention 'in' in text. (All domains must be in rss-feeds.js so
+  // lookupFeedByDomain hits — add new ones there first.)
   { url: "https://www.theguardian.com/world/india",         domain: "theguardian.com",      category: "world",   authority_score: 0.8 },
+  { url: "https://www.bbc.com/news/world/asia/india",       domain: "bbc.com",              category: "world",   authority_score: 0.8 },
 
   // Global, non-India — is_global_candidate only if ≥2 country aliases hit.
-  { url: "https://www.bbc.com/news/world",                  domain: "bbc.com",              category: "world",   authority_score: 0.8 },
   { url: "https://www.aljazeera.com/news/",                 domain: "aljazeera.com",        category: "world",   authority_score: 0.8 },
-  { url: "https://apnews.com/world-news",                   domain: "apnews.com",           category: "world",   authority_score: 0.8 },
+  { url: "https://www.dw.com/en/top-stories/s-9097",        domain: "dw.com",               category: "world",   authority_score: 0.6 },
+  { url: "https://www.france24.com/en/tag/india/",          domain: "france24.com",         category: "world",   authority_score: 0.6 },
 ];
 
 try {

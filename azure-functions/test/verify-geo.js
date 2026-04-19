@@ -67,7 +67,14 @@ try {
 
     // ── Pass/fail ───────────────────────────────────────────────────────────
     const failures = [];
-    if (withSourceCountry < total)  failures.push("some rows missing source_country (feed registry miss?)");
+    if (withSourceCountry < total) {
+      const missingDomains = [
+        ...new Set(rows.filter((r) => !r.source_country).map((r) => r.domain)),
+      ];
+      failures.push(
+        `some rows missing source_country (feed registry miss?) — domains: ${missingDomains.join(", ")}`
+      );
+    }
     if (bothAudienceKeys < total)   failures.push("some rows missing india or global key in geo_scores");
     if (withIndiaMentions === 0)    failures.push("no article mentioned India — expected ≥1 from Indian-source feeds");
     if (indiaOrigin === 0)          failures.push("no India-origin article — expected ≥1 from thehindu/indianexpress/hindustantimes");
