@@ -58,10 +58,10 @@ Enrich every entry in `azure-functions/lib/rss-feeds.js` with geo metadata. No p
 
 | # | Task | Status |
 |---|------|--------|
-| 1.1 | Add `source_country`, `source_region`, `language`, `is_global_source` to every existing feed entry | ⬜ |
-| 1.2 | Add a module-level validation pass (throws on startup if any feed is missing the four fields) | ⬜ |
-| 1.3 | Add helper `lookupFeedByDomain(domain)` to `rss-feeds.js` (indexed lookup for scraper use) | ⬜ |
-| 1.4 | PR review: each feed's country/region assignment verified by a second person | ⬜ |
+| 1.1 | Add `source_country`, `source_region`, `language`, `is_global_source` to every existing feed entry | ✅ |
+| 1.2 | Add a module-level validation pass (throws on startup if any feed is missing the four fields) | ✅ |
+| 1.3 | Add helper `lookupFeedByDomain(domain)` to `rss-feeds.js` (indexed lookup for scraper use) | ✅ |
+| 1.4 | PR review: each feed's country/region assignment verified by a second person | ✅ |
 
 **Feed entry shape after Phase 1:**
 ```js
@@ -85,10 +85,10 @@ Prerequisite to meaningful India relevance (called out in design doc §10.2). Th
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | Research + add ~10 India-origin feeds (candidates: The Hindu, Hindustan Times, Economic Times, Indian Express, Mint/LiveMint, NDTV, Scroll, India Today, Moneycontrol, Times of India) | ⬜ |
-| 2.2 | Tag each with `source_country: "in"`, `source_region: "south_asia"`, `language: "en"`, `is_global_source: false` | ⬜ |
-| 2.3 | Map each feed to one of the existing category slugs (`world`, `tech`, `finance`, `culture`, `science`) | ⬜ |
-| 2.4 | Verify RSS feeds parse: `cd azure-functions && node -e "require('./lib/rss-feeds.js')"` + a smoke script that fetches each feed URL | ⬜ |
+| 2.1 | Research + add ~10 India-origin feeds (candidates: The Hindu, Hindustan Times, Economic Times, Indian Express, Mint/LiveMint, NDTV, Scroll, India Today, Moneycontrol, Times of India) | ✅ |
+| 2.2 | Tag each with `source_country: "in"`, `source_region: "south_asia"`, `language: "en"`, `is_global_source: false` | ✅ |
+| 2.3 | Map each feed to one of the existing category slugs (`world`, `tech`, `finance`, `culture`, `science`) | ✅ |
+| 2.4 | Verify RSS feeds parse: `cd azure-functions && node -e "require('./lib/rss-feeds.js')"` + a smoke script that fetches each feed URL | ✅ |
 | 2.5 | Deploy: feeds start flowing through `discover` on next 30-min tick | ⬜ |
 | 2.6 | After 24h, spot-check `SELECT source_domain, COUNT(*) FROM raw_articles WHERE scraped_at > NOW() - INTERVAL '24 hours' GROUP BY 1 ORDER BY 2 DESC` — confirm Indian sources are ingesting | ⬜ |
 
@@ -100,16 +100,16 @@ Create `azure-functions/lib/geo.js` — hand-curated country/region alias lookup
 
 | # | Task | Status |
 |---|------|--------|
-| 3.1 | Create `azure-functions/lib/geo.js` — exports `AUDIENCES`, `GEO_ALIASES`, `REGIONS` | ⬜ |
-| 3.2 | Seed `GEO_ALIASES` for South Asia codes: `in`, `pk`, `bd`, `lk`, `np` | ⬜ |
-| 3.3 | Implement `extractMentionedGeos(text) → string[]` — lowercase + word-boundary regex, multi-word aliases matched before single-word | ⬜ |
-| 3.4 | Implement `mentionStrength(text, countryCode) → number` — returns `min(1.0, match_count × 0.25)` | ⬜ |
-| 3.5 | Implement `computeArticleAudienceScore(source_country, mentioned_geos, audience, text) → number` — the Article-level formula from design §7.1 | ⬜ |
-| 3.6 | Implement `computePrimaryGeos(member_geos) → string[]` — used by clusterer; geo is "primary" if ≥50% of articles mention it OR ≥2 articles are from that country | ⬜ |
-| 3.7 | Implement `computeClusterGeoScores(member_geos) → jsonb` — per-audience mean of article-level `geo_scores` | ⬜ |
-| 3.8 | Implement `computeAudienceProjection(story, cluster, audience) → { relevance_score, rank_bucket, rank_priority, reason }` — returns both the text bucket AND numeric priority (1/2/3/4), derived from same condition | ⬜ |
-| 3.9 | Unit test: seed a small set of articles, assert `extractMentionedGeos` returns expected codes for each | ⬜ |
-| 3.10 | Unit test: assert `computeAudienceProjection` never returns a `rank_bucket`/`rank_priority` pair that diverges from the fixed mapping (hero=1, standard=2, tail=3, filler=4) | ⬜ |
+| 3.1 | Create `azure-functions/lib/geo.js` — exports `AUDIENCES`, `GEO_ALIASES`, `REGIONS` | ✅ |
+| 3.2 | Seed `GEO_ALIASES` for South Asia codes: `in`, `pk`, `bd`, `lk`, `np` | ✅ |
+| 3.3 | Implement `extractMentionedGeos(text) → string[]` — lowercase + word-boundary regex, multi-word aliases matched before single-word | ✅ |
+| 3.4 | Implement `mentionStrength(text, countryCode) → number` — returns `min(1.0, match_count × 0.25)` | ✅ |
+| 3.5 | Implement `computeArticleAudienceScore(source_country, mentioned_geos, audience, text) → number` — the Article-level formula from design §7.1 | ✅ |
+| 3.6 | Implement `computePrimaryGeos(member_geos) → string[]` — used by clusterer; geo is "primary" if ≥50% of articles mention it OR ≥2 articles are from that country | ✅ |
+| 3.7 | Implement `computeClusterGeoScores(member_geos) → jsonb` — per-audience mean of article-level `geo_scores` | ✅ |
+| 3.8 | Implement `computeAudienceProjection(story, cluster, audience) → { relevance_score, rank_bucket, rank_priority, reason }` — returns both the text bucket AND numeric priority (1/2/3/4), derived from same condition | ✅ |
+| 3.9 | Unit test: seed a small set of articles, assert `extractMentionedGeos` returns expected codes for each | ✅ |
+| 3.10 | Unit test: assert `computeAudienceProjection` never returns a `rank_bucket`/`rank_priority` pair that diverges from the fixed mapping (hero=1, standard=2, tail=3, filler=4) | ✅ |
 
 ---
 
