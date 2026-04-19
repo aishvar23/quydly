@@ -195,12 +195,12 @@ Extend `azure-functions/article-clusterer/index.js` to compute `primary_geos`, `
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Extend article SELECT to also pull `mentioned_geos, source_country, geo_scores` from `raw_articles` | ⬜ |
-| 6.2 | Compute `source_countries = dedupe(member_geos.map(a => a.source_country).filter(Boolean))` — mirrors existing `unique_domains` derivation | ⬜ |
-| 6.3 | Compute `primary_geos = computePrimaryGeos(member_geos)` | ⬜ |
-| 6.4 | Compute `cluster.geo_scores = computeClusterGeoScores(member_geos)` | ⬜ |
-| 6.5 | Extend cluster INSERT + UPDATE to write `primary_geos`, `geo_scores`, `source_countries` | ⬜ |
-| 6.6 | No change to cluster-matching algorithm — geo is NOT a hard partition key | ⬜ |
+| 6.1 | Extend article SELECT to also pull `mentioned_geos, source_country, geo_scores` from `raw_articles` | ✅ |
+| 6.2 | Compute `source_countries = dedupe(member_geos.map(a => a.source_country).filter(Boolean))` — mirrors existing `unique_domains` derivation | ✅ |
+| 6.3 | Compute `primary_geos = computePrimaryGeos(member_geos)` | ✅ |
+| 6.4 | Compute `cluster.geo_scores = computeClusterGeoScores(member_geos)` | ✅ |
+| 6.5 | Extend cluster INSERT + UPDATE to write `primary_geos`, `geo_scores`, `source_countries` | ✅ |
+| 6.6 | No change to cluster-matching algorithm — geo is NOT a hard partition key | ✅ |
 | 6.7 | Local smoke test: run clusterer against real unclustered articles, verify clusters have non-empty `primary_geos` and `source_countries` | ⬜ |
 | 6.8 | Deploy to Function App | ⬜ |
 | 6.9 | Monitor 24h: `SELECT primary_geos, COUNT(*) FROM clusters WHERE updated_at > NOW() - INTERVAL '24 hours' GROUP BY 1` — expect varied distribution, not empty | ⬜ |
