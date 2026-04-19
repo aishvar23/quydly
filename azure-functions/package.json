@@ -10,6 +10,8 @@
     "test:scraper": "node test/smoke-scraper.js",
     "test:scraper:send": "node test/send-scrape-messages.js",
     "test:scraper:load": "node test/send-scrape-messages.js 200",
+    "test:geo:send": "node test/send-geo-smoke.js",
+    "test:geo:verify": "node test/verify-geo.js",
     "test:clusterer": "node test/smoke-clusterer.js",
     "test:synthesizer": "node test/send-synthesize-messages.js",
     "test:synthesizer:idempotent": "node test/send-synthesize-messages.js --idempotent",

@@ -120,8 +120,8 @@ All additive. No existing column semantics change.
 | # | Task | Status |
 |---|------|--------|
 | 4.1 | Create `backend/db/migration_geo_pipeline.sql` with all ALTER/CREATE statements below | ✅ |
-| 4.2 | Run migration in Supabase SQL editor | ⬜ |
-| 4.3 | Verify new columns visible on `raw_articles`, `clusters`, `stories`; verify `story_audiences` table + indexes | ⬜ |
+| 4.2 | Run migration in Supabase SQL editor | ✅ |
+| 4.3 | Verify new columns visible on `raw_articles`, `clusters`, `stories`; verify `story_audiences` table + indexes | ✅ |
 
 **Migration SQL:**
 ```sql
@@ -177,12 +177,12 @@ Extend `azure-functions/article-scraper/index.js` to compute geo fields before `
 
 | # | Task | Status |
 |---|------|--------|
-| 5.1 | Import `lookupFeedByDomain` from `rss-feeds.js`; copy source fields onto the article payload | ⬜ |
-| 5.2 | Compute `mentioned_geos = extractMentionedGeos(title + description + content[:2000])` | ⬜ |
-| 5.3 | Compute `geo_scores` map: `{ [audience]: computeArticleAudienceScore(...) }` for every entry in `AUDIENCES` | ⬜ |
-| 5.4 | Compute `is_global_candidate = is_global_source && mentioned_geos.length >= 2` | ⬜ |
-| 5.5 | Extend `INSERT INTO raw_articles` column list + `ON CONFLICT (url_hash) DO NOTHING` (idempotency preserved) | ⬜ |
-| 5.6 | Local smoke test: send 10 scrape-queue messages, verify `raw_articles.mentioned_geos` and `geo_scores` are populated | ⬜ |
+| 5.1 | Import `lookupFeedByDomain` from `rss-feeds.js`; copy source fields onto the article payload | ✅ |
+| 5.2 | Compute `mentioned_geos = extractMentionedGeos(title + description + content[:2000])` | ✅ |
+| 5.3 | Compute `geo_scores` map: `{ [audience]: computeArticleAudienceScore(...) }` for every entry in `AUDIENCES` | ✅ |
+| 5.4 | Compute `is_global_candidate = is_global_source && mentioned_geos.length >= 2` | ✅ |
+| 5.5 | Extend `INSERT INTO raw_articles` column list + `ON CONFLICT (url_hash) DO NOTHING` (idempotency preserved) | ✅ |
+| 5.6 | Local smoke test: send 10 scrape-queue messages, verify `raw_articles.mentioned_geos` and `geo_scores` are populated | ✅ |
 | 5.7 | Deploy to Function App | ⬜ |
 | 5.8 | Monitor 24h: `SELECT COUNT(*) FILTER (WHERE 'in' = ANY(mentioned_geos)) FROM raw_articles WHERE scraped_at > NOW() - INTERVAL '24 hours'` — expect ≥ 10% of articles mention India once Indian feeds are live | ⬜ |
 | 5.9 | Scraper latency check: compare p50/p95 invocation duration in App Insights against pre-change baseline — regression >5ms average is a yellow flag | ⬜ |
