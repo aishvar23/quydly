@@ -11,6 +11,15 @@ import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { hashUrl } from "../lib/canonicalise.js";
 import { getSupabase, getSbSender, getRedis } from "../lib/clients.js";
+import { lookupFeedByDomain } from "../lib/rss-feeds.js";
+import {
+  AUDIENCES,
+  extractMentionedGeos,
+  computeArticleAudienceScore,
+} from "../lib/geo.js";
+
+// Slice cap keeps geo regex scans bounded even on very long articles.
+const GEO_CONTENT_SLICE = 2000;
 
 const MAX_DOMAIN_CONCURRENCY = 2;
 const FETCH_TIMEOUT_MS       = 9_000;
@@ -123,6 +132,40 @@ export default async function articleScraper(context, message) {
 
     // ── 6. INSERT into raw_articles (idempotent) ─────────────────────────────
     if (title) {
+      // Geo enrichment — feed registry lookup + text-based mention extraction.
+      // All domains from `discover` are registered, but we defensively handle
+      // a null lookup so a registry drift can't break scraping.
+      const feedMeta = lookupFeedByDomain(source_domain);
+      const source_country = feedMeta?.source_country ?? null;
+      const source_region  = feedMeta?.source_region  ?? null;
+      const language       = feedMeta?.language       ?? null;
+      const is_global_source = feedMeta?.is_global_source === true;
+
+      const enrichText = [
+        title ?? "",
+        description ?? "",
+        content ? content.slice(0, GEO_CONTENT_SLICE) : "",
+      ].join("\n");
+
+      const mentioned_geos = extractMentionedGeos(enrichText);
+
+      const geo_scores = {};
+      for (const audience of AUDIENCES) {
+        geo_scores[audience] = computeArticleAudienceScore(
+          source_country,
+          mentioned_geos,
+          audience,
+          enrichText,
+          {
+            source_region,
+            is_global_source,
+            authority_score: authority_score ?? 0,
+          },
+        );
+      }
+
+      const is_global_candidate = is_global_source && mentioned_geos.length >= 2;
+
       const { error: insertErr } = await supabase
         .from("raw_articles")
         .upsert(
@@ -140,6 +183,12 @@ export default async function articleScraper(context, message) {
             authority_score: authority_score ?? 0,
             status:          final_status,
             is_verified:     false,
+            source_country,
+            source_region,
+            language,
+            mentioned_geos,
+            geo_scores,
+            is_global_candidate,
             // clustered_at intentionally null — set by article-clusterer
           },
           { onConflict: "url_hash", ignoreDuplicates: true }
