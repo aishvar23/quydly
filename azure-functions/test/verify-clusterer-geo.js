@@ -76,14 +76,20 @@ try {
     console.log(`  geo_scores has india+global    : ${bothAudienceKeys}/${total}`);
 
     // ── Pass/fail ──────────────────────────────────────────────────────────
-    // source_countries should be populated on effectively every cluster —
-    // it's a direct dedupe of raw_articles.source_country which Phase 5 sets
-    // from the feed registry. primary_geos may legitimately be empty if no
-    // member mentions a known geo, so we only require at least one cluster
-    // with primary_geos set. geo_scores must carry all configured audience
-    // keys on every cluster.
+    // source_countries must be populated on every cluster in the window.
+    // It's a direct dedupe of raw_articles.source_country which Phase 5 sets
+    // from the feed registry; an empty array signals either a feed-registry
+    // miss or a regression in Phase 6.2 aggregation. primary_geos may
+    // legitimately be empty if no member mentions a known geo, so we only
+    // require at least one cluster with primary_geos set. geo_scores must
+    // carry all configured audience keys on every cluster.
+    const missingSourceCountries = rows.filter(c => (c.source_countries?.length ?? 0) === 0);
     const failures = [];
-    if (withSourceCountries === 0)  failures.push("no cluster has source_countries populated — Phase 6.2 likely broken");
+    if (missingSourceCountries.length > 0) {
+      const ids = missingSourceCountries.slice(0, 5).map(c => c.id).join(", ");
+      const more = missingSourceCountries.length > 5 ? ` (+${missingSourceCountries.length - 5} more)` : "";
+      failures.push(`${missingSourceCountries.length}/${total} clusters missing source_countries — cluster ids: ${ids}${more}`);
+    }
     if (withPrimaryGeos === 0)      failures.push("no cluster has primary_geos populated — Phase 6.3 likely broken");
     if (bothAudienceKeys < total)   failures.push("some clusters missing india or global key in geo_scores — Phase 6.4 likely broken");
 
