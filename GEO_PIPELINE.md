@@ -201,9 +201,10 @@ Extend `azure-functions/article-clusterer/index.js` to compute `primary_geos`, `
 | 6.4 | Compute `cluster.geo_scores = computeClusterGeoScores(member_geos)` | ✅ |
 | 6.5 | Extend cluster INSERT + UPDATE to write `primary_geos`, `geo_scores`, `source_countries` | ✅ |
 | 6.6 | No change to cluster-matching algorithm — geo is NOT a hard partition key | ✅ |
-| 6.7 | Local smoke test: run clusterer against real unclustered articles, verify clusters have non-empty `primary_geos` and `source_countries` | ⬜ |
+| 6.7 | Local smoke test: run clusterer against real unclustered articles, verify clusters have non-empty `primary_geos` and `source_countries` (`npm run test:clusterer` + `npm run test:clusterer:verify`) | ✅ |
 | 6.8 | Deploy to Function App | ⬜ |
 | 6.9 | Monitor 24h: `SELECT primary_geos, COUNT(*) FROM clusters WHERE updated_at > NOW() - INTERVAL '24 hours' GROUP BY 1` — expect varied distribution, not empty | ⬜ |
+| 6.10 | Batch member-geo SELECT in chunks of 100 — keeps PostgREST URL length safe as PENDING clusters accumulate members | ✅ |
 
 ---
 
