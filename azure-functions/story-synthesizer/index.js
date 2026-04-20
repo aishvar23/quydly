@@ -15,6 +15,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
+import { AUDIENCES, computeAudienceProjection } from "../lib/geo.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
 const MAX_RETRIES       = 2;
@@ -130,6 +131,27 @@ Rules:
   return result;
 }
 
+// ── Global significance score (design §7.2) ───────────────────────────────────
+
+function computeGlobalSignificance(cluster, synthesis, articles) {
+  const uniqueDomains = Math.min(6, (cluster.unique_domains ?? []).length);
+  const allMentionedGeos = new Set();
+  for (const a of articles) {
+    for (const g of a.mentioned_geos ?? []) allMentionedGeos.add(g);
+  }
+  const geoDiversity = Math.min(5, allMentionedGeos.size);
+  const maxAuthority = articles.reduce(
+    (max, a) => Math.max(max, Number(a.authority_score ?? 0)),
+    0,
+  );
+  return Number((
+    2 * uniqueDomains +
+    3 * geoDiversity +
+    2 * maxAuthority +
+    2 * synthesis.confidence_score
+  ).toFixed(2));
+}
+
 // ── River model: find existing story to merge ─────────────────────────────────
 
 async function findExistingStory(supabase, cluster, riverCutoff) {
@@ -186,7 +208,7 @@ export default async function storySynthesizer(context, message) {
   // ── 1. Fetch cluster — idempotency check ─────────────────────────────────
   const { data: cluster, error: clusterErr } = await supabase
     .from("clusters")
-    .select("id, category_id, primary_entities, article_ids, unique_domains, cluster_score, status")
+    .select("id, category_id, primary_entities, article_ids, unique_domains, cluster_score, status, primary_geos, geo_scores, source_countries")
     .eq("id", cluster_id)
     .single();
 
@@ -214,7 +236,7 @@ export default async function storySynthesizer(context, message) {
   // ── 3. Fetch article content ──────────────────────────────────────────────
   const { data: articles, error: artErr } = await supabase
     .from("raw_articles")
-    .select("id, title, description, content, domain")
+    .select("id, title, description, content, domain, mentioned_geos, source_country, geo_scores, authority_score")
     .in("id", cluster.article_ids);
 
   if (artErr) {
@@ -292,9 +314,20 @@ export default async function storySynthesizer(context, message) {
     return;
   }
 
-  // River model: find or create story
+  // Geo metadata for story
+  const globalSignificanceScore = computeGlobalSignificance(cluster, narrative, articles);
+  const storyPrimaryGeos = cluster.primary_geos ?? [];
+  const storyGeoScores   = cluster.geo_scores   ?? {};
+
+  // Extras for computeAudienceProjection (india_article_fraction requires article-level data)
+  const indianArticleCount    = articles.filter(a => a.source_country === "in").length;
+  const indianArticleFraction = articles.length > 0 ? indianArticleCount / articles.length : 0;
+
+  // River model: find or create story — Step 2 of processing contract
   const riverCutoff   = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
   const existingStory = await findExistingStory(supabase, cluster, riverCutoff);
+
+  let story_id;
 
   if (existingStory) {
     const existingPoints  = Array.isArray(existingStory.key_points) ? existingStory.key_points : [];
@@ -303,46 +336,95 @@ export default async function storySynthesizer(context, message) {
     const { error: updateErr } = await supabase
       .from("stories")
       .update({
-        primary_entities:  cluster.primary_entities,
-        headline:          narrative.headline,
-        summary:           narrative.summary,
-        key_points:        mergedKeyPoints,
-        confidence_score:  narrative.confidence_score,
+        primary_entities:          cluster.primary_entities,
+        headline:                  narrative.headline,
+        summary:                   narrative.summary,
+        key_points:                mergedKeyPoints,
+        confidence_score:          narrative.confidence_score,
         story_score,
         consistency_score,
         source_count,
-        updated_at:        now,
+        primary_geos:              storyPrimaryGeos,
+        geo_scores:                storyGeoScores,
+        global_significance_score: globalSignificanceScore,
+        updated_at:                now,
       })
       .eq("id", existingStory.id);
 
     if (updateErr) throw new Error(`story update: ${updateErr.message}`);
 
-    context.log(JSON.stringify({ event: "story_merged", cluster_id, story_id: existingStory.id, story_score, disposition }));
+    story_id = existingStory.id;
+    context.log(JSON.stringify({ event: "story_merged", cluster_id, story_id, story_score, disposition, global_significance_score: globalSignificanceScore }));
   } else {
-    const { error: insertErr } = await supabase
+    const { data: inserted, error: insertErr } = await supabase
       .from("stories")
       .insert({
         cluster_id,
-        category_id:       cluster.category_id,
-        primary_entities:  cluster.primary_entities,
-        headline:          narrative.headline,
-        summary:           narrative.summary,
-        key_points:        narrative.key_points,
-        confidence_score:  narrative.confidence_score,
+        category_id:               cluster.category_id,
+        primary_entities:          cluster.primary_entities,
+        headline:                  narrative.headline,
+        summary:                   narrative.summary,
+        key_points:                narrative.key_points,
+        confidence_score:          narrative.confidence_score,
         story_score,
         consistency_score,
         source_count,
-        is_verified:       false,
-        published_at:      now,
-        updated_at:        now,
-      });
+        primary_geos:              storyPrimaryGeos,
+        geo_scores:                storyGeoScores,
+        global_significance_score: globalSignificanceScore,
+        is_verified:               false,
+        published_at:              now,
+        updated_at:                now,
+      })
+      .select("id")
+      .single();
 
     if (insertErr) throw new Error(`story insert: ${insertErr.message}`);
 
-    context.log(JSON.stringify({ event: "story_written", cluster_id, story_score, disposition }));
+    story_id = inserted.id;
+    context.log(JSON.stringify({ event: "story_written", cluster_id, story_id, story_score, disposition, global_significance_score: globalSignificanceScore }));
   }
 
-  // ── 5. Mark cluster PROCESSED ─────────────────────────────────────────────
+  // ── Step 3: upsert story_audiences for every configured audience ──────────
+  // Must succeed before PROCESSED is written — this is the commit point boundary.
+  const projectionStory = {
+    global_significance_score: globalSignificanceScore,
+    primary_geos: storyPrimaryGeos,
+  };
+  const projectionExtras = { indian_article_fraction: indianArticleFraction };
+
+  for (const audience of AUDIENCES) {
+    const projection = computeAudienceProjection(projectionStory, cluster, audience, projectionExtras);
+
+    const { error: audErr } = await supabase
+      .from("story_audiences")
+      .upsert(
+        {
+          story_id,
+          audience_geo:    audience,
+          relevance_score: projection.relevance_score,
+          rank_bucket:     projection.rank_bucket,
+          rank_priority:   projection.rank_priority,
+          reason:          projection.reason,
+          updated_at:      now,
+        },
+        { onConflict: "story_id,audience_geo" },
+      );
+
+    if (audErr) throw new Error(`story_audiences upsert (${audience}): ${audErr.message}`);
+
+    context.log(JSON.stringify({
+      event:           "story_audience_projected",
+      story_id,
+      audience_geo:    audience,
+      rank_bucket:     projection.rank_bucket,
+      rank_priority:   projection.rank_priority,
+      relevance_score: projection.relevance_score,
+      reason:          projection.reason,
+    }));
+  }
+
+  // ── Step 4: Mark cluster PROCESSED — commit point (must be last DB write) ─
   // autoComplete: true (host.json) — returning normally completes the SB message.
   await supabase
     .from("clusters")
