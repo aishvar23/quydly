@@ -111,24 +111,32 @@ export default async function articleClusterer(context, timer) {
 
   // ── 2b. Batch-load member geo data for existing PENDING clusters ──────────
   // Needed so primary_geos / geo_scores / source_countries can be recomputed
-  // from the full member set (not just articles added this run). One SELECT,
-  // then indexed into each cluster's _memberGeos.
+  // from the full member set (not just articles added this run). Chunked
+  // SELECTs (100 ids/chunk) unioned into a single geoById map — keeps PostgREST
+  // URL length safe when PENDING clusters accumulate many members.
   const allMemberIds = [...new Set(workingSet.flatMap(c => c.article_ids))];
   if (allMemberIds.length > 0) {
-    const { data: memberRows, error: memErr } = await supabase
-      .from("raw_articles")
-      .select("id, mentioned_geos, source_country, geo_scores")
-      .in("id", allMemberIds);
+    const CHUNK_SIZE = 100;
+    const geoById = new Map();
 
-    if (memErr) throw new Error(`[article-clusterer] fetch member geos: ${memErr.message}`);
+    for (let i = 0; i < allMemberIds.length; i += CHUNK_SIZE) {
+      const chunk = allMemberIds.slice(i, i + CHUNK_SIZE);
+      const { data: memberRows, error: memErr } = await supabase
+        .from("raw_articles")
+        .select("id, mentioned_geos, source_country, geo_scores")
+        .in("id", chunk);
 
-    const geoById = new Map(
-      (memberRows ?? []).map(r => [r.id, {
-        mentioned_geos: Array.isArray(r.mentioned_geos) ? r.mentioned_geos : [],
-        source_country: r.source_country ?? null,
-        geo_scores:     r.geo_scores ?? {},
-      }]),
-    );
+      if (memErr) throw new Error(`[article-clusterer] fetch member geos: ${memErr.message}`);
+
+      for (const r of memberRows ?? []) {
+        geoById.set(r.id, {
+          mentioned_geos: Array.isArray(r.mentioned_geos) ? r.mentioned_geos : [],
+          source_country: r.source_country ?? null,
+          geo_scores:     r.geo_scores ?? {},
+        });
+      }
+    }
+
     for (const c of workingSet) {
       for (const id of c.article_ids) {
         const g = geoById.get(id);
