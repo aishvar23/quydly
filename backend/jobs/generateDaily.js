@@ -8,9 +8,10 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
-import { fetchArticlePool } from "../services/articleStore.js";
+import { fetchArticlePool, fetchAudienceStoryPools } from "../services/articleStore.js";
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
+import FLAGS from "../../config/flags.js";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -51,8 +52,10 @@ function buildCategoryQueue() {
   return queue.slice(0, totalQuestions);
 }
 
-function todayKey() {
-  return `questions:${new Date().toISOString().slice(0, 10)}`;
+function todayKey(audience = "global") {
+  const date = new Date().toISOString().slice(0, 10);
+  // Keep backward-compatible key for global; scope other audiences
+  return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -72,63 +75,117 @@ async function saveToSupabase(supabase, date, questions) {
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
 
-export async function generateDaily() {
-  console.log("[generateDaily] starting pipeline");
+export async function generateDaily(audience = "global") {
+  console.log(`[generateDaily] starting pipeline (audience="${audience}")`);
 
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
   const categoryQueue = buildCategoryQueue();
   const date = new Date().toISOString().slice(0, 10);
+  const totalQuestions = categoryQueue.length;
 
-  // Pre-fetch article pools for every category (up to 10 articles each)
-  const articlePools = {};
-  const poolIndexes  = {};
-  for (const cat of CATEGORIES) {
+  // ── Build picker function ─────────────────────────────────────────────────
+  // For India (or any non-global audience), try geo-weighted story pools first.
+  // Falls back to raw article pools if story_audiences has insufficient rows.
+  let pickFromPool;
+
+  if (audience !== "global" && FLAGS.audienceFeedMix.enabled) {
     try {
-      articlePools[cat.id] = await fetchArticlePool(cat.id);
-      poolIndexes[cat.id]  = 0;
-      console.log(`[generateDaily] fetched ${articlePools[cat.id].length} articles for "${cat.id}"`);
+      const { poolA, poolB, poolC, totalAvailable } =
+        await fetchAudienceStoryPools(audience, supabase, totalQuestions, FLAGS.audienceFeedMix);
+
+      if (totalAvailable >= FLAGS.audienceFeedMix.minRowsForAudienceFeed) {
+        const heroTarget       = Math.ceil(totalQuestions * FLAGS.audienceFeedMix[audience].heroBuckets);
+        const globalIndiaTarget = Math.ceil(totalQuestions * FLAGS.audienceFeedMix[audience].globalSigIndia);
+
+        // Interleave pools in mix order so category-aware picker sees the right distribution
+        const geoStories = [
+          ...poolA.slice(0, heroTarget),
+          ...poolB.slice(0, globalIndiaTarget),
+          ...poolC,
+        ];
+
+        // Index stories by category for preferred-category picking
+        const byCat     = {};
+        const byCatIdx  = {};
+        for (const s of geoStories) {
+          (byCat[s.category_id] = byCat[s.category_id] ?? []).push(s);
+        }
+        for (const catId of Object.keys(byCat)) byCatIdx[catId] = 0;
+
+        pickFromPool = function pickGeoStory(preferredCategoryId) {
+          const pool = byCat[preferredCategoryId];
+          const idx  = byCatIdx[preferredCategoryId] ?? 0;
+          if (pool && idx < pool.length) {
+            byCatIdx[preferredCategoryId]++;
+            return { article: pool[idx], resolvedCategoryId: preferredCategoryId };
+          }
+          for (const [catId, catPool] of Object.entries(byCat)) {
+            const fbIdx = byCatIdx[catId] ?? 0;
+            if (fbIdx < catPool.length) {
+              console.warn(`[generateDaily] geo pool "${preferredCategoryId}" empty — using "${catId}"`);
+              byCatIdx[catId]++;
+              return { article: catPool[fbIdx], resolvedCategoryId: catId };
+            }
+          }
+          throw new Error(`Geo story pool exhausted for audience "${audience}"`);
+        };
+
+        console.log(`[generateDaily] geo pools: A=${poolA.length} B=${poolB.length} C=${poolC.length}`);
+      } else {
+        console.warn(
+          `[generateDaily] only ${totalAvailable} story_audiences rows for "${audience}" ` +
+          `(min ${FLAGS.audienceFeedMix.minRowsForAudienceFeed}) — falling back to raw articles`
+        );
+      }
     } catch (err) {
-      console.warn(`[generateDaily] no articles for "${cat.id}": ${err.message}`);
-      articlePools[cat.id] = [];
-      poolIndexes[cat.id]  = 0;
+      console.warn(`[generateDaily] geo pool fetch failed: ${err.message} — falling back to raw articles`);
     }
   }
 
-  /**
-   * Pick the next unused article for a category.
-   * Falls back to any other category that still has articles remaining.
-   * Returns { article, resolvedCategoryId } or throws if all pools exhausted.
-   */
-  function pickArticle(preferredCategoryId) {
-    // Try preferred category first
-    const pool  = articlePools[preferredCategoryId];
-    const idx   = poolIndexes[preferredCategoryId];
-    if (pool.length > 0 && idx < pool.length) {
-      poolIndexes[preferredCategoryId]++;
-      return { article: pool[idx], resolvedCategoryId: preferredCategoryId };
-    }
-
-    // Fall back to any category with remaining articles
+  // Raw article pool fallback (also the default for audience="global")
+  if (!pickFromPool) {
+    const articlePools = {};
+    const poolIndexes  = {};
     for (const cat of CATEGORIES) {
-      if (cat.id === preferredCategoryId) continue;
-      const fbPool = articlePools[cat.id];
-      const fbIdx  = poolIndexes[cat.id];
-      if (fbPool.length > 0 && fbIdx < fbPool.length) {
-        console.warn(`[generateDaily] "${preferredCategoryId}" exhausted — falling back to "${cat.id}"`);
-        poolIndexes[cat.id]++;
-        return { article: fbPool[fbIdx], resolvedCategoryId: cat.id };
+      try {
+        articlePools[cat.id] = await fetchArticlePool(cat.id);
+        poolIndexes[cat.id]  = 0;
+        console.log(`[generateDaily] fetched ${articlePools[cat.id].length} articles for "${cat.id}"`);
+      } catch (err) {
+        console.warn(`[generateDaily] no articles for "${cat.id}": ${err.message}`);
+        articlePools[cat.id] = [];
+        poolIndexes[cat.id]  = 0;
       }
     }
 
-    throw new Error("All article pools exhausted — cannot generate more questions");
+    pickFromPool = function pickArticle(preferredCategoryId) {
+      const pool = articlePools[preferredCategoryId];
+      const idx  = poolIndexes[preferredCategoryId];
+      if (pool.length > 0 && idx < pool.length) {
+        poolIndexes[preferredCategoryId]++;
+        return { article: pool[idx], resolvedCategoryId: preferredCategoryId };
+      }
+      for (const cat of CATEGORIES) {
+        if (cat.id === preferredCategoryId) continue;
+        const fbPool = articlePools[cat.id];
+        const fbIdx  = poolIndexes[cat.id];
+        if (fbPool.length > 0 && fbIdx < fbPool.length) {
+          console.warn(`[generateDaily] "${preferredCategoryId}" exhausted — falling back to "${cat.id}"`);
+          poolIndexes[cat.id]++;
+          return { article: fbPool[fbIdx], resolvedCategoryId: cat.id };
+        }
+      }
+      throw new Error("All article pools exhausted — cannot generate more questions");
+    };
   }
 
+  // ── Generation loop ───────────────────────────────────────────────────────
   const questions = [];
   for (const category of categoryQueue) {
     console.log(`[generateDaily] processing category "${category.id}"`);
     try {
-      const { article, resolvedCategoryId } = pickArticle(category.id);
+      const { article, resolvedCategoryId } = pickFromPool(category.id);
       const question = await generateQuestion(article, resolvedCategoryId);
       questions.push(question);
     } catch (err) {
@@ -139,11 +196,12 @@ export async function generateDaily() {
 
   console.log(`[generateDaily] generated ${questions.length} questions`);
 
+  // ── Persist ───────────────────────────────────────────────────────────────
   let redisOk = false;
   if (redis) {
     try {
       await redis.connect();
-      await cacheInRedis(redis, todayKey(), questions);
+      await cacheInRedis(redis, todayKey(audience), questions);
       redisOk = true;
     } catch (err) {
       console.warn("[generateDaily] Redis unavailable, falling back to Supabase:", err.message);
@@ -152,21 +210,26 @@ export async function generateDaily() {
     }
   }
 
-  if (!redisOk) {
+  // Supabase fallback: only for global (daily_questions.date is the PK — no audience column)
+  if (!redisOk && audience === "global") {
     await saveToSupabase(supabase, date, questions);
   }
 
-  // Notify all subscribed users
-  try {
-    const { data: users, error } = await supabase
-      .from("users")
-      .select("email")
-      .not("email", "is", null);
-    if (error) throw error;
-    const emails = users.map((u) => u.email).filter(Boolean);
-    await sendDailyNotification(emails);
-  } catch (err) {
-    console.error("[generateDaily] email notification failed:", err.message);
+  // Notify all subscribed users — only on the scheduled global generation.
+  // Skipped for non-global audiences and on-demand cache-miss rebuilds to
+  // prevent spurious duplicate emails on Redis eviction or audience misses.
+  if (audience === "global") {
+    try {
+      const { data: users, error } = await supabase
+        .from("users")
+        .select("email")
+        .not("email", "is", null);
+      if (error) throw error;
+      const emails = users.map((u) => u.email).filter(Boolean);
+      await sendDailyNotification(emails);
+    } catch (err) {
+      console.error("[generateDaily] email notification failed:", err.message);
+    }
   }
 
   console.log("[generateDaily] done");
