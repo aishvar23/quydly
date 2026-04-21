@@ -8,7 +8,7 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
-import { fetchArticlePool, fetchAudienceStoryPools } from "../services/articleStore.js";
+import { fetchArticlePool, fetchStoryPool, fetchAudienceStoryPools } from "../services/articleStore.js";
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 import FLAGS from "../../config/flags.js";
@@ -143,20 +143,25 @@ export async function generateDaily(audience = "global") {
     }
   }
 
-  // Raw article pool fallback (also the default for audience="global")
+  // Story pool (primary) with per-category raw_articles fallback
   if (!pickFromPool) {
     const articlePools = {};
     const poolIndexes  = {};
     for (const cat of CATEGORIES) {
-      try {
-        articlePools[cat.id] = await fetchArticlePool(cat.id);
-        poolIndexes[cat.id]  = 0;
-        console.log(`[generateDaily] fetched ${articlePools[cat.id].length} articles for "${cat.id}"`);
-      } catch (err) {
-        console.warn(`[generateDaily] no articles for "${cat.id}": ${err.message}`);
-        articlePools[cat.id] = [];
-        poolIndexes[cat.id]  = 0;
+      const stories = await fetchStoryPool(cat.id);
+      if (stories.length > 0) {
+        articlePools[cat.id] = stories;
+        console.log(`[generateDaily] fetched ${stories.length} stories for "${cat.id}"`);
+      } else {
+        try {
+          articlePools[cat.id] = await fetchArticlePool(cat.id);
+          console.log(`[generateDaily] story pool empty for "${cat.id}" — using ${articlePools[cat.id].length} raw articles`);
+        } catch (err) {
+          console.warn(`[generateDaily] no content for "${cat.id}": ${err.message}`);
+          articlePools[cat.id] = [];
+        }
       }
+      poolIndexes[cat.id] = 0;
     }
 
     pickFromPool = function pickArticle(preferredCategoryId) {

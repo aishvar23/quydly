@@ -131,6 +131,31 @@ function storyToArticle(story) {
 }
 
 /**
+ * Fetch synthesized stories for a category (up to 10), sorted by story_score.
+ * Returns [] (not throws) when no stories exist — caller falls back to fetchArticlePool.
+ */
+export async function fetchStoryPool(category_id) {
+  const supabase = buildSupabase();
+
+  const { data, error } = await supabase
+    .from("stories")
+    .select("headline, summary")
+    .eq("category_id", category_id)
+    .gte("published_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+    .order("story_score", { ascending: false })
+    .limit(10);
+
+  if (error) {
+    console.warn(`[articleStore] fetchStoryPool failed for "${category_id}": ${error.message}`);
+    return [];
+  }
+
+  return (data ?? [])
+    .filter((s) => s.headline && s.summary)
+    .map((s) => ({ title: s.headline, description: s.summary }));
+}
+
+/**
  * Fetch a pool of usable stories for a category (up to 10).
  * Returns an array of { title, description } sorted by authority then recency.
  * Throws if no articles are available.
