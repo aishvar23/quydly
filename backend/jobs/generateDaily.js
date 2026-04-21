@@ -239,8 +239,8 @@ export async function generateDaily(audience = "global") {
     if (question) {
       questions.push(question);
     } else {
-      console.warn(`[generateDaily] no acceptable question for "${category.id}" — stopping pipeline`);
-      break;
+      console.warn(`[generateDaily] no acceptable question for "${category.id}" — skipping category`);
+      continue;
     }
   }
 

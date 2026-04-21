@@ -56,13 +56,20 @@ async function run() {
 
     for (const story of batch) {
       try {
-        const auditResult = await auditStory({
-          headline:         story.headline,
-          summary:          story.summary,
-          key_points:       story.key_points ?? [],
-          confidence_score: story.confidence_score,
-          source_count:     story.source_count,
-        });
+        // Backfill mode: extracted facts were not stored for pre-existing stories.
+        // support_score is graded on internal consistency only and its threshold
+        // is not enforced, matching the intent of the live-synthesis audit path.
+        const auditResult = await auditStory(
+          {
+            headline:         story.headline,
+            summary:          story.summary,
+            key_points:       story.key_points ?? [],
+            confidence_score: story.confidence_score,
+            source_count:     story.source_count,
+          },
+          [],
+          { backfillMode: true },
+        );
 
         await persistAudit(supabase, story.id, auditResult);
 

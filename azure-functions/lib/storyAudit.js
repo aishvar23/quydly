@@ -27,17 +27,35 @@ const BLOCKING_FLAGS = ["HOLLOW_STORY", "MIXED_STORY", "UNSUPPORTED_FACTS"];
  * Score a story for quiz-generation suitability.
  * @param {{ headline, summary, key_points, confidence_score, source_count }} story
  * @param {Array<{ fact, type, source_count }>} facts  — pass1 extracted facts (optional)
+ * @param {{ backfillMode?: boolean }} opts
+ *   backfillMode: true when auditing pre-existing stories without stored extracted facts.
+ *   In this mode the support_score threshold is not enforced and the prompt makes clear
+ *   that extracted facts are unavailable, so Claude grades on internal consistency only.
+ *   Scores are still stored and comparable for quiz-pool ranking.
  * @returns {Promise<{ specificity_score, coherence_score, support_score, quizability_score,
  *                     quality_flags, quiz_candidate, decision, reason }>}
  */
-export async function auditStory(story, facts = []) {
+export async function auditStory(story, facts = [], { backfillMode = false } = {}) {
   const ai = getAnthropic();
 
   const factsSection = facts.length > 0
     ? `\nExtracted facts (cross-source support):\n${facts
         .map(f => `- [${f.type}, sources: ${f.source_count}] ${f.fact}`)
         .join("\n")}`
-    : "";
+    : backfillMode
+      ? "\nExtracted facts: not available (backfill mode — score support based on internal consistency only)"
+      : "";
+
+  const supportCriteria = backfillMode
+    ? `support_score — Are key_points internally consistent with the headline and summary?
+- Score based on internal consistency only; extracted source facts are not available for this story.
+- LOW if key_points introduce entities or events that contradict or are entirely absent from the headline/summary.
+- LOW if speculative glue text is presented as established fact.
+- HIGH if key_points read as plausible elaborations of the headline/summary with no unsupported contradictions.`
+    : `support_score — Are claims grounded in the extracted facts?
+- LOW if key_points introduce entities or events absent from the extracted facts.
+- LOW if speculative glue text is presented as established fact.
+- HIGH if most key_points map directly to extracted facts with source_count >= 2.`;
 
   const prompt = `You are a story quality auditor for a daily news quiz. Score this story for quiz-generation suitability.
 
@@ -58,10 +76,7 @@ coherence_score — Is the story about ONE dominant event/topic?
 - LOW if multiple unrelated companies, products, or events appear in key_points.
 - LOW if different key_points point to different sub-stories.
 
-support_score — Are claims grounded in the extracted facts?
-- LOW if key_points introduce entities or events absent from the extracted facts.
-- LOW if speculative glue text is presented as established fact.
-- HIGH if most key_points map directly to extracted facts with source_count >= 2.
+${supportCriteria}
 
 quizability_score — Is there one clear central fact worth testing?
 - LOW if the only testable fact is an exact quote or adjective phrasing.
@@ -104,10 +119,13 @@ Respond ONLY with valid JSON, no markdown:
 
   const flags       = Array.isArray(scores.quality_flags) ? scores.quality_flags : [];
   const hasBlocker  = flags.some(f => BLOCKING_FLAGS.includes(f));
+  // In backfill mode extracted facts are unavailable, so support_score reflects only
+  // internal consistency. Skipping its threshold prevents backfilled stories from being
+  // held to a stricter standard than live-synthesised stories (which have real facts).
   const meetsScores = (
     (scores.specificity_score ?? 0) >= THRESHOLDS.specificity_score &&
     (scores.coherence_score   ?? 0) >= THRESHOLDS.coherence_score   &&
-    (scores.support_score     ?? 0) >= THRESHOLDS.support_score     &&
+    (backfillMode || (scores.support_score ?? 0) >= THRESHOLDS.support_score) &&
     (scores.quizability_score ?? 0) >= THRESHOLDS.quizability_score
   );
 
