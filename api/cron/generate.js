@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const questions = await generateDaily();
+    const questions = await generateDaily("global", { enforceExecutionDeadline: true });
     return res.json({ ok: true, count: questions.length, date: new Date().toISOString().slice(0, 10) });
   } catch (err) {
     console.error("[cron/generate]", err.message);

@@ -80,15 +80,18 @@ async function saveToSupabase(supabase, date, questions) {
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
 
-export async function generateDaily(audience = "global") {
+export async function generateDaily(audience = "global", options = {}) {
   console.log(`[generateDaily] starting pipeline (audience="${audience}")`);
 
+  const { enforceExecutionDeadline = false } = options;
   const pipelineStartedAt = Date.now();
   const PIPELINE_TIMEOUT_MS = parsePositiveInt(process.env.GENERATE_DAILY_TIMEOUT_MS, 5 * 60 * 1000);
   const requestedBufferMs = parsePositiveInt(process.env.GENERATE_DAILY_PERSISTENCE_BUFFER_MS, 10 * 1000);
   const maxAllowedBufferMs = Math.max(0, PIPELINE_TIMEOUT_MS - 1000);
   const PERSISTENCE_BUFFER_MS = Math.min(requestedBufferMs, maxAllowedBufferMs);
-  const generationDeadline = pipelineStartedAt + PIPELINE_TIMEOUT_MS - PERSISTENCE_BUFFER_MS;
+  const generationDeadline = enforceExecutionDeadline
+    ? pipelineStartedAt + PIPELINE_TIMEOUT_MS - PERSISTENCE_BUFFER_MS
+    : Number.POSITIVE_INFINITY;
 
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
@@ -220,7 +223,7 @@ export async function generateDaily(audience = "global") {
   const MAX_SKIP_ATTEMPTS = 3;
   const questions = [];
   let stoppedForDeadline = false;
-  const isPastGenerationDeadline = () => Date.now() >= generationDeadline;
+  const isPastGenerationDeadline = () => enforceExecutionDeadline && Date.now() >= generationDeadline;
 
   generationLoop:
   for (const category of categoryQueue) {
@@ -279,7 +282,7 @@ export async function generateDaily(audience = "global") {
 
   console.log(
     `[generateDaily] generated ${questions.length} questions` +
-    (stoppedForDeadline ? " (best-effort cutoff reached)" : ""),
+    (stoppedForDeadline && enforceExecutionDeadline ? " (best-effort cutoff reached)" : ""),
   );
 
   // ── Persist ───────────────────────────────────────────────────────────────
