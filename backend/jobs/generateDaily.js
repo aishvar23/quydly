@@ -219,7 +219,7 @@ export async function generateDaily(audience = "global") {
 
   // ── Persist ───────────────────────────────────────────────────────────────
   let redisOk = false;
-  if (redis) {
+  if (redis && questions.length > 0) {
     try {
       await redis.connect();
       await cacheInRedis(redis, todayKey(audience), questions);

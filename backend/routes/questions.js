@@ -37,7 +37,11 @@ async function getAllQuestions(date, audience, redis, supabase) {
     try {
       await redis.connect();
       const cached = await redis.get(redisKey(date, audience));
-      if (cached) return { questions: JSON.parse(cached), source: "redis" };
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed.length > 0) return { questions: parsed, source: "redis" };
+        await redis.del(redisKey(date, audience));
+      }
     } catch {
       // Redis unavailable — fall through
     } finally {
