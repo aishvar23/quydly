@@ -215,17 +215,21 @@ export async function generateDaily(audience = "global") {
     await saveToSupabase(supabase, date, questions);
   }
 
-  // Notify all subscribed users
-  try {
-    const { data: users, error } = await supabase
-      .from("users")
-      .select("email")
-      .not("email", "is", null);
-    if (error) throw error;
-    const emails = users.map((u) => u.email).filter(Boolean);
-    await sendDailyNotification(emails);
-  } catch (err) {
-    console.error("[generateDaily] email notification failed:", err.message);
+  // Notify all subscribed users — only on the scheduled global generation.
+  // Skipped for non-global audiences and on-demand cache-miss rebuilds to
+  // prevent spurious duplicate emails on Redis eviction or audience misses.
+  if (audience === "global") {
+    try {
+      const { data: users, error } = await supabase
+        .from("users")
+        .select("email")
+        .not("email", "is", null);
+      if (error) throw error;
+      const emails = users.map((u) => u.email).filter(Boolean);
+      await sendDailyNotification(emails);
+    } catch (err) {
+      console.error("[generateDaily] email notification failed:", err.message);
+    }
   }
 
   console.log("[generateDaily] done");

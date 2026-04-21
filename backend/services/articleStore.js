@@ -108,13 +108,16 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
     }
   }
 
-  const totalAvailable = poolA.length + poolB.length + poolC.length;
+  // Fallback threshold counts only story_audiences rows (A + B).
+  // Pool C comes from stories directly and can be large even on day one,
+  // which would mask a sparse story_audiences and bypass the intended fallback.
+  const audienceRowCount = poolA.length + poolB.length;
 
   return {
     poolA: poolA.slice(0, heroTarget + 20),       // overfetch for category distribution
     poolB: poolB.slice(0, globalIndiaTarget + 10),
     poolC: poolC.slice(0, globalOnlyTarget + 10),
-    totalAvailable,
+    totalAvailable: audienceRowCount,
   };
 }
 
