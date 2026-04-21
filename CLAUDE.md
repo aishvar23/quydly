@@ -43,7 +43,8 @@ quydly/
 │   │   ├── nlp.js
 │   │   ├── scoring.js     ← imports FLAGS from ./flags.js
 │   │   ├── flags.js       ← pipeline scoring thresholds only
-│   │   └── rss-feeds.js   ← ALL RSS feeds
+│   │   ├── geo.js         ← geo gazetteer: AUDIENCES, GEO_ALIASES, extractMentionedGeos, computeAudienceProjection
+│   │   └── rss-feeds.js   ← ALL RSS feeds (with source_country/region/language/is_global_source)
 │   ├── discover/          ← TimerTrigger, every 30 min → scrape-queue
 │   ├── article-scraper/   ← ServiceBusTrigger on scrape-queue
 │   ├── article-clusterer/ ← TimerTrigger, every 2h → synthesize-queue
@@ -61,7 +62,8 @@ quydly/
     │   ├── claude.js      ← Claude API question generator
     │   └── stripe.js      ← STUB ONLY — do not implement
     └── db/
-        └── schema.sql     ← Supabase schema
+        ├── schema.sql        ← Supabase schema
+        └── migration_geo_pipeline.sql  ← geo columns on raw_articles/clusters/stories + story_audiences table
 ```
 
 ## Non-Negotiable Architecture Rules
