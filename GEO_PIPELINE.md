@@ -254,12 +254,12 @@ Update the API + quiz generator to read from `story_audiences` when an audience 
 
 | # | Task | Status |
 |---|------|--------|
-| 9.1 | Add structured log event to article-scraper: `{ event: "article_geo_enriched", url_hash, source_country, mentioned_geos_count, geo_scores }` | ⬜ |
-| 9.2 | Add structured log event to article-clusterer per cluster: `{ event: "cluster_geo_aggregated", cluster_id, primary_geos, source_countries, member_count }` | ⬜ |
-| 9.3 | Add structured log event to story-synthesizer per audience row: `{ event: "story_audience_projected", story_id, audience_geo, rank_bucket, rank_priority, relevance_score, reason }` | ⬜ |
-| 9.4 | Dashboard query: stories-per-day per audience (last 7 days) | ⬜ |
-| 9.5 | Dashboard query: rank_bucket distribution per audience (sanity check — hero count should be meaningfully lower than standard) | ⬜ |
-| 9.6 | Alert: `SELECT COUNT(*) FROM clusters WHERE status='PROCESSED' AND id NOT IN (SELECT cluster_id FROM stories)` — should be 0; any non-zero indicates the processing contract broke | ⬜ |
+| 9.1 | Add structured log event to article-scraper: `{ event: "article_geo_enriched", url_hash, source_country, mentioned_geos_count, geo_scores }` | ✅ |
+| 9.2 | Add structured log event to article-clusterer per cluster: `{ event: "cluster_geo_aggregated", cluster_id, primary_geos, source_countries, member_count }` | ✅ |
+| 9.3 | Add structured log event to story-synthesizer per audience row: `{ event: "story_audience_projected", story_id, audience_geo, rank_bucket, rank_priority, relevance_score, reason }` | ✅ |
+| 9.4 | Dashboard query: stories-per-day per audience (last 7 days) | ✅ |
+| 9.5 | Dashboard query: rank_bucket distribution per audience (sanity check — hero count should be meaningfully lower than standard) | ✅ |
+| 9.6 | Alert: `SELECT COUNT(*) FROM clusters WHERE status='PROCESSED' AND id NOT IN (SELECT cluster_id FROM stories)` — should be 0; any non-zero indicates the processing contract broke | ✅ |
 
 ---
 

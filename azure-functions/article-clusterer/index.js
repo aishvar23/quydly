@@ -303,6 +303,16 @@ export default async function articleClusterer(context, timer) {
       await markArticlesClustered(supabase, cluster._newArticleIds, now, context);
     }
 
+    if (persisted && persistedId !== null) {
+      context.log(JSON.stringify({
+        event:           "cluster_geo_aggregated",
+        cluster_id:      persistedId,
+        primary_geos,
+        source_countries,
+        member_count:    cluster.article_ids.length,
+      }));
+    }
+
     // ── 5. Synthesize-queue: enqueue eligible clusters ────────────────────────
     // 6.5: guard — skip if recently queued (within SYNTHESIS_COOLDOWN_H hours)
     // 6.6: write synthesis_queued_at to DB BEFORE sending to SB queue
