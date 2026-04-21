@@ -200,6 +200,14 @@ export default async function articleScraper(context, message) {
           url:   canonical_url,
           error: insertErr.message,
         }));
+      } else {
+        context.log(JSON.stringify({
+          event:               "article_geo_enriched",
+          url_hash,
+          source_country,
+          mentioned_geos_count: mentioned_geos.length,
+          geo_scores,
+        }));
       }
     }
 
