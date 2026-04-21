@@ -148,14 +148,31 @@ export async function generateDaily(audience = "global") {
     const articlePools = {};
     const poolIndexes  = {};
     for (const cat of CATEGORIES) {
-      try {
-        articlePools[cat.id] = await fetchArticlePool(cat.id);
-        poolIndexes[cat.id]  = 0;
-        console.log(`[generateDaily] fetched ${articlePools[cat.id].length} articles for "${cat.id}"`);
-      } catch (err) {
-        console.warn(`[generateDaily] no articles for "${cat.id}": ${err.message}`);
-        articlePools[cat.id] = [];
-        poolIndexes[cat.id]  = 0;
+      const neededSlots = (EDITORIAL_MIX[cat.id] ?? 1) * TOTAL_SESSIONS;
+      const stories = await fetchStoryPool(cat.id, neededSlots);
+
+      if (stories.length >= neededSlots) {
+        articlePools[cat.id] = stories;
+        console.log(`[generateDaily] fetched ${stories.length} stories for "${cat.id}"`);
+      } else if (stories.length > 0) {
+        // Pad partial story pool with raw articles so the category never exhausts early
+        let padded = stories;
+        try {
+          const rawArticles = await fetchArticlePool(cat.id);
+          padded = [...stories, ...rawArticles];
+          console.log(`[generateDaily] "${cat.id}": ${stories.length} stories + ${rawArticles.length} raw articles (needed ${neededSlots})`);
+        } catch (err) {
+          console.warn(`[generateDaily] raw article pad failed for "${cat.id}": ${err.message} — using ${stories.length} stories only`);
+        }
+        articlePools[cat.id] = padded;
+      } else {
+        try {
+          articlePools[cat.id] = await fetchArticlePool(cat.id);
+          console.log(`[generateDaily] story pool empty for "${cat.id}" — using ${articlePools[cat.id].length} raw articles`);
+        } catch (err) {
+          console.warn(`[generateDaily] no content for "${cat.id}": ${err.message}`);
+          articlePools[cat.id] = [];
+        }
       }
     }
 
