@@ -5,21 +5,31 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const REQUIRED_KEYS = ["question", "options", "correctIndex", "tldr", "categoryId"];
 
 /**
- * Generate one multiple-choice question from a headline.
- * @param {{ title: string, description: string }} headline
+ * Generate one multiple-choice question from a story or article.
+ * @param {{ title: string, description: string, key_points?: string[], source_count?: number }} story
  * @param {string} categoryId  — e.g. "world", "tech"
  * @returns {Promise<{ question, options, correctIndex, tldr, categoryId }>}
  */
-export async function generateQuestion(headline, categoryId) {
+export async function generateQuestion(story, categoryId) {
+  const hasKeyPoints = Array.isArray(story.key_points) && story.key_points.length > 0;
+
+  const storyContext = hasKeyPoints
+    ? `Title: ${story.title}
+Summary: ${story.description}
+Verified facts (from ${story.source_count ?? "multiple"} sources):
+${story.key_points.map((kp, i) => `${i + 1}. ${kp}`).join("\n")}`
+    : `Title: ${story.title}
+Summary: ${story.description}`;
+
   const prompt = `You are a witty news quiz writer for Quydly, a daily news game.
 
 Generate ONE multiple-choice question about this real news story:
-Title: ${headline.title}
-Summary: ${headline.description}
+${storyContext}
 
 Rules:
 - Punchy, witty, jargon-free — smart but not academic
 - 4 options: exactly 1 correct, 3 plausible distractors
+- Base the question on a specific, verifiable fact from the story
 - TL;DR: exactly 2 sentences of story context
 
 Respond ONLY with valid JSON, no markdown:
