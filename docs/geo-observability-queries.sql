@@ -20,7 +20,7 @@ SELECT
   ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY audience_geo), 1) AS pct
 FROM story_audiences
 GROUP BY audience_geo, rank_bucket
-ORDER BY audience_geo, rank_priority;
+ORDER BY audience_geo, MIN(rank_priority);
 
 -- 9.6 Processing-contract integrity alert
 -- Returns 0 when invariant holds; any non-zero indicates a broken commit point
