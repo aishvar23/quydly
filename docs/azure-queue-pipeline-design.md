@@ -689,3 +689,12 @@ Azure Function App must be deployed before any messages are enqueued. If discove
 | Azure API Management | Functions are internal workers, not public endpoints |
 | Automatic DLQ reprocessing | Manual review via Azure Portal; automation is v2 |
 | Per-function concurrency overrides | Single host.json setting sufficient; separate function apps are v2 if needed |
+
+
+---
+
+## 13. Geo Audience Pipeline (Phase 9 Extension)
+
+The story-synthesizer now writes audience-specific rows into `story_audiences` (one row per `audience_geo` per story) immediately after upserting the `stories` row. The cluster is marked `PROCESSED` only after all `story_audiences` writes succeed — this is the commit point for the five-step processing contract.
+
+See [`docs/geo-pipeline-design.md`](geo-pipeline-design.md) for the full design.

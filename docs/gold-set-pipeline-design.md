@@ -1039,3 +1039,12 @@ This policy is encoded in the Pass 2 system prompt.
 | New dependencies | None added | None (reuses existing SDK) |
 | Claude call cost | ~5 calls/day | ~100 calls/day (~$0.30) |
 | Observability | Per-question logs | Per-run structured metrics |
+
+
+---
+
+## Geo Audience Extension
+
+The story-synthesizer step now additionally projects each story into the `story_audiences` table (one row per configured `audience_geo`) after the `stories` upsert. This powers audience-specific feeds (e.g. `?audience=india`) without forking any pipeline stage.
+
+See [`docs/geo-pipeline-design.md`](geo-pipeline-design.md) for the full design.

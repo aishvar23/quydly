@@ -267,9 +267,9 @@ Update the API + quiz generator to read from `story_audiences` when an audience 
 
 | # | Task | Status |
 |---|------|--------|
-| 10.1 | Update `CLAUDE.md` repo structure section: mention `azure-functions/lib/geo.js` and `story_audiences` table | ⬜ |
-| 10.2 | Cross-link `docs/azure-queue-pipeline-design.md` and `docs/gold-set-pipeline-design.md` to the geo doc (brief note that synthesizer now writes audience rows) | ⬜ |
-| 10.3 | Add a `config/flags.js` entry for `audienceFeedMix` (frontend flags) — keep pipeline scoring thresholds separate in `azure-functions/lib/flags.js` per CLAUDE.md rule #5 | ⬜ |
+| 10.1 | Update `CLAUDE.md` repo structure section: mention `azure-functions/lib/geo.js` and `story_audiences` table | ✅ |
+| 10.2 | Cross-link `docs/azure-queue-pipeline-design.md` and `docs/gold-set-pipeline-design.md` to the geo doc (brief note that synthesizer now writes audience rows) | ✅ |
+| 10.3 | Add a `config/flags.js` entry for `audienceFeedMix` (frontend flags) — keep pipeline scoring thresholds separate in `azure-functions/lib/flags.js` per CLAUDE.md rule #5 | ✅ |
 | 10.4 | Remove the Phase 8.5 fallback path once `story_audiences` has ≥ 7 days of history and coverage is confirmed | ⬜ |
 
 ---
