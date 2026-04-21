@@ -411,7 +411,15 @@ export default async function storySynthesizer(context, message) {
         { onConflict: "story_id,audience_geo" },
       );
 
-    if (audErr) throw new Error(`story_audiences upsert (${audience}): ${audErr.message}`);
+    if (audErr) {
+      // Reset to PENDING so SB redelivery can retry — cluster must not stay
+      // stuck in PROCESSING after a partial audience write.
+      await supabase
+        .from("clusters")
+        .update({ status: "PENDING", updated_at: now })
+        .eq("id", cluster_id);
+      throw new Error(`story_audiences upsert (${audience}): ${audErr.message}`);
+    }
 
     context.log(JSON.stringify({
       event:           "story_audience_projected",
