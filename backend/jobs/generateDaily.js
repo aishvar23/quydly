@@ -58,6 +58,11 @@ function todayKey(audience = "global") {
   return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 async function cacheInRedis(redis, key, questions) {
@@ -79,8 +84,10 @@ export async function generateDaily(audience = "global") {
   console.log(`[generateDaily] starting pipeline (audience="${audience}")`);
 
   const pipelineStartedAt = Date.now();
-  const PIPELINE_TIMEOUT_MS = 5 * 60 * 1000;
-  const PERSISTENCE_BUFFER_MS = 10 * 1000;
+  const PIPELINE_TIMEOUT_MS = parsePositiveInt(process.env.GENERATE_DAILY_TIMEOUT_MS, 5 * 60 * 1000);
+  const requestedBufferMs = parsePositiveInt(process.env.GENERATE_DAILY_PERSISTENCE_BUFFER_MS, 10 * 1000);
+  const maxAllowedBufferMs = Math.max(0, PIPELINE_TIMEOUT_MS - 1000);
+  const PERSISTENCE_BUFFER_MS = Math.min(requestedBufferMs, maxAllowedBufferMs);
   const generationDeadline = pipelineStartedAt + PIPELINE_TIMEOUT_MS - PERSISTENCE_BUFFER_MS;
 
   const redis = buildRedisClient();
@@ -297,7 +304,7 @@ export async function generateDaily(audience = "global") {
   // Notify all subscribed users — only on the scheduled global generation.
   // Skipped for non-global audiences and on-demand cache-miss rebuilds to
   // prevent spurious duplicate emails on Redis eviction or audience misses.
-  if (audience === "global") {
+  if (audience === "global" && questions.length > 0) {
     try {
       const { data: users, error } = await supabase
         .from("users")
