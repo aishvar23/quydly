@@ -228,7 +228,11 @@ export default function App() {
     try {
       const headers = {};
       if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
-      const res = await fetch(`${API_BASE}/api/questions`, { headers });
+      // 8.6 — detect India locale via timezone; expo-localization not installed
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const isIndia = tz === "Asia/Kolkata" || tz === "Asia/Calcutta";
+      const audienceParam = isIndia ? "?audience=india" : "";
+      const res = await fetch(`${API_BASE}/api/questions${audienceParam}`, { headers });
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
 

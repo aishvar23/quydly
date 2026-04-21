@@ -6,8 +6,10 @@ import { SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
 
 const router = Router();
 
-function redisKey(date) {
-  return `questions:${date}`;
+const VALID_AUDIENCES = ["india", "global"];
+
+function redisKey(date, audience = "global") {
+  return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
 
 function todayDate() {
@@ -29,12 +31,12 @@ function buildAnonSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 }
 
-async function getAllQuestions(date, redis, supabase) {
-  // 1. Redis cache check
+async function getAllQuestions(date, audience, redis, supabase) {
+  // 1. Redis cache check (audience-scoped key)
   if (redis) {
     try {
       await redis.connect();
-      const cached = await redis.get(redisKey(date));
+      const cached = await redis.get(redisKey(date, audience));
       if (cached) return { questions: JSON.parse(cached), source: "redis" };
     } catch {
       // Redis unavailable — fall through
@@ -43,24 +45,26 @@ async function getAllQuestions(date, redis, supabase) {
     }
   }
 
-  // 2. Supabase fallback
-  const { data, error } = await supabase
-    .from("daily_questions")
-    .select("questions, generated_at")
-    .eq("date", date)
-    .single();
+  // 2. Supabase fallback — only for global (daily_questions.date is a single PK)
+  if (audience === "global") {
+    const { data, error } = await supabase
+      .from("daily_questions")
+      .select("questions, generated_at")
+      .eq("date", date)
+      .single();
 
-  if (!error && data) {
-    return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
+    if (!error && data) {
+      return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
+    }
   }
 
-  // 3. Generate on-demand (cache miss — shouldn't happen in normal flow)
-  console.warn("[GET /api/questions] cache miss — generating on demand");
-  const questions = await generateDaily();
+  // 3. Generate on-demand (cache miss)
+  console.warn(`[GET /api/questions] cache miss (audience="${audience}") — generating on demand`);
+  const questions = await generateDaily(audience);
   return { questions, generatedAt: new Date().toISOString(), source: "generated" };
 }
 
-// GET /api/questions
+// GET /api/questions[?audience=india|global]
 // No auth  → always serves session 0 (first 5 questions)
 // With auth → serves next unplayed session based on user_daily_progress
 router.get("/", async (req, res) => {
@@ -68,8 +72,12 @@ router.get("/", async (req, res) => {
   const redis    = buildRedis();
   const supabase = buildSupabase();
 
+  // 8.1 — audience param: whitelist against known values, default to "global"
+  const rawAudience = req.query.audience;
+  const audience    = VALID_AUDIENCES.includes(rawAudience) ? rawAudience : "global";
+
   try {
-    const { questions: allQuestions, generatedAt = null, source } = await getAllQuestions(date, redis, supabase);
+    const { questions: allQuestions, generatedAt = null, source } = await getAllQuestions(date, audience, redis, supabase);
 
     // Determine session index from auth token
     const authHeader = req.headers.authorization ?? "";

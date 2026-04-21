@@ -240,13 +240,13 @@ Update the API + quiz generator to read from `story_audiences` when an audience 
 
 | # | Task | Status |
 |---|------|--------|
-| 8.1 | Add `audience` query parameter to `/api/questions` (default `global`); whitelist against `['india', 'global']`, fall back to `global` on unknown values | ⬜ |
-| 8.2 | Update `backend/jobs/generateDaily.js` `pickStoriesForAudience(categoryId, audience)` — SELECT from `story_audiences` JOIN `stories`, `ORDER BY rank_priority ASC, relevance_score DESC` | ⬜ |
-| 8.3 | Implement the 60/25/15 mix in the selector layer for India audience: 60% hero/standard with `'in' ∈ primary_geos`; 25% stories with high `global_significance_score` AND `'in' ∈ primary_geos`; 15% top `global_significance_score` stories not already picked | ⬜ |
-| 8.4 | Expose the mix weights via `config/flags.js` → `FLAGS.audienceFeedMix` so they can be tuned without redeploy | ⬜ |
-| 8.5 | Fallback path: if `story_audiences` has < N rows for the requested audience, fall back to `ORDER BY stories.story_score DESC` (preserves existing behavior on day one and during backfill) | ⬜ |
-| 8.6 | Frontend: React Native client reads `Localization.region`, sends `audience=india` when region is `IN`, else omits (server default = global) | ⬜ |
-| 8.7 | Backfill script: one-time `node azure-functions/scripts/backfill-story-audiences.js` — iterate stories from last 48h, recompute audience projections, upsert into `story_audiences` | ⬜ |
+| 8.1 | Add `audience` query parameter to `/api/questions` (default `global`); whitelist against `['india', 'global']`, fall back to `global` on unknown values | ✅ |
+| 8.2 | Update `backend/jobs/generateDaily.js` `pickStoriesForAudience(categoryId, audience)` — SELECT from `story_audiences` JOIN `stories`, `ORDER BY rank_priority ASC, relevance_score DESC` | ✅ |
+| 8.3 | Implement the 60/25/15 mix in the selector layer for India audience: 60% hero/standard with `'in' ∈ primary_geos`; 25% stories with high `global_significance_score` AND `'in' ∈ primary_geos`; 15% top `global_significance_score` stories not already picked | ✅ |
+| 8.4 | Expose the mix weights via `config/flags.js` → `FLAGS.audienceFeedMix` so they can be tuned without redeploy | ✅ |
+| 8.5 | Fallback path: if `story_audiences` has < N rows for the requested audience, fall back to `ORDER BY stories.story_score DESC` (preserves existing behavior on day one and during backfill) | ✅ |
+| 8.6 | Frontend: React Native client reads `Localization.region`, sends `audience=india` when region is `IN`, else omits (server default = global) | ✅ |
+| 8.7 | Backfill script: one-time `node azure-functions/scripts/backfill-story-audiences.js` — iterate stories from last 48h, recompute audience projections, upsert into `story_audiences` | ✅ |
 
 ---
 
