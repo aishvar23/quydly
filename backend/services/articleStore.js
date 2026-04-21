@@ -147,9 +147,8 @@ export async function fetchStoryPool(category_id, limit = 10) {
     .from("stories")
     .select("headline, summary, key_points, confidence_score, source_count")
     .eq("category_id", category_id)
-    .eq("is_verified", true)
     .gte("confidence_score", 6)
-    .gte("updated_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+    .gte("updated_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
     .order("story_score", { ascending: false })
     .limit(limit);
 
@@ -183,7 +182,7 @@ export async function fetchArticlePool(category_id, limit = 10) {
     .eq("category_id", category_id)
     .eq("is_verified", true)
     .eq("status", "DONE")
-    .gte("published_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
+    .gte("published_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
     .order("authority_score", { ascending: false })
     .order("published_at", { ascending: false })
     .limit(limit);

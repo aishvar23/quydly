@@ -219,7 +219,7 @@ export async function generateDaily(audience = "global") {
 
   // ── Persist ───────────────────────────────────────────────────────────────
   let redisOk = false;
-  if (redis) {
+  if (redis && questions.length > 0) {
     try {
       await redis.connect();
       await cacheInRedis(redis, todayKey(audience), questions);
@@ -232,7 +232,7 @@ export async function generateDaily(audience = "global") {
   }
 
   // Supabase fallback: only for global (daily_questions.date is the PK — no audience column)
-  if (!redisOk && audience === "global") {
+  if (!redisOk && audience === "global" && questions.length > 0) {
     await saveToSupabase(supabase, date, questions);
   }
 
