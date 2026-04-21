@@ -214,16 +214,16 @@ The critical phase. Extends `azure-functions/story-synthesizer/index.js`. Must i
 
 | # | Task | Status |
 |---|------|--------|
-| 7.1 | Add Step 0 idempotency check at top of function: if `cluster.status = 'PROCESSED'`, complete message and return (unchanged from existing design — preserved explicitly) | ⬜ |
-| 7.2 | Implement `computeGlobalSignificance(cluster, synthesis)` per design §7.2 formula | ⬜ |
-| 7.3 | Step 2 — extend story upsert: add `primary_geos`, `geo_scores`, `global_significance_score` to INSERT + ON CONFLICT UPDATE SET list | ⬜ |
-| 7.4 | Step 3 — loop over `AUDIENCES` and upsert `story_audiences` row per audience. Must write `rank_bucket` AND `rank_priority` (derived from same condition in `computeAudienceProjection`) | ⬜ |
-| 7.5 | Step 3 — ON CONFLICT (story_id, audience_geo) DO UPDATE SET `relevance_score`, `rank_bucket`, `rank_priority`, `reason`, `updated_at` | ⬜ |
-| 7.6 | Step 4 — **move** `UPDATE clusters SET status='PROCESSED'` to AFTER the audience loop. This is the commit point — any earlier failure leaves status PENDING for retry | ⬜ |
-| 7.7 | Step 5 — complete Service Bus message | ⬜ |
-| 7.8 | Idempotency test: enqueue same `cluster_id` twice → verify exactly one `stories` row AND exactly N `story_audiences` rows (one per audience) | ⬜ |
-| 7.9 | Partial-failure test: simulate exception between stories upsert and audience upserts → verify cluster remains PENDING, retry produces consistent final state (one story, full audience set) | ⬜ |
-| 7.10 | Verify `UNIQUE (story_id, audience_geo)` constraint survives re-upsert stress (no duplicates after 10 replays of the same cluster) | ⬜ |
+| 7.1 | Add Step 0 idempotency check at top of function: if `cluster.status = 'PROCESSED'`, complete message and return (unchanged from existing design — preserved explicitly) | ✅ |
+| 7.2 | Implement `computeGlobalSignificance(cluster, synthesis)` per design §7.2 formula | ✅ |
+| 7.3 | Step 2 — extend story upsert: add `primary_geos`, `geo_scores`, `global_significance_score` to INSERT + ON CONFLICT UPDATE SET list | ✅ |
+| 7.4 | Step 3 — loop over `AUDIENCES` and upsert `story_audiences` row per audience. Must write `rank_bucket` AND `rank_priority` (derived from same condition in `computeAudienceProjection`) | ✅ |
+| 7.5 | Step 3 — ON CONFLICT (story_id, audience_geo) DO UPDATE SET `relevance_score`, `rank_bucket`, `rank_priority`, `reason`, `updated_at` | ✅ |
+| 7.6 | Step 4 — **move** `UPDATE clusters SET status='PROCESSED'` to AFTER the audience loop. This is the commit point — any earlier failure leaves status PENDING for retry | ✅ |
+| 7.7 | Step 5 — complete Service Bus message | ✅ |
+| 7.8 | Idempotency test: enqueue same `cluster_id` twice → verify exactly one `stories` row AND exactly N `story_audiences` rows (one per audience) | ✅ |
+| 7.9 | Partial-failure test: simulate exception between stories upsert and audience upserts → verify cluster remains PENDING, retry produces consistent final state (one story, full audience set) | ✅ |
+| 7.10 | Verify `UNIQUE (story_id, audience_geo)` constraint survives re-upsert stress (no duplicates after 10 replays of the same cluster) | ✅ |
 | 7.11 | Deploy to Function App | ⬜ |
 | 7.12 | Monitor 24h: `SELECT audience_geo, COUNT(*) FROM story_audiences GROUP BY 1` — expect roughly equal counts per audience | ⬜ |
 
