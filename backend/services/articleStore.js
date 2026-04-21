@@ -48,7 +48,7 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
     .from("story_audiences")
     .select(
       "story_id, relevance_score, rank_bucket, rank_priority, " +
-      "stories(id, headline, summary, category_id, primary_geos, global_significance_score)"
+      "stories(id, headline, summary, key_points, confidence_score, source_count, category_id, primary_geos, global_significance_score)"
     )
     .eq("audience_geo", audience)
     .order("rank_priority", { ascending: true })
@@ -123,11 +123,50 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
 
 function storyToArticle(story) {
   return {
-    title:       story.headline,
-    description: story.summary,
-    category_id: story.category_id,
-    _story_id:   story.id,
+    title:            story.headline,
+    description:      story.summary,
+    key_points:       Array.isArray(story.key_points) ? story.key_points : [],
+    confidence_score: story.confidence_score,
+    source_count:     story.source_count,
+    category_id:      story.category_id,
+    _story_id:        story.id,
   };
+}
+
+/**
+ * Fetch synthesized stories for a category (up to 10), sorted by story_score.
+ * Returns [] (not throws) when no stories exist — caller falls back to fetchArticlePool.
+ *
+ * Only returns verified stories with confidence_score >= 6 updated within 24h,
+ * matching the quiz generation eligibility rules from the gold-set pipeline design.
+ */
+export async function fetchStoryPool(category_id, limit = 10) {
+  const supabase = buildSupabase();
+
+  const { data, error } = await supabase
+    .from("stories")
+    .select("headline, summary, key_points, confidence_score, source_count")
+    .eq("category_id", category_id)
+    .eq("is_verified", true)
+    .gte("confidence_score", 6)
+    .gte("updated_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+    .order("story_score", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.warn(`[articleStore] fetchStoryPool failed for "${category_id}": ${error.message}`);
+    return [];
+  }
+
+  return (data ?? [])
+    .filter((s) => s.headline && s.summary)
+    .map((s) => ({
+      title:            s.headline,
+      description:      s.summary,
+      key_points:       Array.isArray(s.key_points) ? s.key_points : [],
+      confidence_score: s.confidence_score,
+      source_count:     s.source_count,
+    }));
 }
 
 /**
@@ -147,7 +186,7 @@ export async function fetchArticlePool(category_id) {
     .gte("published_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
     .order("authority_score", { ascending: false })
     .order("published_at", { ascending: false })
-    .limit(10);
+    .limit(limit);
 
   if (error) {
     throw new Error(`articleStore query failed for "${category_id}": ${error.message}`);
