@@ -58,6 +58,11 @@ function todayKey(audience = "global") {
   return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 async function cacheInRedis(redis, key, questions) {
@@ -75,8 +80,18 @@ async function saveToSupabase(supabase, date, questions) {
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
 
-export async function generateDaily(audience = "global") {
+export async function generateDaily(audience = "global", options = {}) {
   console.log(`[generateDaily] starting pipeline (audience="${audience}")`);
+
+  const { enforceExecutionDeadline = false } = options;
+  const pipelineStartedAt = Date.now();
+  const PIPELINE_TIMEOUT_MS = parsePositiveInt(process.env.GENERATE_DAILY_TIMEOUT_MS, 5 * 60 * 1000);
+  const requestedBufferMs = parsePositiveInt(process.env.GENERATE_DAILY_PERSISTENCE_BUFFER_MS, 10 * 1000);
+  const maxAllowedBufferMs = Math.max(0, PIPELINE_TIMEOUT_MS - 1000);
+  const PERSISTENCE_BUFFER_MS = Math.min(requestedBufferMs, maxAllowedBufferMs);
+  const generationDeadline = enforceExecutionDeadline
+    ? pipelineStartedAt + PIPELINE_TIMEOUT_MS - PERSISTENCE_BUFFER_MS
+    : Number.POSITIVE_INFINITY;
 
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
@@ -207,12 +222,33 @@ export async function generateDaily(audience = "global") {
   // critique rejection); the next story in the pool is tried automatically.
   const MAX_SKIP_ATTEMPTS = 3;
   const questions = [];
+  let stoppedForDeadline = false;
+  const isPastGenerationDeadline = () => enforceExecutionDeadline && Date.now() >= generationDeadline;
 
+  generationLoop:
   for (const category of categoryQueue) {
+    if (isPastGenerationDeadline()) {
+      stoppedForDeadline = true;
+      console.warn(
+        `[generateDaily] nearing ${PIPELINE_TIMEOUT_MS / 1000}s timeout; stopping generation ` +
+        `${PERSISTENCE_BUFFER_MS / 1000}s early to persist ${questions.length} questions`,
+      );
+      break;
+    }
+
     console.log(`[generateDaily] generating for category "${category.id}"`);
     let question = null;
 
     for (let attempt = 0; attempt < MAX_SKIP_ATTEMPTS; attempt++) {
+      if (isPastGenerationDeadline()) {
+        stoppedForDeadline = true;
+        console.warn(
+          `[generateDaily] deadline reached mid-category "${category.id}" (attempt ${attempt + 1}); ` +
+          `stopping with ${questions.length} questions to preserve persistence window`,
+        );
+        break generationLoop;
+      }
+
       let article, resolvedCategoryId;
       try {
         ({ article, resolvedCategoryId } = pickFromPool(category.id));
@@ -244,7 +280,10 @@ export async function generateDaily(audience = "global") {
     }
   }
 
-  console.log(`[generateDaily] generated ${questions.length} questions`);
+  console.log(
+    `[generateDaily] generated ${questions.length} questions` +
+    (stoppedForDeadline && enforceExecutionDeadline ? " (best-effort cutoff reached)" : ""),
+  );
 
   // ── Persist ───────────────────────────────────────────────────────────────
   let redisOk = false;
@@ -268,7 +307,7 @@ export async function generateDaily(audience = "global") {
   // Notify all subscribed users — only on the scheduled global generation.
   // Skipped for non-global audiences and on-demand cache-miss rebuilds to
   // prevent spurious duplicate emails on Redis eviction or audience misses.
-  if (audience === "global") {
+  if (audience === "global" && questions.length > 0) {
     try {
       const { data: users, error } = await supabase
         .from("users")
