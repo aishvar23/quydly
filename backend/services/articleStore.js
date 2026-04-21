@@ -147,9 +147,12 @@ export async function fetchStoryPool(category_id, limit = 10) {
     .from("stories")
     .select("headline, summary, key_points, confidence_score, source_count")
     .eq("category_id", category_id)
+    .eq("quiz_candidate", true)
     .gte("confidence_score", 6)
     .gte("updated_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+    .order("quizability_score", { ascending: false })
     .order("story_score", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(limit);
 
   if (error) {
