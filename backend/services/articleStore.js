@@ -174,7 +174,7 @@ export async function fetchStoryPool(category_id, limit = 10) {
  * Returns an array of { title, description } sorted by authority then recency.
  * Throws if no articles are available.
  */
-export async function fetchArticlePool(category_id) {
+export async function fetchArticlePool(category_id, limit = 10) {
   const supabase = buildSupabase();
 
   const { data, error } = await supabase
