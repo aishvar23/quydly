@@ -78,6 +78,11 @@ async function saveToSupabase(supabase, date, questions) {
 export async function generateDaily(audience = "global") {
   console.log(`[generateDaily] starting pipeline (audience="${audience}")`);
 
+  const pipelineStartedAt = Date.now();
+  const PIPELINE_TIMEOUT_MS = 5 * 60 * 1000;
+  const PERSISTENCE_BUFFER_MS = 10 * 1000;
+  const generationDeadline = pipelineStartedAt + PIPELINE_TIMEOUT_MS - PERSISTENCE_BUFFER_MS;
+
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
   const categoryQueue = buildCategoryQueue();
@@ -207,12 +212,33 @@ export async function generateDaily(audience = "global") {
   // critique rejection); the next story in the pool is tried automatically.
   const MAX_SKIP_ATTEMPTS = 3;
   const questions = [];
+  let stoppedForDeadline = false;
+  const isPastGenerationDeadline = () => Date.now() >= generationDeadline;
 
+  generationLoop:
   for (const category of categoryQueue) {
+    if (isPastGenerationDeadline()) {
+      stoppedForDeadline = true;
+      console.warn(
+        `[generateDaily] nearing ${PIPELINE_TIMEOUT_MS / 1000}s timeout; stopping generation ` +
+        `${PERSISTENCE_BUFFER_MS / 1000}s early to persist ${questions.length} questions`,
+      );
+      break;
+    }
+
     console.log(`[generateDaily] generating for category "${category.id}"`);
     let question = null;
 
     for (let attempt = 0; attempt < MAX_SKIP_ATTEMPTS; attempt++) {
+      if (isPastGenerationDeadline()) {
+        stoppedForDeadline = true;
+        console.warn(
+          `[generateDaily] deadline reached mid-category "${category.id}" (attempt ${attempt + 1}); ` +
+          `stopping with ${questions.length} questions to preserve persistence window`,
+        );
+        break generationLoop;
+      }
+
       let article, resolvedCategoryId;
       try {
         ({ article, resolvedCategoryId } = pickFromPool(category.id));
@@ -244,7 +270,10 @@ export async function generateDaily(audience = "global") {
     }
   }
 
-  console.log(`[generateDaily] generated ${questions.length} questions`);
+  console.log(
+    `[generateDaily] generated ${questions.length} questions` +
+    (stoppedForDeadline ? " (best-effort cutoff reached)" : ""),
+  );
 
   // ── Persist ───────────────────────────────────────────────────────────────
   let redisOk = false;
