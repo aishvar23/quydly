@@ -137,8 +137,10 @@ function storyToArticle(story) {
  * Fetch synthesized stories for a category (up to 10), sorted by story_score.
  * Returns [] (not throws) when no stories exist — caller falls back to fetchArticlePool.
  *
- * Only returns verified stories with confidence_score >= 6 updated within 24h,
- * matching the quiz generation eligibility rules from the gold-set pipeline design.
+ * Only returns verified stories with confidence_score >= 6 updated within 24h.
+ * 24h is intentional: quiz generation runs daily at 7AM and should pull only
+ * stories synthesised in the previous cycle. Widen to 48h+ only if categories
+ * routinely starve due to low pipeline throughput.
  */
 export async function fetchStoryPool(category_id, limit = 10) {
   const supabase = buildSupabase();
@@ -147,9 +149,12 @@ export async function fetchStoryPool(category_id, limit = 10) {
     .from("stories")
     .select("headline, summary, key_points, confidence_score, source_count")
     .eq("category_id", category_id)
+    .eq("quiz_candidate", true)
     .gte("confidence_score", 6)
-    .gte("updated_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+    .gte("updated_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+    .order("quizability_score", { ascending: false })
     .order("story_score", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(limit);
 
   if (error) {

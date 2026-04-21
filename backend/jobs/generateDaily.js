@@ -202,16 +202,45 @@ export async function generateDaily(audience = "global") {
   }
 
   // ── Generation loop ───────────────────────────────────────────────────────
+  // Each slot tries up to MAX_SKIP_ATTEMPTS stories before giving up.
+  // generateQuestion returns null when a story is skipped (no central fact or
+  // critique rejection); the next story in the pool is tried automatically.
+  const MAX_SKIP_ATTEMPTS = 3;
   const questions = [];
+
   for (const category of categoryQueue) {
-    console.log(`[generateDaily] processing category "${category.id}"`);
-    try {
-      const { article, resolvedCategoryId } = pickFromPool(category.id);
-      const question = await generateQuestion(article, resolvedCategoryId);
+    console.log(`[generateDaily] generating for category "${category.id}"`);
+    let question = null;
+
+    for (let attempt = 0; attempt < MAX_SKIP_ATTEMPTS; attempt++) {
+      let article, resolvedCategoryId;
+      try {
+        ({ article, resolvedCategoryId } = pickFromPool(category.id));
+      } catch (err) {
+        console.error(
+          `[generateDaily] pool exhausted for "${category.id}" at question ${questions.length + 1}: ${err.message}`,
+        );
+        break;
+      }
+
+      try {
+        question = await generateQuestion(article, resolvedCategoryId);
+      } catch (err) {
+        console.error(
+          `[generateDaily] generation error (attempt ${attempt + 1}) for "${category.id}": ${err.message}`,
+        );
+        break;
+      }
+
+      if (question) break;
+      console.warn(`[generateDaily] story skipped (attempt ${attempt + 1}) for "${category.id}" — trying next`);
+    }
+
+    if (question) {
       questions.push(question);
-    } catch (err) {
-      console.error(`[generateDaily] stopping early at question ${questions.length + 1}: ${err.message}`);
-      break;
+    } else {
+      console.warn(`[generateDaily] no acceptable question for "${category.id}" — skipping category`);
+      continue;
     }
   }
 

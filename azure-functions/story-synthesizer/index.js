@@ -16,6 +16,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
 import { AUDIENCES, computeAudienceProjection } from "../lib/geo.js";
+import { auditStory, persistAudit } from "../lib/storyAudit.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
 const MAX_RETRIES       = 2;
@@ -432,7 +433,32 @@ export default async function storySynthesizer(context, message) {
     }));
   }
 
-  // ── Step 4: Mark cluster PROCESSED — commit point (must be last DB write) ─
+  // ── Step 5: Quality audit — non-blocking; PROCESSED still written on failure ─
+  try {
+    const auditResult = await auditStory(
+      {
+        headline:         narrative.headline,
+        summary:          narrative.summary,
+        key_points:       narrative.key_points,
+        confidence_score: narrative.confidence_score,
+        source_count,
+      },
+      facts,
+    );
+    await persistAudit(supabase, story_id, auditResult, now);
+    context.log(JSON.stringify({
+      event:          "story_audited",
+      story_id,
+      quiz_candidate: auditResult.quiz_candidate,
+      decision:       auditResult.decision,
+      flags:          auditResult.quality_flags,
+      reason:         auditResult.reason,
+    }));
+  } catch (err) {
+    context.log.error(JSON.stringify({ event: "audit_failed", story_id, error: err.message }));
+  }
+
+  // ── Step 6: Mark cluster PROCESSED — commit point (must be last DB write) ─
   // autoComplete: true (host.json) — returning normally completes the SB message.
   await supabase
     .from("clusters")
