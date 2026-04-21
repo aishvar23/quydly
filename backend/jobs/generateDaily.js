@@ -8,7 +8,7 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
-import { fetchArticlePool, fetchAudienceStoryPools } from "../services/articleStore.js";
+import { fetchArticlePool, fetchAudienceStoryPools, fetchStoryPool } from "../services/articleStore.js";
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 import FLAGS from "../../config/flags.js";
@@ -153,6 +153,7 @@ export async function generateDaily(audience = "global") {
 
       if (stories.length >= neededSlots) {
         articlePools[cat.id] = stories;
+        poolIndexes[cat.id]  = 0;
         console.log(`[generateDaily] fetched ${stories.length} stories for "${cat.id}"`);
       } else if (stories.length > 0) {
         // Pad partial story pool with raw articles so the category never exhausts early
@@ -165,13 +166,16 @@ export async function generateDaily(audience = "global") {
           console.warn(`[generateDaily] raw article pad failed for "${cat.id}": ${err.message} — using ${stories.length} stories only`);
         }
         articlePools[cat.id] = padded;
+        poolIndexes[cat.id]  = 0;
       } else {
         try {
           articlePools[cat.id] = await fetchArticlePool(cat.id);
+          poolIndexes[cat.id]  = 0;
           console.log(`[generateDaily] story pool empty for "${cat.id}" — using ${articlePools[cat.id].length} raw articles`);
         } catch (err) {
           console.warn(`[generateDaily] no content for "${cat.id}": ${err.message}`);
           articlePools[cat.id] = [];
+          poolIndexes[cat.id]  = 0;
         }
       }
     }
