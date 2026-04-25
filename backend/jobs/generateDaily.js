@@ -75,7 +75,7 @@ async function saveToSupabase(supabase, date, questions) {
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
 
-export async function generateDaily(audience = "global") {
+export async function generateDaily(audience = "global", { silent = false } = {}) {
   console.log(`[generateDaily] starting pipeline (audience="${audience}")`);
 
   const pipelineStartedAt = Date.now();
@@ -284,9 +284,9 @@ export async function generateDaily(audience = "global") {
   }
 
   // Notify all subscribed users — only on the scheduled global generation.
-  // Skipped for non-global audiences and on-demand cache-miss rebuilds to
-  // prevent spurious duplicate emails on Redis eviction or audience misses.
-  if (audience === "global") {
+  // Skipped for non-global audiences, on-demand cache-miss rebuilds, and
+  // silent (manual) runs to prevent spurious duplicate emails.
+  if (audience === "global" && !silent) {
     try {
       const { data: users, error } = await supabase
         .from("users")
