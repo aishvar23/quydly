@@ -269,7 +269,7 @@ export default function App() {
   };
 
   const handleNext = async () => {
-    const total = FLAGS.freeQuestionsPerDay;
+    const total = questions.length || FLAGS.freeQuestionsPerDay;
     if (currentQ + 1 >= total) {
       if (session) {
         try {
@@ -388,7 +388,7 @@ export default function App() {
         />
       )}
 
-      {screen === "quiz" && questions[currentQ] && (
+      {screen === "quiz" && currentQ < questions.length && questions[currentQ] && (
         <QuestionScreen
           question={questions[currentQ]}
           onAnswer={handleAnswer}
@@ -398,6 +398,7 @@ export default function App() {
           wager={wager}
           setWager={setWager}
           currentQ={currentQ}
+          totalQ={questions.length}
           strategyLabel={strategy.getLabel()}
         />
       )}

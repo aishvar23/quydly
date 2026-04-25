@@ -236,12 +236,12 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
 }
 
 // ── QuestionScreen ────────────────────────────────────────────────────────────
-export default function QuestionScreen({ question, onAnswer, onNext, answered, selectedIndex, wager, setWager, currentQ, strategyLabel }) {
+export default function QuestionScreen({ question, onAnswer, onNext, answered, selectedIndex, wager, setWager, currentQ, totalQ, strategyLabel }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
-  const total  = FLAGS.freeQuestionsPerDay;
+  const total  = totalQ || FLAGS.freeQuestionsPerDay;
   const isLast = currentQ + 1 >= total;
 
   return (
