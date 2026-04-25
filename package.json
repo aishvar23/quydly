@@ -1,5 +1,9 @@
 {
   "type": "module",
+  "scripts": {
+    "generate:silent": "node backend/jobs/generateDailySilent.js",
+    "generate:silent:india": "node backend/jobs/generateDailySilent.js india"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
     "@mozilla/readability": "^0.6.0",
