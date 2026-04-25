@@ -12,8 +12,10 @@
 import { supabase, sbClient, cleanup } from "./helpers.js";
 
 const DRY_RUN    = process.argv.includes("--dry-run");
-const BATCH_SIZE = Number(process.argv[process.argv.indexOf("--batch") + 1]  || 10);
-const DELAY_SEC  = Number(process.argv[process.argv.indexOf("--delay") + 1]  || 30);
+const batchIdx   = process.argv.indexOf("--batch");
+const delayIdx   = process.argv.indexOf("--delay");
+const BATCH_SIZE = batchIdx !== -1 ? Number(process.argv[batchIdx + 1]) : 10;
+const DELAY_SEC  = delayIdx !== -1 ? Number(process.argv[delayIdx + 1]) : 30;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
