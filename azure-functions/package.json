@@ -20,7 +20,9 @@
     "test:peek": "node test/peek-queues.js",
     "test:cleanup": "node test/cleanup-test-data.js",
     "requeue": "node test/requeue-pending-clusters.js",
-    "requeue:dry": "node test/requeue-pending-clusters.js --dry-run"
+    "requeue:dry": "node test/requeue-pending-clusters.js --dry-run",
+    "watch": "node test/watch-synthesis.js",
+    "watch:once": "node test/watch-synthesis.js --once"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
