@@ -20,11 +20,11 @@ async function poll() {
       .gte("updated_at", new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()),
     supabase
       .from("stories")
-      .select("id", { count: "exact", head: true })
+      .select("id")
       .gte("published_at", new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()),
     supabase
       .from("clusters")
-      .select("id", { count: "exact", head: true })
+      .select("id")
       .eq("status", "PROCESSING")
       .lt("updated_at", new Date(Date.now() - 5 * 60 * 1000).toISOString()), // stuck >5min
   ]);
@@ -34,8 +34,8 @@ async function poll() {
   const total    = Object.values(counts).reduce((a, b) => a + b, 0);
   const done     = counts.PROCESSED;
   const pct      = total > 0 ? Math.round((done / total) * 100) : 0;
-  const stories  = storyRows ?? 0;
-  const stuckCnt = dlqRows ?? 0;
+  const stories  = (storyRows ?? []).length;
+  const stuckCnt = (dlqRows ?? []).length;
 
   const bar = "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
 
