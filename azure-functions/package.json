@@ -18,7 +18,9 @@
     "test:synthesizer:idempotent": "node test/send-synthesize-messages.js --idempotent",
     "test:verify": "node test/verify.js",
     "test:peek": "node test/peek-queues.js",
-    "test:cleanup": "node test/cleanup-test-data.js"
+    "test:cleanup": "node test/cleanup-test-data.js",
+    "requeue": "node test/requeue-pending-clusters.js",
+    "requeue:dry": "node test/requeue-pending-clusters.js --dry-run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
