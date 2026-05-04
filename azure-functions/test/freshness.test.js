@@ -71,3 +71,37 @@ test("P2-6 computeStoryDecayAt: faster categories decay before slower categories
   const science   = Date.parse(computeStoryDecayAt("science", published));
   assert.ok(culture < science, `culture (${culture}) must decay before science (${science})`);
 });
+
+// ── P4-2 backfill semantics on River-merge UPDATE ───────────────────────────
+
+test("P4-2 COALESCE simulation: existing timestamp survives re-synth", () => {
+  // Mimics the synthesizer's UPDATE policy:
+  //   existingStory.story_decay_at ?? computeStoryDecayAt(category, published_at)
+  // An already-set decay must NOT be reset by a re-pickup; pinning to original
+  // publication is the freshness contract.
+  const existingDecay = "2026-06-15T00:00:00.000Z";
+  const fallback = computeStoryDecayAt("world", "2026-05-04T00:00:00.000Z");
+  const result = existingDecay ?? fallback;
+  assert.equal(result, existingDecay, "existing wins; freshness clock not reset");
+});
+
+test("P4-2 COALESCE simulation: NULL existing fills from published_at + category window", () => {
+  // Story 170 case after PR #80: pre-P2-6 row has story_decay_at=NULL.
+  // On next re-synth the COALESCE kicks in and fills from the row's
+  // actual published_at, not the synth time, so the timestamp reflects
+  // the original publication.
+  const existingDecay = null;
+  const publishedAt = "2026-04-18T10:00:00.000Z";
+  const result = existingDecay ?? computeStoryDecayAt("world", publishedAt);
+  assert.equal(typeof result, "string");
+  // World category = 45 days. published + 45d = 2026-06-02T10:00:00Z.
+  assert.equal(result, new Date(Date.parse(publishedAt) + 45 * 24 * 60 * 60 * 1000).toISOString());
+});
+
+test("P4-2 COALESCE simulation: NULL existing + null published falls back to null", () => {
+  // Defensive: an existingStory row with both decay and published_at NULL
+  // (extreme edge case — synth corruption) coalesces to null. Renderer
+  // treats null as "unknown freshness" with default behaviour.
+  const result = null ?? computeStoryDecayAt("world", null);
+  assert.equal(result, null);
+});

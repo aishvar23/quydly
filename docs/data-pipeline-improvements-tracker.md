@@ -5,8 +5,8 @@
 > Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
 > P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in PR #73;
 > P3-1..5 filed from story 170 audit in PR #74; P3-1 / P3-2 / P3-3 in PR #77;
-> P4-1 / P4-2 filed after live re-synth validation; P3-4 / P3-5 in flight on
-> `feat/pipeline-p3-final`)
+> P3-4 / P3-5 in PR #80; P4-1 / P4-2 / P2-2 in flight on
+> `feat/pipeline-p4-and-p2-2`)
 
 ## Why this exists
 
@@ -486,7 +486,7 @@ be triggered by these hints. Today: editorial reference.
 
 ---
 
-### P2-2 ☐ Related-story linking
+### P2-2 ☑ Related-story linking
 
 **What**: At synthesis, link the story to ≤3 prior related stories in
 the same cluster lineage:
@@ -774,7 +774,7 @@ on the P3-1/2/3 changes. The new code worked, but persisting against
 already-synthesised data exposed two follow-ups the unit tests couldn't
 catch.
 
-### P4-1 ☐ River-merge resurrects stale quote fields on re-synth
+### P4-1 ☑ River-merge resurrects stale quote fields on re-synth
 
 **What**: `mergeSourceDocuments()` preserves any field on an existing
 source-document entry that the incoming entry does not overwrite. When
@@ -812,7 +812,7 @@ stale snapshot. Editorial integrity restored across re-syntheses.
 
 ---
 
-### P4-2 ☐ `story_decay_at` is NULL on pre-migration rows forever
+### P4-2 ☑ `story_decay_at` is NULL on pre-migration rows forever
 
 **What**: P2-6 design intentionally pins `story_decay_at` to original
 publication and does NOT update on River-merge ("a re-pickup shouldn't
