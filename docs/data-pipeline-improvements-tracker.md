@@ -5,8 +5,8 @@
 > Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
 > P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in PR #73;
 > P3-1..5 filed from story 170 audit in PR #74; P3-1 / P3-2 / P3-3 in PR #77;
-> P3-4 / P3-5 in PR #80; P4-1 / P4-2 / P2-2 in flight on
-> `feat/pipeline-p4-and-p2-2`)
+> P3-4 / P3-5 in PR #80; P4-1 / P4-2 / P2-2 in PR #82;
+> **P2-4 / P2-5 in flight on `feat/pipeline-p2-final` — completes P2 scope**)
 
 ## Why this exists
 
@@ -537,7 +537,7 @@ candidates.
 
 ---
 
-### P2-4 ☐ Multi-language source handling
+### P2-4 ☑ Multi-language source handling
 
 **What**: Track original source language; flag stories whose synthesis
 relied on translation.
@@ -554,7 +554,7 @@ the editor can verify.
 
 ---
 
-### P2-5 ☐ Subject portrait override list
+### P2-5 ☑ Subject portrait override list
 
 **What**: Curated dictionary of `entity_name → preferred_image_url +
 attribution + license`. Overrides Wikipedia for cases where Wikipedia's

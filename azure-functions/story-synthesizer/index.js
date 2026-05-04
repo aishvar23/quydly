@@ -20,9 +20,11 @@ import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
 import { enrichNarrative, emptyEnrichment, enrichmentSucceeded } from "../lib/enrichment.js";
 import { probeEntities } from "../lib/wikipedia.js";
+import { lookupPortraitOverrides } from "../lib/portraitOverrides.js";
 import { computeSourceDiversity } from "../lib/sourceDiversity.js";
 import { computeVideoEligibility } from "../lib/videoEligibility.js";
 import { computeStoryDecayAt } from "../lib/freshness.js";
+import { aggregateArticleLanguages } from "../lib/languageDetection.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
 const MAX_RETRIES       = 2;
@@ -508,7 +510,7 @@ function buildEnrichmentColumns(enrichment, enrichedEntities) {
   };
 }
 
-// ── Wikipedia attach (P0-4) ───────────────────────────────────────────────────
+// ── Wikipedia attach (P0-4) + override (P2-5) ────────────────────────────────
 // Probe Wikipedia REST for each enriched entity and stitch the metadata onto
 // the entity object. Stays out of band of synthesis: any per-entity error
 // degrades to `resolved: false` (the probe utility never throws), and a
@@ -518,20 +520,50 @@ function buildEnrichmentColumns(enrichment, enrichedEntities) {
 // `existingContext` survives if the LLM enrichment already wrote a context
 // line (e.g. from article quotes); the Wikipedia summary fills in only when
 // the enriched entry lacks its own context.
-export async function attachWikipediaToEntities(entities, { signal } = {}) {
+//
+// P2-5 — entity_portrait_overrides table check happens FIRST. When an
+// override row matches an entity's name, the entity is stamped with
+// portrait_* fields (image, attribution, license) AND the Wikipedia probe
+// is skipped for that entity. Renderer adapter prefers portrait_* over
+// wikipedia_* when both present. Editor-curated press photos win over
+// Wikipedia's default lead image on prominent figures.
+//
+// `supabase` is optional — when omitted (or null), the override lookup is
+// skipped and behaviour matches the pre-P2-5 path. Test imports of this
+// function that don't pass supabase keep working unchanged.
+export async function attachWikipediaToEntities(entities, { signal, supabase } = {}) {
   if (!Array.isArray(entities) || entities.length === 0) return [];
 
   const names = entities.map(e => e?.name).filter(Boolean);
+
+  // P2-5: batch override lookup. Empty Map on any error / no supabase.
+  const overrides = supabase
+    ? await lookupPortraitOverrides(supabase, names)
+    : new Map();
+
+  // Skip Wikipedia probe for entities that have an override match — saves
+  // a network call and the Wikipedia data wouldn't be used anyway.
+  const namesNeedingProbe = names.filter((n) => !overrides.has(n));
+
   let probes;
   try {
-    probes = await probeEntities(names, { signal });
+    probes = await probeEntities(namesNeedingProbe, { signal });
   } catch {
-    return entities.map(e => ({ ...e, wiki_resolved: false, wiki_reason: "probe_failed" }));
+    return entities.map(e => {
+      const ov = overrides.get(e?.name);
+      if (ov) return stampOverride(e, ov);
+      return { ...e, wiki_resolved: false, wiki_reason: "probe_failed" };
+    });
   }
 
   let probeIdx = 0;
   return entities.map(e => {
     if (!e?.name) return e;
+
+    // P2-5: override wins. Skip the probe slot, stamp portrait fields.
+    const ov = overrides.get(e.name);
+    if (ov) return stampOverride(e, ov);
+
     const probe = probes[probeIdx++];
     if (!probe) return e;
     if (probe.resolved) {
@@ -553,6 +585,23 @@ export async function attachWikipediaToEntities(entities, { signal } = {}) {
       wiki_reason:   probe.reason ?? "unknown",
     };
   });
+}
+
+// P2-5 helper — apply a portrait override row to an entity. Sets
+// portrait_* fields (parallel to wikipedia_*) and a portrait_source tag
+// so editor tooling can see where the image came from.
+function stampOverride(entity, override) {
+  return {
+    ...entity,
+    portrait_image_url:     override.image_url ?? null,
+    portrait_thumbnail_url: override.thumbnail_url ?? null,
+    portrait_attribution:   override.attribution ?? null,
+    portrait_license:       override.license ?? null,
+    portrait_source:        "override",
+    // Keep the existing wiki_resolved contract honest: an override means
+    // we have a portrait, even though the Wikipedia probe was skipped.
+    wiki_resolved:          true,
+  };
 }
 
 // ── Global significance score (design §7.2) ───────────────────────────────────
@@ -797,7 +846,7 @@ export async function run(context, message) {
   // because we snapshot a source_documents projection onto the story row (P0-1).
   const { data: articles, error: artErr } = await supabase
     .from("raw_articles")
-    .select("id, title, description, content, domain, canonical_url, published_at, author, mentioned_geos, source_country, geo_scores, authority_score")
+    .select("id, title, description, content, domain, canonical_url, published_at, author, mentioned_geos, source_country, language, geo_scores, authority_score")
     .in("id", cluster.article_ids);
 
   if (artErr) {
@@ -878,8 +927,12 @@ export async function run(context, message) {
   // making render-time API calls. Honours the strict-title-match guard inside
   // probeEntities — a wrong-target page is recorded as resolved=false, not
   // attached as if it were the right photo.
+  // P2-5: passing `supabase` enables the entity_portrait_overrides
+  // lookup, which short-circuits the Wikipedia probe for entities that
+  // have a curated press photo.
   const enrichedEntities = await attachWikipediaToEntities(
     enrichment.primary_entities_enriched,
+    { supabase },
   );
 
   context.log(JSON.stringify({
@@ -956,6 +1009,18 @@ export async function run(context, message) {
   // P3-5: clean entity names — used for both the `primary_entities` column
   // write and the P2-2 related-story overlap match.
   const cleanedEntities = cleanPrimaryEntities(enrichedEntities, cluster.primary_entities);
+
+  // P2-4: aggregate source-language signals from feed metadata + body
+  // script detection. Stories whose synthesis relied on non-English
+  // sources are flagged so the editor can verify translation drift
+  // before the renderer ships.
+  const languageRollup = aggregateArticleLanguages(articles);
+  context.log(JSON.stringify({
+    event:                 "languages_aggregated",
+    cluster_id,
+    original_languages:    languageRollup.original_languages,
+    translation_required:  languageRollup.translation_required,
+  }));
 
   context.log(JSON.stringify({
     event:           "source_documents_snapshot",
@@ -1098,6 +1163,10 @@ export async function run(context, message) {
         // P2-2: refresh on every River-merge — gained entity coverage may
         // unlock new related-story matches that weren't visible at insert.
         related_stories:           relatedStories,
+        // P2-4: refresh translation flags every River-merge — a newly-
+        // joined article in a non-English language flips the flag.
+        original_languages:        languageRollup.original_languages,
+        translation_required:      languageRollup.translation_required,
         // P0-5 / P1 enrichment fields. Spread is empty (no columns touched)
         // when the enrichment pass fell back to defaults — see
         // buildEnrichmentColumns. Successful runs overwrite; failed runs
@@ -1174,6 +1243,11 @@ export async function run(context, message) {
         story_decay_at:            decayAt,
         // P2-2: ≤ 3 prior stories with ≥ 2 entity overlap.
         related_stories:           relatedStories,
+        // P2-4: source-language signals (feed metadata + body script
+        // detection). translation_required = true → editor review gate
+        // before renderer consumption.
+        original_languages:        languageRollup.original_languages,
+        translation_required:      languageRollup.translation_required,
         // P0-5 / P1 enrichment fields. On a failed enrichment pass, the
         // spread is empty and Supabase falls back to the migration's column
         // defaults: NULL for the four text columns, `{}` / `[]` for jsonb.

@@ -536,6 +536,143 @@ test("P0-4 attachWikipediaToEntities returns [] for empty / non-array input", as
   assert.deepEqual(await attachWikipediaToEntities(undefined), []);
 });
 
+// ── P2-5: portrait override integration with attachWikipediaToEntities ──────
+
+// Stub supabase that returns override rows for given norm keys.
+function makeOverrideStubSupabase(rowsByNorm) {
+  return {
+    from() {
+      return {
+        select() {
+          return {
+            in(_col, vals) {
+              const data = vals.map((v) => rowsByNorm[v]).filter(Boolean);
+              return { data, error: null };
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+test("P2-5 attachWikipediaToEntities: override stamps portrait_* fields and skips Wikipedia probe", async () => {
+  resetWikipediaCache();
+  // Wikipedia stub would fire if reached — assert it's NOT reached.
+  let wikipediaCallCount = 0;
+  const restore = installFetchStub(async () => {
+    wikipediaCallCount++;
+    return jsonResp(200, {
+      type: "standard", title: "Donald Trump", extract: "wiki bio",
+      thumbnail: { source: "https://upload.wikimedia.org/wiki-trump.jpg" },
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Donald_Trump" } },
+    });
+  });
+  try {
+    const supabase = makeOverrideStubSupabase({
+      "donald trump": {
+        entity_name_norm: "donald trump",
+        display_name:     "Donald Trump",
+        image_url:        "https://press-photos.example.com/trump-2025.jpg",
+        thumbnail_url:    "https://press-photos.example.com/trump-2025-thumb.jpg",
+        attribution:      "Reuters / Press Pool",
+        license:          "Editorial use only",
+      },
+    });
+    const out = await attachWikipediaToEntities(
+      [{ name: "Donald Trump", type: "person", role: "subject" }],
+      { supabase },
+    );
+    assert.equal(out.length, 1);
+    assert.equal(out[0].portrait_image_url, "https://press-photos.example.com/trump-2025.jpg");
+    assert.equal(out[0].portrait_attribution, "Reuters / Press Pool");
+    assert.equal(out[0].portrait_license, "Editorial use only");
+    assert.equal(out[0].portrait_source, "override");
+    assert.equal(out[0].wiki_resolved, true);
+    assert.equal(wikipediaCallCount, 0,
+      "Wikipedia probe must be skipped for entities with an override match");
+  } finally { restore(); }
+});
+
+test("P2-5 attachWikipediaToEntities: entities without override still get Wikipedia probe", async () => {
+  resetWikipediaCache();
+  const restore = installFetchStub(async () =>
+    jsonResp(200, {
+      type: "standard", title: "Asim Munir", extract: "Pakistan military officer.",
+      thumbnail: { source: "https://upload.wikimedia.org/munir.jpg" },
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Asim_Munir" } },
+    }),
+  );
+  try {
+    // Override matches only Trump. Munir has no override → Wikipedia probe runs.
+    const supabase = makeOverrideStubSupabase({
+      "donald trump": {
+        entity_name_norm: "donald trump", display_name: "Donald Trump",
+        image_url: "https://o/dt.jpg", attribution: "AP", license: "Editorial",
+      },
+    });
+    const out = await attachWikipediaToEntities(
+      [
+        { name: "Donald Trump", type: "person" },
+        { name: "Asim Munir",   type: "person" },
+      ],
+      { supabase },
+    );
+    assert.equal(out[0].portrait_source, "override", "Trump uses override");
+    assert.equal(out[0].wikipedia_url, undefined, "Trump skips Wikipedia probe");
+    assert.match(out[1].wikipedia_url, /Asim_Munir/, "Munir uses Wikipedia probe");
+    assert.equal(out[1].portrait_source, undefined, "Munir has no override stamp");
+  } finally { restore(); }
+});
+
+test("P2-5 attachWikipediaToEntities: no supabase = pre-P2-5 behaviour (only Wikipedia)", async () => {
+  resetWikipediaCache();
+  const restore = installFetchStub(async () =>
+    jsonResp(200, {
+      type: "standard", title: "Donald Trump", extract: "wiki bio",
+      thumbnail: { source: "https://upload.wikimedia.org/dt.jpg" },
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Donald_Trump" } },
+    }),
+  );
+  try {
+    // Calling without supabase mimics existing test imports — no override
+    // lookup, only Wikipedia.
+    const out = await attachWikipediaToEntities([
+      { name: "Donald Trump", type: "person" },
+    ]);
+    assert.equal(out[0].portrait_source, undefined, "no override fields without supabase");
+    assert.match(out[0].wikipedia_url, /Donald_Trump/);
+  } finally { restore(); }
+});
+
+test("P2-5 attachWikipediaToEntities: override DB error degrades to Wikipedia path", async () => {
+  resetWikipediaCache();
+  const restore = installFetchStub(async () =>
+    jsonResp(200, {
+      type: "standard", title: "Donald Trump", extract: "wiki bio",
+      thumbnail: { source: "https://upload.wikimedia.org/dt.jpg" },
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Donald_Trump" } },
+    }),
+  );
+  try {
+    const failingSupabase = {
+      from() {
+        return {
+          select() {
+            return { in() { return { data: null, error: { message: "boom" } }; } };
+          },
+        };
+      },
+    };
+    const out = await attachWikipediaToEntities(
+      [{ name: "Donald Trump", type: "person" }],
+      { supabase: failingSupabase },
+    );
+    assert.equal(out[0].portrait_source, undefined, "no override on DB error");
+    assert.match(out[0].wikipedia_url, /Donald_Trump/, "Wikipedia probe runs as fallback");
+  } finally { restore(); }
+});
+
 // ── P3-2: quote tail validator (story 170 audit) ─────────────────────────────
 
 test("P3-2 quoteHasCompleteTail accepts quotes ending in terminal punctuation", () => {
