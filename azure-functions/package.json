@@ -29,6 +29,7 @@
     "@azure/service-bus": "^7.9.5",
     "@mozilla/readability": "^0.5.0",
     "@supabase/supabase-js": "^2.46.2",
+    "dotenv": "^17.4.2",
     "ioredis": "^5.4.1",
     "jsdom": "^25.0.1",
     "rss-parser": "^3.13.0"
