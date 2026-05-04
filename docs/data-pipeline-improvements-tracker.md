@@ -2,7 +2,7 @@
 
 > Owner: synthesizer / scraper team
 > Consumer: `video-pipeline-v2` and the question generator
-> Last updated: 2026-05-04
+> Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1 batch in flight)
 
 ## Why this exists
 
@@ -43,7 +43,7 @@ measure impact.
 These items have visible degradation in the current rendered output.
 Without them, the video pipeline has nothing to render meaningfully.
 
-### P0-1 ☐ Snapshot source documents on the story row
+### P0-1 ☑ Snapshot source documents on the story row
 
 **What**: Add a `source_documents jsonb` column to `stories`. Populate at
 synthesis time with `[{ id, type, title, issuer, url, date, quote_text?,
@@ -67,7 +67,7 @@ MapCallout / TimelineCard. This alone makes videos look sourced.
 
 ---
 
-### P0-2 ☐ Extract verbatim quotes during synthesis
+### P0-2 ☑ Extract verbatim quotes during synthesis
 
 **What**: When Claude synthesises a story, also extract 1-3 verbatim
 quotes from the underlying articles. Store as
@@ -94,7 +94,7 @@ visual currency to fake.
 
 ---
 
-### P0-3 ☐ Resolve and store readable place names
+### P0-3 ☑ Resolve and store readable place names
 
 **What**: For every story's `primary_geos`, store both the ISO code AND
 the readable proper-case name. Schema: `primary_geos jsonb` with shape
@@ -121,7 +121,7 @@ not).
 
 ---
 
-### P0-4 ☐ Pre-resolve Wikipedia entity coverage
+### P0-4 ☑ Pre-resolve Wikipedia entity coverage
 
 **What**: At synthesis time, for each named person/place in the story,
 probe Wikipedia REST API. Store result inline:
@@ -149,7 +149,7 @@ story row. No render-time API calls needed.
 
 ---
 
-### P0-5 ☐ Drop the legacy `general` fallback by expanding type coverage
+### P0-5 ☑ Drop the legacy `general` fallback by expanding type coverage
 
 **What**: 7/10 of the random Supabase stories fell to `general` because
 they didn't match `legal_scandal / geopolitics_world / finance_markets /
@@ -185,7 +185,7 @@ half the daily output.
 
 ## P1 — Significant quality lift
 
-### P1-1 ☐ Structured numeric extraction at synthesis
+### P1-1 ☑ Structured numeric extraction at synthesis
 
 **What**: Synthesizer outputs structured numbers per story instead of
 relying on the video pipeline to re-parse free text. Schema:
@@ -220,7 +220,7 @@ not parsing.
 
 ---
 
-### P1-2 ☐ Per-story `hook_sentence` field
+### P1-2 ☑ Per-story `hook_sentence` field
 
 **What**: Synthesizer produces a purpose-built `hook_sentence` (10-18
 words, declarative, viewer-led) separate from `headline`. Optimised for
@@ -241,7 +241,7 @@ short-form social. Every video benefits.
 
 ---
 
-### P1-3 ☐ Per-story `editorial_posture` enum
+### P1-3 ☑ Per-story `editorial_posture` enum
 
 **What**: Synthesizer classifies the story's posture from a fixed set:
 
@@ -269,7 +269,7 @@ just read the field.
 
 ---
 
-### P1-4 ☐ Entity-type tags on `primary_entities`
+### P1-4 ☑ Entity-type tags on `primary_entities`
 
 **What**: Today `primary_entities = ["sam bankman-fried", "ftx", "doj",
 "lewis kaplan"]` mixes person / org / agency. Replace with a structured
@@ -301,7 +301,7 @@ target picking becomes deterministic.
 
 ---
 
-### P1-5 ☐ Timeline events extraction
+### P1-5 ☑ Timeline events extraction
 
 **What**: Synthesizer extracts a chronology from articles:
 
@@ -329,7 +329,7 @@ dots on the same day.
 
 ---
 
-### P1-6 ☐ Subject "history/context" copy
+### P1-6 ☑ Subject "history/context" copy
 
 **What**: For every named person, generate a 1-sentence bio:
 
@@ -359,7 +359,7 @@ Source: Wikipedia summary (already fetched by P0-4) + article context.
 
 ---
 
-### P1-7 ☐ "Why it matters" / stakes line
+### P1-7 ☑ "Why it matters" / stakes line
 
 **What**: One sentence explaining what the news means for a viewer.
 
