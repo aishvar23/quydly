@@ -1,72 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 import { ServiceBusAdministrationClient } from "@azure/service-bus";
 import { Resend } from "resend";
+import { getRawArticles, getClusters, getStories } from "../../backend/services/pipelineHealth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 const resend = new Resend(process.env.RESEND_API_KEY);
-
-// ── Data fetchers ─────────────────────────────────────────────────────────────
-
-async function countWhere(table, filters = {}) {
-  let q = supabase.from(table).select("*", { count: "exact", head: true });
-  for (const [k, v] of Object.entries(filters)) {
-    if (v === null) q = q.is(k, null);
-    else            q = q.eq(k, v);
-  }
-  const { count } = await q;
-  return count ?? 0;
-}
-
-async function getRawArticles() {
-  const [done, lowQuality, failed, partial, unclustered] = await Promise.all([
-    countWhere("raw_articles", { status: "DONE" }),
-    countWhere("raw_articles", { status: "LOW_QUALITY" }),
-    countWhere("raw_articles", { status: "FAILED" }),
-    countWhere("raw_articles", { status: "PARTIAL" }),
-    supabase
-      .from("raw_articles")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "DONE")
-      .is("clustered_at", null)
-      .then(r => r.count ?? 0),
-  ]);
-  return { total: done + lowQuality + failed + partial, done, lowQuality, failed, partial, unclustered };
-}
-
-async function getClusters() {
-  const [processed, pending, processing, notQueued] = await Promise.all([
-    countWhere("clusters", { status: "PROCESSED" }),
-    countWhere("clusters", { status: "PENDING" }),
-    countWhere("clusters", { status: "PROCESSING" }),
-    supabase
-      .from("clusters")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "PENDING")
-      .is("synthesis_queued_at", null)
-      .then(r => r.count ?? 0),
-  ]);
-  return { total: processed + pending + processing, processed, pending, stuckProcessing: processing, notQueued };
-}
-
-async function getStories() {
-  const ago = (days) => new Date(Date.now() - days * 86400 * 1000).toISOString();
-  const [total, last24h, last7d, recentRows] = await Promise.all([
-    supabase.from("stories").select("*", { count: "exact", head: true }).then(r => r.count ?? 0),
-    supabase.from("stories").select("*", { count: "exact", head: true }).gte("published_at", ago(1)).then(r => r.count ?? 0),
-    supabase.from("stories").select("*", { count: "exact", head: true }).gte("published_at", ago(7)).then(r => r.count ?? 0),
-    supabase.from("stories").select("published_at").gte("published_at", ago(7)).order("published_at", { ascending: false }),
-  ]);
-  const byDay = {};
-  for (const s of recentRows.data ?? []) {
-    const day = s.published_at.slice(0, 10);
-    byDay[day] = (byDay[day] ?? 0) + 1;
-  }
-  const recentDays = Object.entries(byDay).sort(([a], [b]) => b.localeCompare(a)).slice(0, 7);
-  return { total, last24h, last7d, recentDays };
-}
 
 async function getQueues() {
   if (!process.env.AZURE_SERVICE_BUS_CONNECTION_STRING) return null;
@@ -162,9 +103,9 @@ export default async function handler(req, res) {
   if (token !== process.env.CRON_SECRET) return res.status(401).end();
 
   const [art, clust, stor, queues] = await Promise.all([
-    getRawArticles(),
-    getClusters(),
-    getStories(),
+    getRawArticles(supabase),
+    getClusters(supabase),
+    getStories(supabase),
     getQueues(),
   ]);
 
