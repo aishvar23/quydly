@@ -1,0 +1,6 @@
+node_modules/
+output/*
+!output/.gitkeep
+public/jobs/*
+!public/jobs/.gitkeep
+.env

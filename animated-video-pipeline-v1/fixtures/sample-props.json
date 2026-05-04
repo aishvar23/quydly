@@ -1,0 +1,80 @@
+{
+  "storyType": "legal_scandal",
+  "accentColor": "#E84D5B",
+  "totalDurationSec": 36,
+  "fps": 30,
+  "audioSrc": null,
+  "brandName": "QUYDLY",
+  "jobKey": "sample-preview",
+  "scenes": [
+    {
+      "sceneId": 1,
+      "componentType": "HookScene",
+      "sceneType": "legal_documents",
+      "visualType": "legal_documents",
+      "purpose": "establish_stakes",
+      "startSec": 0,
+      "durationSec": 6,
+      "overlayText": "Secret files. Real stakes.",
+      "narration": "A former official is facing charges over an alleged classified document betting scheme.",
+      "asset": { "kind": "branded", "src": null, "safetyClass": "branded" },
+      "geoLocation": null
+    },
+    {
+      "sceneId": 2,
+      "componentType": "ContextScene",
+      "sceneType": "court_institution",
+      "visualType": "court_institution",
+      "purpose": "introduce_subject",
+      "startSec": 6,
+      "durationSec": 7,
+      "overlayText": "Fraud charges filed",
+      "narration": "Prosecutors say sensitive information was misused in online betting markets.",
+      "asset": { "kind": "branded", "src": null, "safetyClass": "contextual" },
+      "geoLocation": null
+    },
+    {
+      "sceneId": 3,
+      "componentType": "DataScene",
+      "sceneType": "data_card",
+      "visualType": "data_card",
+      "purpose": "surface_key_fact",
+      "startSec": 13,
+      "durationSec": 7,
+      "overlayText": "5 source check",
+      "narration": "The story is built from multiple supporting reports and a verified cluster.",
+      "asset": { "kind": "data", "src": null, "safetyClass": "data" },
+      "geoLocation": null
+    },
+    {
+      "sceneId": 4,
+      "componentType": "MapScene",
+      "sceneType": "map_context",
+      "visualType": "map_context",
+      "purpose": "anchor_geography",
+      "startSec": 20,
+      "durationSec": 6,
+      "overlayText": "United States",
+      "narration": "The case is being watched for what it says about oversight.",
+      "asset": { "kind": "map", "src": null, "safetyClass": "map" },
+      "geoLocation": "United States"
+    },
+    {
+      "sceneId": 5,
+      "componentType": "OutroScene",
+      "sceneType": "outro_brand",
+      "visualType": "outro_brand",
+      "purpose": "brand_close",
+      "startSec": 26,
+      "durationSec": 4,
+      "overlayText": "",
+      "narration": "",
+      "asset": { "kind": "branded", "src": null, "safetyClass": "branded" },
+      "geoLocation": null
+    }
+  ],
+  "subtitles": [
+    { "start": 0.2, "end": 2.2, "text": "A former official is facing charges" },
+    { "start": 2.2, "end": 4.8, "text": "over an alleged classified document scheme" }
+  ]
+}
