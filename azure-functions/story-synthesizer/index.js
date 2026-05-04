@@ -385,6 +385,12 @@ function countNumbers(structured) {
 const PRIMARY_ENTITIES_CAP = 10;
 
 export function cleanPrimaryEntities(enrichedEntities, clusterEntities) {
+  // Codex P2 fix on PR #80: gate fallback on whether enrichment RAN
+  // (input non-empty), not on whether the cleaned output is non-empty.
+  // sanitiseEntities already drops invalid items; if enrichment ran
+  // successfully and somehow yielded no usable names, falling back to
+  // the dirty cluster array would resurrect noise the validator
+  // explicitly rejected. Empty-but-validated wins over dirty-but-full.
   if (Array.isArray(enrichedEntities) && enrichedEntities.length > 0) {
     const out = [];
     const seen = new Set();
@@ -398,7 +404,7 @@ export function cleanPrimaryEntities(enrichedEntities, clusterEntities) {
       out.push(name);
       if (out.length >= PRIMARY_ENTITIES_CAP) break;
     }
-    if (out.length > 0) return out;
+    return out;
   }
   return Array.isArray(clusterEntities) ? clusterEntities : [];
 }
@@ -570,20 +576,9 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   }
   if (!candidates || candidates.length === 0) return null;
 
-  // P3-5: case-insensitive overlap. Story-side primary_entities is now
-  // proper-cased ("Asim Munir") after this PR; cluster-side entities are
-  // still lowercased from the clusterer's regex extraction ("asim munir").
-  // Without normalisation the overlap filter would silently miss matches
-  // between post-P3-5 stories and pre-P3-5 clusters, splitting stories
-  // that should River-merge.
-  const norm = (e) => String(e ?? "").toLowerCase().trim();
-  const clusterEntsNorm = (Array.isArray(cluster.primary_entities) ? cluster.primary_entities : []).map(norm);
   let best = null, bestOverlap = 0;
   for (const story of candidates) {
-    const storyEntsNorm = new Set(
-      (Array.isArray(story.primary_entities) ? story.primary_entities : []).map(norm),
-    );
-    const overlap = clusterEntsNorm.filter(e => storyEntsNorm.has(e)).length;
+    const overlap = countEntityOverlap(cluster.primary_entities, story.primary_entities);
     if (overlap >= 2 && overlap > bestOverlap) {
       best        = story;
       bestOverlap = overlap;
@@ -591,6 +586,39 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   }
 
   return best;
+}
+
+// P3-5 + Codex P2 fix on PR #80 — case-insensitive entity overlap with
+// dedup on both sides.
+//
+// Story-side primary_entities is proper-cased ("Asim Munir") after P3-5;
+// cluster-side is still lowercased from the clusterer's regex extraction
+// ("asim munir"). Without normalisation the overlap filter would silently
+// miss matches between post-P3-5 stories and pre-P3-5 clusters.
+//
+// Without dedup, case/whitespace variants ("Asim Munir", "asim munir",
+// "ASIM MUNIR ") collapse to the same normalised token and inflate
+// overlap past the ≥ 2 threshold with only one unique shared entity —
+// false River merges between stories that should remain separate.
+//
+// Returns the count of UNIQUE entities present in both lists.
+export function countEntityOverlap(clusterEntities, storyEntities) {
+  const norm = (e) => String(e ?? "").toLowerCase().trim();
+  const clusterSet = new Set(
+    (Array.isArray(clusterEntities) ? clusterEntities : [])
+      .map(norm)
+      .filter(Boolean),
+  );
+  const storySet = new Set(
+    (Array.isArray(storyEntities) ? storyEntities : [])
+      .map(norm)
+      .filter(Boolean),
+  );
+  let overlap = 0;
+  for (const e of clusterSet) {
+    if (storySet.has(e)) overlap++;
+  }
+  return overlap;
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────

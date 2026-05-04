@@ -18,6 +18,7 @@ import {
   quoteHasCompleteTail,
   mergeEntityAndClusterGeos,
   cleanPrimaryEntities,
+  countEntityOverlap,
 } from "../story-synthesizer/index.js";
 import { resolvePrimaryPlaces, countryCodeToName } from "../lib/places.js";
 import { _resetCache as resetWikipediaCache } from "../lib/wikipedia.js";
@@ -663,6 +664,80 @@ test("P3-5 cleanPrimaryEntities: drops empty / non-string names", () => {
     { name: "Real Name", type: "person" },
   ];
   assert.deepEqual(cleanPrimaryEntities(enriched, []), ["Iran", "Real Name"]);
+});
+
+// Codex P2 fix on PR #80 — when enrichment RAN successfully (input
+// non-empty) but every entry got filtered (e.g. all names blank),
+// cleanPrimaryEntities must NOT fall back to the dirty cluster array.
+// The validator's verdict ("nothing valid here") wins over noise.
+test("P3-5 cleanPrimaryEntities: enrichment ran but yielded nothing usable → empty (NO fallback to dirty cluster)", () => {
+  const enriched = [
+    { name: "" },
+    { name: null },
+    { name: "  " },
+  ];
+  const dirty = ["pakistan field marshal asim", "two india", "correspondent"];
+  assert.deepEqual(cleanPrimaryEntities(enriched, dirty), [],
+    "successful-but-empty enrichment must not resurrect the dirty cluster array");
+});
+
+// ── countEntityOverlap (Codex P2 fix on PR #80) ──────────────────────────────
+
+test("P3-5 countEntityOverlap: case-insensitive matches on both sides", () => {
+  // Cluster-side lowercased, story-side proper-cased — the post-P3-5
+  // transition state. Both should resolve to the same normalised token.
+  assert.equal(
+    countEntityOverlap(
+      ["asim munir", "donald trump", "iran"],
+      ["Asim Munir", "Donald Trump", "Iran"],
+    ),
+    3,
+  );
+});
+
+test("P3-5 countEntityOverlap: ≥ 2 shared with no false matches", () => {
+  assert.equal(
+    countEntityOverlap(
+      ["asim munir", "donald trump", "ftx"],
+      ["Asim Munir", "Donald Trump", "Sam Bankman-Fried"],
+    ),
+    2,
+  );
+});
+
+// Codex P2 regression test — case/whitespace variants of the SAME entity
+// must NOT inflate overlap past the threshold.
+test("P3-5 countEntityOverlap: duplicates on cluster side count as one (Codex P2 regression)", () => {
+  // Three case variants of "Asim Munir" plus one other; story has just
+  // "Asim Munir". Pre-fix: filter counted 3 hits → overlap = 3 → false
+  // ≥ 2 merge. Post-fix: dedupe → 1 unique shared → overlap = 1.
+  const overlap = countEntityOverlap(
+    ["Asim Munir", "asim munir", "ASIM MUNIR ", "Donald Trump"],
+    ["Asim Munir"],
+  );
+  assert.equal(overlap, 1, "case/whitespace variants must collapse to one shared entity");
+});
+
+test("P3-5 countEntityOverlap: duplicates on story side also collapse", () => {
+  const overlap = countEntityOverlap(
+    ["Asim Munir"],
+    ["Asim Munir", "asim munir", "ASIM MUNIR"],
+  );
+  assert.equal(overlap, 1);
+});
+
+test("P3-5 countEntityOverlap: empty / whitespace tokens drop, do not inflate", () => {
+  const overlap = countEntityOverlap(
+    ["Asim Munir", "", "  ", null, "Donald Trump"],
+    ["Asim Munir", "", "Donald Trump", "  "],
+  );
+  assert.equal(overlap, 2);
+});
+
+test("P3-5 countEntityOverlap: empty / null inputs are safe", () => {
+  assert.equal(countEntityOverlap([], []), 0);
+  assert.equal(countEntityOverlap(null, ["x"]), 0);
+  assert.equal(countEntityOverlap(["x"], null), 0);
 });
 
 test("P3-5 cleanPrimaryEntities: enriched-only mode ignores cluster fallback even when populated", () => {
