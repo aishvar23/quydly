@@ -167,19 +167,110 @@ test("computePrimaryGeos: mention ratio trigger (>= 50%)", () => {
   assert.ok(!primary.includes("pk"));
 });
 
-test("computePrimaryGeos: source count trigger (>= 2)", () => {
+// P3-1 (was: "source count trigger ≥ 2 alone qualifies"). Behaviour change:
+// publisher geography without any text mentions no longer makes a country
+// primary. Story 170 demonstrated why — Indian outlets republishing a
+// Middle East story produced primary_geos = ["in"] without India being
+// what the story was *about*.
+test("P3-1 computePrimaryGeos: source count alone (no mentions) does NOT make a country primary", () => {
   const members = [
     { mentioned_geos: [], source_country: "in" },
     { mentioned_geos: [], source_country: "in" },
     { mentioned_geos: [], source_country: "us" },
   ];
-  // Two Indian sources → 'in' is primary via source evidence alone.
-  assert.ok(computePrimaryGeos(members).includes("in"));
+  // Two Indian sources but zero text mentions — not the story's subject.
+  assert.deepEqual(computePrimaryGeos(members), [],
+    "publisher geography without text-signal corroboration must NOT qualify");
+});
+
+test("P3-1 computePrimaryGeos: corroboration rule — mention ≥ 0.25 + sources ≥ 2 qualifies", () => {
+  // 1/4 articles mention "us", 2 sources from "us": neither alone clears
+  // the strong threshold, but together they corroborate.
+  const members = [
+    { mentioned_geos: ["us"], source_country: "us" },
+    { mentioned_geos: [],     source_country: "us" },
+    { mentioned_geos: [],     source_country: "in" },
+    { mentioned_geos: [],     source_country: "in" },
+  ];
+  assert.ok(computePrimaryGeos(members).includes("us"),
+    "0.25 mention + 2 sources should clear the corroborated gate");
 });
 
 test("computePrimaryGeos: empty input", () => {
   assert.deepEqual(computePrimaryGeos([]), []);
   assert.deepEqual(computePrimaryGeos(null), []);
+});
+
+test("P3-1 computePrimaryGeos: story 170 scenario — Iran beats India when gazetteer covers both", () => {
+  // 11 articles. All mention Iran ("ir"); ~3 mention India incidentally
+  // (Indian ships attacked, India summons envoy); most are published from
+  // Indian outlets. Pre-P3-1: primary_geos = ["in"] only (Iran not in
+  // gazetteer). Post-P3-1: Iran ranks above India, India still appears
+  // because the ships are Indian.
+  const ir = ["ir"];
+  const irIn = ["ir", "in"];
+  const members = [
+    { mentioned_geos: ir,   source_country: "in" },  // BBC India syndicate
+    { mentioned_geos: irIn, source_country: "in" },  // The Hindu — India envoy
+    { mentioned_geos: ir,   source_country: "us" },  // ABC News
+    { mentioned_geos: irIn, source_country: "in" },  // Indian Express — Indian tanker
+    { mentioned_geos: irIn, source_country: "in" },  // Indian Express — flagged ships
+    { mentioned_geos: ir,   source_country: "in" },
+    { mentioned_geos: ir,   source_country: "in" },
+    { mentioned_geos: ir,   source_country: "in" },
+    { mentioned_geos: ir,   source_country: "in" },
+    { mentioned_geos: ir,   source_country: "in" },
+    { mentioned_geos: ir,   source_country: "in" },
+  ];
+  const primary = computePrimaryGeos(members);
+  assert.equal(primary[0], "ir",
+    "Iran (mentioned in 11/11) must rank above India (mentioned in 3/11) — index 0 drives MapCallout");
+  // India still appears: 3/11 ≈ 0.27 mention + 10 sources → corroborated rule.
+  assert.ok(primary.includes("in"),
+    "India is still a participant — not the subject, but should remain in the list");
+});
+
+test("P3-1 computePrimaryGeos: ranks by signal strength descending (was: alphabetical)", () => {
+  // Two countries both clear the strong threshold; the one with more
+  // mentions ranks first regardless of alphabetic order.
+  const members = [
+    { mentioned_geos: ["us", "ir"], source_country: "us" },
+    { mentioned_geos: ["us", "ir"], source_country: "us" },
+    { mentioned_geos: ["us"],       source_country: "us" },  // US-only, tilts ranking US > IR
+    { mentioned_geos: ["us"],       source_country: "us" },
+  ];
+  const primary = computePrimaryGeos(members);
+  assert.equal(primary[0], "us", "US has 4/4 mentions; IR has 2/4 — US ranks first");
+  assert.equal(primary[1], "ir");
+});
+
+test("P3-1 computePrimaryGeos: caps output at 5 even when many countries qualify", () => {
+  // Build a large mention set — 6 distinct countries each strong.
+  const codes = ["ir", "us", "gb", "ru", "cn", "il"];
+  const members = codes.map((c) => ({ mentioned_geos: codes, source_country: c }));
+  const primary = computePrimaryGeos(members);
+  assert.ok(primary.length <= 5, `must cap at 5, got ${primary.length}`);
+});
+
+// P3-1 gazetteer expansion — verify the new aliases actually fire.
+test("P3-1 extractMentionedGeos: Iran aliases now resolve", () => {
+  const codes = extractMentionedGeos("Iran closed the Strait of Hormuz today.");
+  assert.ok(codes.includes("ir"), "Iran must be in mentioned_geos");
+});
+
+test("P3-1 extractMentionedGeos: US aliases include common shorthand", () => {
+  assert.ok(extractMentionedGeos("Trump signed the order at the White House.").includes("us"));
+  assert.ok(extractMentionedGeos("The U.S. Senate voted today.").includes("us"));
+  assert.ok(extractMentionedGeos("Manhattan jury convicted the defendant.").includes("us"));
+});
+
+test("P3-1 extractMentionedGeos: cross-region article picks up multiple new countries", () => {
+  const codes = extractMentionedGeos(
+    "Russia, China, and the United States held trilateral talks in Geneva.",
+  );
+  assert.ok(codes.includes("ru"));
+  assert.ok(codes.includes("cn"));
+  assert.ok(codes.includes("us"));
 });
 
 // ── computeClusterGeoScores ──────────────────────────────────────────────────

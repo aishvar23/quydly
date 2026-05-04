@@ -71,13 +71,127 @@ export const GEO_ALIASES = {
       "kathmandu", "pokhara",
     ],
   },
+
+  // P3-1 — non-SA expansion. Without these, story 170 (Iran/Hormuz) had
+  // mentioned_geos = []; primary_geos collapsed to ["in"] from publisher
+  // aggregation alone. Coverage is still curated, not exhaustive — extend
+  // when a real-story audit surfaces the next gap.
+  us: {
+    region: "north_america",
+    aliases: [
+      "united states", "u.s.", "u.s.a.", "usa", "america", "american", "americans",
+      "washington", "white house", "pentagon", "state department", "doj",
+      "department of justice", "department of defense", "treasury department",
+      "new york", "los angeles", "chicago", "houston", "miami", "boston",
+      "san francisco", "seattle", "manhattan", "brooklyn",
+      "trump", "donald trump", "biden", "joe biden", "kamala harris",
+      "republican", "republicans", "gop", "democrat", "democrats",
+      "congress", "senate", "house of representatives", "supreme court",
+      "fbi", "cia", "nsa", "fed", "federal reserve",
+    ],
+  },
+  gb: {
+    region: "europe",
+    aliases: [
+      "united kingdom", "u.k.", "uk", "britain", "british", "great britain",
+      "england", "scotland", "wales", "northern ireland",
+      "london", "manchester", "edinburgh", "birmingham",
+      "downing street", "westminster", "whitehall", "house of commons",
+      "tory", "tories", "labour party", "conservative party",
+      "rishi sunak", "keir starmer", "king charles",
+      "bank of england", "ftse",
+    ],
+  },
+  ir: {
+    region: "middle_east",
+    aliases: [
+      "iran", "iranian", "iranians", "islamic republic",
+      "tehran", "isfahan", "shiraz", "tabriz", "mashhad",
+      "supreme leader", "ayatollah", "khamenei", "raisi", "pezeshkian",
+      "irgc", "revolutionary guard", "revolutionary guards",
+      "strait of hormuz", "persian gulf",
+    ],
+  },
+  il: {
+    region: "middle_east",
+    aliases: [
+      "israel", "israeli", "israelis",
+      "tel aviv", "jerusalem", "haifa", "gaza", "west bank",
+      "netanyahu", "benjamin netanyahu", "idf", "israel defense forces",
+      "knesset", "likud", "mossad", "shin bet",
+    ],
+  },
+  sa: {
+    region: "middle_east",
+    aliases: [
+      "saudi arabia", "saudi", "saudis", "kingdom of saudi arabia",
+      "riyadh", "jeddah", "mecca", "medina",
+      "mbs", "mohammed bin salman", "house of saud",
+    ],
+  },
+  ru: {
+    region: "europe",
+    aliases: [
+      "russia", "russian", "russians", "russian federation",
+      "moscow", "st. petersburg", "saint petersburg", "kaliningrad",
+      "putin", "vladimir putin", "kremlin", "duma", "fsb",
+      "ruble",
+    ],
+  },
+  ua: {
+    region: "europe",
+    aliases: [
+      "ukraine", "ukrainian", "ukrainians",
+      "kyiv", "kiev", "kharkiv", "odessa", "lviv", "donetsk", "luhansk",
+      "zelensky", "volodymyr zelensky", "rada",
+    ],
+  },
+  cn: {
+    region: "east_asia",
+    aliases: [
+      "china", "chinese", "prc", "people's republic",
+      "beijing", "shanghai", "shenzhen", "guangzhou", "hong kong", "macau",
+      "xi jinping", "li qiang", "ccp", "communist party of china",
+      "taiwan", "taipei",  // note: taiwan ambiguity flagged in P3-1 follow-up
+      "yuan", "renminbi",
+    ],
+  },
+  kp: {
+    region: "east_asia",
+    aliases: [
+      "north korea", "north korean", "north koreans", "dprk",
+      "pyongyang",
+      "kim jong un", "kim jong-un", "kim jong il",
+    ],
+  },
+  jp: {
+    region: "east_asia",
+    aliases: [
+      "japan", "japanese",
+      "tokyo", "osaka", "kyoto", "yokohama",
+      "fumio kishida", "shinzo abe", "diet of japan",
+      "yen", "nikkei", "boj", "bank of japan",
+    ],
+  },
+  kr: {
+    region: "east_asia",
+    aliases: [
+      "south korea", "south korean", "south koreans", "rok", "republic of korea",
+      "seoul", "busan", "incheon",
+      "yoon suk yeol", "yoon", "samsung", "kospi", "won",
+    ],
+  },
 };
 
 // ── Region → member country codes ────────────────────────────────────────────
 // Used by the India audience scorer (source_region fallback) and for future
 // region-level audiences.
 export const REGIONS = {
-  south_asia: ["in", "pk", "bd", "lk", "np"],
+  south_asia:    ["in", "pk", "bd", "lk", "np"],
+  north_america: ["us", "ca", "mx"],
+  europe:        ["gb", "ru", "ua", "fr", "de", "it", "es", "pl", "nl", "se"],
+  middle_east:   ["ir", "il", "sa", "tr", "iq", "sy", "eg", "ye", "ae", "qa"],
+  east_asia:     ["cn", "jp", "kp", "kr", "tw", "hk"],
 };
 
 // ── Intergovernmental / geopolitical entities (text-based detection) ─────────
@@ -127,6 +241,22 @@ const ALIAS_INDEX = (() => {
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// P3-1 — reverse alias lookup. Given a place name as the synthesizer LLM
+// tagged it (e.g. "Strait of Hormuz", "Manhattan", "Mumbai"), return the
+// ISO country code or null. Used by the synthesizer to derive geos from
+// `primary_entities_enriched[*]` of type "place" — an editorial-strength
+// signal that the gazetteer's aggregate-mention rollup may miss.
+export function countryCodeForPlaceName(name) {
+  if (typeof name !== "string" || !name.trim()) return null;
+  const lower = name.toLowerCase().trim();
+  // ALIAS_INDEX is sorted multi-word-first; an exact match is what we want
+  // here, not a containment check (we're given a single tagged place).
+  for (const { alias, code } of ALIAS_INDEX) {
+    if (alias === lower) return code;
+  }
+  return null;
 }
 
 function countMatches(lowerText, alias) {
@@ -272,11 +402,31 @@ export function computeArticleAudienceScore(
 }
 
 // ── computePrimaryGeos ───────────────────────────────────────────────────────
-// A country is "primary" for a cluster if:
-//   - ≥50% of member articles mention it (strong text signal), OR
-//   - ≥2 member articles are from publishers in that country (source signal).
+// P3-1 — text mentions outweigh publisher geography.
+//
+// The original rule (mentionRatio ≥ 0.5 OR sourceN ≥ 2) accepted source-
+// country alone as evidence a country was "primary". On story 170 (Iran/
+// Hormuz) that produced primary_geos = ["in"] from Indian-outlet
+// aggregation alone — most articles were published in India, but the story
+// is about the Persian Gulf. The renderer's MapCallout therefore pointed at
+// India.
+//
+// New rule:
+//   - Strong: mentionRatio ≥ 0.5  →  primary
+//   - Corroborated: mentionRatio ≥ 0.25 AND sourceN ≥ 2  →  primary
+//   - Source-only (no mentions): NOT primary
+//
+// Output is sorted by **signal strength descending** instead of alphabetic,
+// so MapCallout / `primary_geos[0]` resolves to the strongest geo. Capped
+// at 5 to keep payload bounded.
+//
 // Input: `member_geos` = array of { mentioned_geos, source_country } (one
 // entry per cluster member article).
+const PRIMARY_GEO_CAP = 5;
+const PRIMARY_GEO_MENTION_FLOOR = 0.25;
+const PRIMARY_GEO_MENTION_STRONG = 0.5;
+const PRIMARY_GEO_SOURCE_CORROBORATION = 2;
+
 export function computePrimaryGeos(member_geos) {
   const members = Array.isArray(member_geos) ? member_geos : [];
   const total = members.length;
@@ -301,13 +451,28 @@ export function computePrimaryGeos(member_geos) {
   }
 
   const candidates = new Set([...mentionCount.keys(), ...sourceCount.keys()]);
-  const primary = [];
+  const scored = [];
   for (const code of candidates) {
     const mentionRatio = (mentionCount.get(code) ?? 0) / total;
     const sourceN = sourceCount.get(code) ?? 0;
-    if (mentionRatio >= 0.5 || sourceN >= 2) primary.push(code);
+
+    const passes =
+      mentionRatio >= PRIMARY_GEO_MENTION_STRONG ||
+      (mentionRatio >= PRIMARY_GEO_MENTION_FLOOR && sourceN >= PRIMARY_GEO_SOURCE_CORROBORATION);
+    if (!passes) continue;
+
+    // Combined signal: text dominates (×2), source share contributes a small
+    // tiebreaker (×0.5, capped at 1). Two countries that both clear the gate
+    // get ranked by which one the corpus actually talks about more.
+    const signal = mentionRatio * 2 + Math.min(1, sourceN / total) * 0.5;
+    scored.push({ code, signal });
   }
-  return primary.sort();
+
+  scored.sort((a, b) => {
+    if (a.signal !== b.signal) return b.signal - a.signal;
+    return a.code.localeCompare(b.code);   // stable tiebreak on code
+  });
+  return scored.slice(0, PRIMARY_GEO_CAP).map((x) => x.code);
 }
 
 // ── computeClusterGeoScores ──────────────────────────────────────────────────
