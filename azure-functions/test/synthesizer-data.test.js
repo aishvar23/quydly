@@ -222,6 +222,71 @@ test("P0-2 extractQuotes drops too-short quotes", async () => {
   assert.equal(verified.length, 0, "below-minimum-words quotes filtered out");
 });
 
+// Codex P1 regression: stripping apostrophes globally lets "we'll" collapse
+// to "well", which would let a paraphrased quote slip past the verbatim
+// guard. The normaliser must keep apostrophes intact and only fold curly /
+// straight typography drift.
+test("P0-2 extractQuotes preserves apostrophes — paraphrase that drops a contraction must reject", async () => {
+  const articles = [
+    { id: 1, title: "t", content: "We'll meet at the courthouse on Monday morning at nine.", domain: "x.com" },
+  ];
+  const llmResponse = JSON.stringify([
+    {
+      source_index: 1,
+      text: "Well meet at the courthouse on Monday morning at nine.",
+      speaker: "Counsel",
+    },
+  ]);
+  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  assert.equal(verified.length, 0, "dropping the apostrophe in 'we'll' must not be treated as verbatim");
+});
+
+test("P0-2 extractQuotes tolerates curly→straight apostrophe drift in contractions", async () => {
+  const articles = [
+    // Article uses curly U+2019; LLM returns straight apostrophe.
+    { id: 1, title: "t", content: "He said, “We’ll meet at the courthouse on Monday morning.”", domain: "x.com" },
+  ];
+  const llmResponse = JSON.stringify([
+    {
+      source_index: 1,
+      text: "We'll meet at the courthouse on Monday morning.",
+      speaker: "He",
+    },
+  ]);
+  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  assert.equal(verified.length, 1, "curly apostrophe in source must accept matching straight-apostrophe LLM output");
+});
+
+// ── P0-1: deterministic ordering by authority (Codex P2) ─────────────────────
+
+test("P0-1 buildSourceDocuments orders entries by authority desc with stable id tiebreak", () => {
+  const articles = [
+    { id: 30, title: "low",  domain: "low.com",  authority_score: 0.4 },
+    { id: 10, title: "high", domain: "high.com", authority_score: 0.9 },
+    { id: 20, title: "mid",  domain: "mid.com",  authority_score: 0.7 },
+    { id: 11, title: "high2", domain: "high2.com", authority_score: 0.9 }, // tiebreak vs id 10
+  ];
+  const docs = buildSourceDocuments(articles);
+  assert.deepEqual(docs.map(d => d.id), ["10", "11", "20", "30"],
+    "highest authority first, then ascending id within ties");
+});
+
+test("P0-1 mergeSourceDocuments re-sorts by authority after dedup", () => {
+  const existing = [
+    { id: "30", title: "old-low",  authority: 0.4 },
+    { id: "10", title: "old-high", authority: 0.6 }, // should be overwritten by incoming with higher authority
+  ];
+  const incoming = [
+    { id: "20", title: "new-mid",  authority: 0.7 },
+    { id: "10", title: "new-high", authority: 0.9 }, // upgrades the entry
+  ];
+  const merged = mergeSourceDocuments(existing, incoming);
+  assert.deepEqual(merged.map(d => d.id), ["10", "20", "30"]);
+  const byId = Object.fromEntries(merged.map(d => [d.id, d]));
+  assert.equal(byId["10"].authority, 0.9, "incoming authority overrides existing");
+  assert.equal(byId["10"].title, "new-high");
+});
+
 // ── P0-3: place name resolution ──────────────────────────────────────────────
 
 test("P0-3 countryCodeToName resolves common ISO codes", () => {

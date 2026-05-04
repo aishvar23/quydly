@@ -144,13 +144,18 @@ const QUOTE_MAX_PER_STORY = 3;
 const QUOTE_MIN_WORDS     = 4;
 const QUOTE_MAX_CHARS     = 280;
 
-// Strip surrounding curly/straight quotes and collapse whitespace so the
-// verbatim check tolerates the articles' typesetting drift but still catches
-// paraphrase. Keeps inner punctuation, casing, and word order — those are the
-// real signals.
+// Normalise curly/straight quote drift and whitespace so the verbatim check
+// tolerates the article's typesetting but still catches paraphrase. Keeps
+// inner punctuation, casing, and word order — those are the real signals.
+//
+// IMPORTANT: do NOT strip apostrophes. Folding "we'll" → "well" lets a
+// paraphrased quote silently pass the haystack.includes(needle) test, which
+// would let unverified text reach QuoteCard. Curly variants are mapped to
+// their straight counterparts instead so contractions survive intact.
 function normaliseQuoteForCheck(s) {
   return String(s)
-    .replace(/[‘’“”"']/g, "")
+    .replace(/[“”]/g, '"')   // curly double → straight double
+    .replace(/[‘’]/g, "'")   // curly single → straight apostrophe
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -241,6 +246,18 @@ Rules:
 // `verbatim_quotes` (optional) is the P0-2 output from the synthesis prompt;
 // each quote is attached to whichever source_documents entry it was extracted
 // from after passing the verbatim-presence guard.
+//
+// Output is sorted by authority desc with a stable id tiebreak. v2's
+// EvidenceShelf and `sources[0]` citation pickers treat the first entry as
+// the primary source, so leaving order to the database's row-return order
+// would make attribution nondeterministic.
+function compareSourceDocs(a, b) {
+  const ax = Number.isFinite(a?.authority) ? a.authority : -Infinity;
+  const bx = Number.isFinite(b?.authority) ? b.authority : -Infinity;
+  if (ax !== bx) return bx - ax;
+  return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
+}
+
 export function buildSourceDocuments(articles, verbatimQuotes = []) {
   const docs = articles.map(a => ({
     id:             String(a.id),
@@ -262,12 +279,14 @@ export function buildSourceDocuments(articles, verbatimQuotes = []) {
     target.quote_role    = q.role ?? null;
   }
 
+  docs.sort(compareSourceDocs);
   return docs;
 }
 
 // Merge docs from a new synthesis into existing source_documents preserving
 // previously-snapshotted entries (River-merged stories accrue evidence over
-// time as new clusters land). Dedupe by id.
+// time as new clusters land). Dedupe by id, then re-sort by authority desc
+// so the primary-citation slot stays deterministic across merges.
 export function mergeSourceDocuments(existing, incoming) {
   const byId = new Map();
   for (const d of Array.isArray(existing) ? existing : []) {
@@ -277,7 +296,7 @@ export function mergeSourceDocuments(existing, incoming) {
     if (!d || d.id == null) continue;
     byId.set(String(d.id), { ...(byId.get(String(d.id)) ?? {}), ...d });
   }
-  return [...byId.values()];
+  return [...byId.values()].sort(compareSourceDocs);
 }
 
 // ── Global significance score (design §7.2) ───────────────────────────────────
