@@ -1,0 +1,31 @@
+{
+  "id": "fallback-test",
+  "category_id": "world",
+  "headline": "EU and Bhutan Sign Trade Pact in Thimphu",
+  "summary": "European Union foreign ministers signed a trade and tourism agreement with Bhutan during a summit in Thimphu, marking the bloc's first comprehensive accord with the Himalayan nation. The deal includes a $200 million development assistance package over five years.",
+  "key_points": [
+    "EU and Bhutan signed a trade pact worth $200 million over five years",
+    "The agreement covers tourism, sustainable development, and digital trade",
+    "European Council president Antonio Costa announced the deal in Thimphu",
+    "The pact represents Bhutan's first comprehensive accord with the EU"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.9,
+  "support_score": 0.85,
+  "story_score": 41.0,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": ["european union", "bhutan", "costa"],
+  "primary_geos": ["Thimphu", "Bhutan"],
+  "published_at": "2026-05-03T10:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "eu_bhutan_communique",
+      "type": "joint communique",
+      "title": "Joint EU-Bhutan Summit Communique on Trade and Tourism",
+      "issuer": "European External Action Service",
+      "url": "https://www.eeas.europa.eu/eeas/eu-bhutan-summit-2026",
+      "date": "May 3, 2026"
+    }
+  ]
+}

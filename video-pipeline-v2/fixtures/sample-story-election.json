@@ -1,0 +1,41 @@
+{
+  "id": "election-fixture-001",
+  "category_id": "world",
+  "headline": "Reform Alliance Wins Reykjavik Snap Election by 12.5-Point Margin",
+  "summary": "The Reform Alliance won Iceland's snap parliamentary election with 54.3 percent of the vote, defeating the incumbent National Front. Reform Alliance leader Lina Aksel will form the next government, replacing outgoing Prime Minister Marin Volkov, who conceded shortly after midnight in Reykjavik. The election commission confirmed final results after a record 78 percent turnout.",
+  "key_points": [
+    "Reform Alliance secured 54.3 percent of the vote against the National Front's 41.8 percent",
+    "Turnout reached 78 percent — the highest in three decades",
+    "Lina Aksel will form the next government in Reykjavik as Prime Minister-elect",
+    "Outgoing Prime Minister Marin Volkov conceded shortly after midnight"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.92,
+  "support_score": 0.9,
+  "story_score": 44.0,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": ["reform alliance", "national front", "lina aksel", "marin volkov"],
+  "primary_geos": ["Reykjavik", "Iceland"],
+  "published_at": "2026-05-02T22:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "iec_final_results",
+      "type": "official results",
+      "title": "Iceland Election Commission - Final Tally",
+      "issuer": "Iceland Election Commission",
+      "url": "https://example-fixture-election.test/2026/results",
+      "date": "May 3, 2026",
+      "quote_text": "We thank Icelanders for the highest turnout this republic has seen in thirty years.",
+      "quote_speaker": "Lina Aksel",
+      "quote_role": "Prime Minister-elect"
+    },
+    {
+      "id": "volkov_concession",
+      "type": "concession statement",
+      "title": "Outgoing PM concession address",
+      "issuer": "Office of Prime Minister Volkov",
+      "date": "May 3, 2026"
+    }
+  ]
+}

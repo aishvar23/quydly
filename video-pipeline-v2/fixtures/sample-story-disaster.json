@@ -1,0 +1,41 @@
+{
+  "id": "disaster-fixture-001",
+  "category_id": "world",
+  "headline": "Magnitude 6.4 Earthquake Strikes Sumatra Coast; BNPB Confirms 14 Dead",
+  "summary": "A magnitude 6.4 earthquake struck the western coast of Sumatra at 03:17 local time, with the Indonesian Disaster Management Agency confirming 14 dead and 47 injured. BNPB spokesperson Lina Putri said roughly 340 residents have been displaced to temporary shelters, and the agency estimated initial damage at $80 million. No tsunami warning was issued.",
+  "key_points": [
+    "BNPB confirmed 14 dead and 47 injured in the magnitude 6.4 earthquake",
+    "Approximately 340 residents have been displaced to temporary shelters",
+    "Initial damage estimate is $80 million according to the agency",
+    "No tsunami warning was issued by the agency"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.93,
+  "support_score": 0.9,
+  "story_score": 45.0,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": ["bnpb", "lina putri", "sumatra"],
+  "primary_geos": ["Sumatra", "Indonesia"],
+  "published_at": "2026-05-03T20:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "bnpb_situation_report",
+      "type": "situation report",
+      "title": "BNPB Situation Report - West Sumatra Earthquake",
+      "issuer": "BNPB",
+      "url": "https://example-fixture-disaster.test/2026/bnpb-sitrep-001",
+      "date": "May 3, 2026",
+      "quote_text": "Our priority is shelter, medical care, and an authoritative casualty count. The figures we publish will remain provisional until field teams complete the survey.",
+      "quote_speaker": "Lina Putri",
+      "quote_role": "BNPB spokesperson"
+    },
+    {
+      "id": "usgs_event_page",
+      "type": "seismic record",
+      "title": "USGS M6.4 - off the west coast of Sumatra, Indonesia",
+      "issuer": "United States Geological Survey",
+      "date": "May 3, 2026"
+    }
+  ]
+}

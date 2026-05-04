@@ -1,0 +1,38 @@
+{
+  "name": "quydly-video-pipeline-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quydly v2 — evidence-first editorial video renderer with motion-token system. First slice: NumberCard.",
+  "scripts": {
+    "generate": "node index.js",
+    "studio": "remotion studio src/render/Root.tsx",
+    "render:number-slice": "remotion render src/render/Root.tsx NumberSlice output/slice-number/v1/slice.mp4 --concurrency=1",
+    "render:quote-slice": "remotion render src/render/Root.tsx QuoteSlice output/slice-quote/v1/slice.mp4 --concurrency=1",
+    "render:shelf-slice": "remotion render src/render/Root.tsx EvidenceShelfSlice output/slice-shelf/v1/slice.mp4 --concurrency=1",
+    "typecheck": "tsc --noEmit",
+    "lint:fixtures": "node scripts/lint-fixtures.js",
+    "lint:fixtures:ci": "node scripts/lint-fixtures.js --ci --exclude \"*fallback-test*,scaffolded-*\"",
+    "author:fixture": "node scripts/author-fixture.js",
+    "ci:check": "npm run typecheck && npm run lint:fixtures:ci",
+    "supabase:batch": "node scripts/fetch-supabase-batch.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@remotion/cli": "4.0.456",
+    "@supabase/supabase-js": "^2.105.1",
+    "dotenv": "^17.4.2",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "remotion": "4.0.456"
+  },
+  "devDependencies": {
+    "@types/react": "18.2.0",
+    "typescript": "5.8.3"
+  },
+  "remotion": {
+    "entryPoint": "src/render/Root.tsx",
+    "fps": 30,
+    "width": 1080,
+    "height": 1920
+  }
+}

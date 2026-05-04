@@ -1,0 +1,52 @@
+{
+  "id": "eu-foreign-ministers-approve-14th-sanctions-package-russia-shadow-fleet",
+  "category_id": "world",
+  "headline": "EU Foreign Ministers Approve 14th Sanctions Package Targeting Russian Shadow Fleet Tankers",
+  "summary": "European Union foreign ministers convened in Brussels on January 27, 2026, to approve a 14th package of economic sanctions against Russia, specifically targeting 52 vessels identified as part of Moscow's shadow fleet used to circumvent oil price caps. The measures include asset freezes and port access bans for tankers registered in Liberia, Panama, and the Marshall Islands that have transported Russian crude above the G7-imposed $60 per barrel ceiling. EU High Representative for Foreign Affairs Kristian Mellberg stated the package also blacklists 17 shipping companies and 9 insurance providers linked to sanction evasion networks.",
+  "key_points": [
+    "The EU's 14th sanctions package targets 52 specific vessels identified as part of Russia's shadow fleet operation.",
+    "Targeted tankers are registered primarily in Liberia, Panama, and the Marshall Islands and have violated the G7 $60-per-barrel oil price cap.",
+    "The sanctions blacklist 17 shipping companies and 9 insurance providers facilitating Russian oil transport above permitted prices.",
+    "EU High Representative Kristian Mellberg announced the measures following unanimous approval by foreign ministers in Brussels on January 27, 2026.",
+    "The package includes asset freezes and prohibits EU ports from granting access to designated shadow fleet vessels."
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.91,
+  "support_score": 0.89,
+  "story_score": 46,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": [
+    "european union",
+    "russia",
+    "kristian mellberg",
+    "g7",
+    "shadow fleet"
+  ],
+  "primary_geos": [
+    "Brussels",
+    "Moscow"
+  ],
+  "published_at": "2026-01-27T14:22:00.000Z",
+  "source_documents": [
+    {
+      "id": "eu-council-foreign-affairs-jan-2026",
+      "type": "press_release",
+      "title": "Council Adopts 14th Package of Restrictive Measures Against Russia",
+      "issuer": "European Council",
+      "url": "https://example-fixture.test/eu-council-russia-sanctions-14-jan-2026",
+      "date": "Jan 27, 2026",
+      "quote_text": "We are closing loopholes that allowed shadow tankers to finance Putin's war machine while evading our price cap mechanisms.",
+      "quote_speaker": "Kristian Mellberg",
+      "quote_role": "EU High Representative for Foreign Affairs"
+    },
+    {
+      "id": "reuters-eu-shadow-fleet-sanctions-2026",
+      "type": "news_article",
+      "title": "EU Blacklists 52 Tankers in Broadest Shadow Fleet Crackdown Yet",
+      "issuer": "Reuters",
+      "url": "https://example-fixture.test/reuters-eu-russia-tanker-sanctions-2026",
+      "date": "Jan 27, 2026"
+    }
+  ]
+}

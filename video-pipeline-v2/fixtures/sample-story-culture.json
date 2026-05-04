@@ -1,0 +1,42 @@
+{
+  "id": "culture-fixture-001",
+  "category_id": "culture",
+  "headline": "Crystal Night Season Two Posts 480 Million Streaming Hours in Debut Week",
+  "summary": "Lumebox's Crystal Night Season Two recorded 480 million streaming hours in its first seven days, the platform's highest debut-week total to date. The series premiered Friday in Los Angeles with all 8 episodes released simultaneously. Showrunner Maren Hollis confirmed renewal discussions for Season Three. Variety placed the series at No. 1 on the weekly streaming chart.",
+  "key_points": [
+    "Crystal Night Season Two posted 480 million streaming hours in its debut week",
+    "All 8 episodes were released simultaneously on Friday in Los Angeles",
+    "Showrunner Maren Hollis confirmed Season Three renewal discussions",
+    "Variety ranked the series No. 1 on the weekly streaming chart"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.92,
+  "support_score": 0.9,
+  "story_score": 43.0,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": ["lumebox", "crystal night", "maren hollis", "variety"],
+  "primary_geos": ["Los Angeles"],
+  "published_at": "2026-05-03T18:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "lumebox_dashboard",
+      "type": "platform dashboard",
+      "title": "Lumebox Weekly Top 10 - Streaming Hours",
+      "issuer": "Lumebox",
+      "url": "https://example-fixture-culture.test/lumebox/top10-week-2026-w18",
+      "date": "May 3, 2026",
+      "quote_text": "The audience response exceeded everything we modelled. We are already in conversations about the next chapter.",
+      "quote_speaker": "Maren Hollis",
+      "quote_role": "Showrunner"
+    },
+    {
+      "id": "variety_streaming_chart",
+      "type": "trade-press article",
+      "title": "Variety Weekly Streaming Chart - Week 18",
+      "issuer": "Variety",
+      "url": "https://example-fixture-culture.test/variety/streaming-week-18",
+      "date": "May 3, 2026"
+    }
+  ]
+}
