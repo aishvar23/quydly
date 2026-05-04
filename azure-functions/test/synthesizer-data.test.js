@@ -139,6 +139,45 @@ test("P0-1 mergeSourceDocuments handles non-array existing (first River merge)",
   assert.deepEqual(merged2, incoming);
 });
 
+// Codex P1 review on PR #72 — regression guard: in the synthesizer's
+// River-update path, source diversity must be recomputed from the merged
+// source_documents, not from the new cluster's articles alone. Otherwise
+// an old multi-domain story stamped with a low-diversity new pickup gets
+// silently downgraded.
+test("P1-8 merged-source diversity reflects the union, not just the new pickup", async () => {
+  const { computeSourceDiversity } = await import("../lib/sourceDiversity.js");
+
+  // Existing story already has 3 distinct, non-wire domains (high diversity)
+  const existing = [
+    { id: "100", issuer: "nytimes.com",     authority: 0.9 },
+    { id: "101", issuer: "bbc.co.uk",       authority: 0.8 },
+    { id: "102", issuer: "theguardian.com", authority: 0.7 },
+  ];
+  // New cluster batch is a single wire pickup — what the buggy path used
+  // to score on its own.
+  const incoming = [
+    { id: "200", issuer: "reuters.com", authority: 0.7 },
+  ];
+
+  const merged = mergeSourceDocuments(existing, incoming);
+  // The synthesizer maps source-document `issuer` → diversity helper's
+  // `domain`. Mirror that exact shape map here.
+  const mergedDiversity = computeSourceDiversity(merged.map(d => ({ domain: d.issuer })));
+
+  // Pre-fix bug: code scored only the new wire pickup → label "single".
+  // Post-fix: 4 distinct domains, 1 wire / 3 non-wire → "diverse".
+  assert.equal(mergedDiversity.domain_count, 4);
+  assert.equal(mergedDiversity.wire_count,   1);
+  assert.equal(mergedDiversity.label,        "diverse",
+    "merge must lift the persisted diversity above what the new pickup alone produces");
+
+  // The pre-fix scenario (incoming-only) lands under "narrow", proving the
+  // recomputation matters in real conditions, not just on paper.
+  const incomingOnly = computeSourceDiversity(incoming.map(d => ({ domain: d.issuer })));
+  assert.ok(incomingOnly.score < mergedDiversity.score,
+    `pre-fix score ${incomingOnly.score} should be below merged ${mergedDiversity.score}`);
+});
+
 // ── P0-2: extractQuotes verbatim verification ─────────────────────────────────
 
 function makeStubAi(text) {

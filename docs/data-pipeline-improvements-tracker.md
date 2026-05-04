@@ -2,7 +2,8 @@
 
 > Owner: synthesizer / scraper team
 > Consumer: `video-pipeline-v2` and the question generator
-> Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1 batch in flight)
+> Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
+> P1-8 / P1-9 / P1-10 in flight on `feat/pipeline-data-quality-p1-final`)
 
 ## Why this exists
 
@@ -377,7 +378,7 @@ existing `audit.visual_angle`.
 
 ---
 
-### P1-8 ☐ Source diversity scoring
+### P1-8 ☑ Source diversity scoring
 
 **What**: Track the number of *independent* sources per story
 (distinct domains / distinct issuer types / wire vs primary).
@@ -400,7 +401,7 @@ attribution.
 
 ---
 
-### P1-9 ☐ Verification status tracking
+### P1-9 ☑ Verification status tracking
 
 **What**: Track lifecycle state on a story:
 
@@ -426,7 +427,7 @@ Stories below `verified` shouldn't render.
 
 ---
 
-### P1-10 ☐ Conflicting-source detection
+### P1-10 ☑ Conflicting-source detection
 
 **What**: When two sources disagree on a key number, mark the story:
 
