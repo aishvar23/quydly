@@ -11,6 +11,8 @@
 //   P1-6  per-entity context bio (Wikipedia summary stitches in here)
 //   P1-7  why_it_matters
 //   P1-10 factual_conflicts (numeric / factual divergence between sources)
+//   P2-1  visual_concepts (concrete renderable visuals per story)
+//   P2-7  per-entity phonetic hint (TTS pronunciation)
 //
 // Design choices:
 //   - One Claude pass, structured JSON. The synthesizer narrative pass already
@@ -94,6 +96,7 @@ export function emptyEnrichment() {
     timeline_events:           [],
     primary_entities_enriched: [],
     factual_conflicts:         [],
+    visual_concepts:           [],
   };
 }
 
@@ -203,12 +206,17 @@ Respond ONLY with a single JSON object — no markdown fences, no preamble. Use 
     { "date": "YYYY-MM-DD", "label": "What happened on this date (≤ 8 words)", "source_id": <integer article id from above, or null> }
   ],
   "primary_entities_enriched": [
-    { "name": "Display Name", "type": "person|place|org", "role": "their role in this story (≤ 6 words)", "context": "One-sentence bio or context (≤ 30 words). Optional — null if unknown." }
+    { "name": "Display Name", "type": "person|place|org", "role": "their role in this story (≤ 6 words)", "context": "One-sentence bio or context (≤ 30 words). Optional — null if unknown.", "phonetic": "LOO-lah da SEEL-vah — hyphenated syllables for TTS. Optional, omit for unambiguous English names." }
   ],
   "factual_conflicts": [
     { "claim": "what the conflicting sources disagree about (≤ 8 words)",
       "values": ["value as reported by source A (issuer)", "value as reported by source B (issuer)"],
       "preferred": "the value you would lead with, must match one of \`values\` verbatim" }
+  ],
+  "visual_concepts": [
+    "Manhattan federal courthouse exterior",
+    "FTX logo with customer-fund flow diagram",
+    "Defendant's mugshot, DOJ-public domain"
   ]
 }
 
@@ -227,6 +235,10 @@ Rules:
   - "values" entries should each name the issuer in parentheses so an editor can adjudicate. ≤ 4 entries.
   - "preferred" must match one of the entries in \`values\` exactly. Prefer official / primary sources over wire / aggregator sources.
   - Empty array if all sources agree or only one source covers the claim.
+- visual_concepts: 3-5 concrete visuals a renderer can map to module beats — proper-noun places, recognisable logos, named figures, charts. Each entry ≤ 80 characters.
+  - Skip generic stock-photo concepts ("a courtroom", "a businessman in a suit"). Specificity is the whole point.
+  - Empty array if the story has no obvious visual hooks beyond what's already implied by primary_entities and primary_geos.
+- entity phonetic: only emit for non-English names or names where the spelling misleads English TTS (e.g. "Lula" → "LOO-lah", "Xi Jinping" → "SHEE jin-PING"). Use simple hyphenated syllables in caps for stressed parts. Omit for names that English TTS will read correctly.
 - Every field is required. If you have nothing for a field, emit the empty default (\`null\`, \`[]\`, or \`{...empty arrays...}\`).`;
 
   const msg = await ai.messages.create({
@@ -256,6 +268,7 @@ function validateEnrichment(input, articles) {
   out.timeline_events    = sanitiseTimelineEvents(input.timeline_events, articles);
   out.primary_entities_enriched = sanitiseEntities(input.primary_entities_enriched);
   out.factual_conflicts  = sanitiseFactualConflicts(input.factual_conflicts);
+  out.visual_concepts    = sanitiseVisualConcepts(input.visual_concepts);
 
   return out;
 }
@@ -329,10 +342,41 @@ function sanitiseEntities(input) {
     const type = typeof e.type === "string" && ENTITY_TYPE_SET.has(e.type) ? e.type : null;
     if (!type) return null;
     const out = { name: e.name.trim(), type };
-    if (typeof e.role    === "string" && e.role.trim())    out.role    = e.role.trim().slice(0, 80);
-    if (typeof e.context === "string" && e.context.trim()) out.context = e.context.trim().slice(0, 280);
+    if (typeof e.role     === "string" && e.role.trim())     out.role     = e.role.trim().slice(0, 80);
+    if (typeof e.context  === "string" && e.context.trim())  out.context  = e.context.trim().slice(0, 280);
+    // P2-7 — phonetic hint for TTS. Optional, only emitted by the LLM for
+    // non-English names. Reject anything that doesn't look like a phonetic
+    // syllabification: must contain at least one hyphen or whitespace
+    // separator, otherwise it's just the name retyped (no value over the
+    // raw `name` field) and would mislead the renderer's substitution layer.
+    if (typeof e.phonetic === "string") {
+      const phon = e.phonetic.trim().slice(0, 80);
+      if (phon && /[\s-]/.test(phon) && phon.toLowerCase() !== out.name.toLowerCase()) {
+        out.phonetic = phon;
+      }
+    }
     return out;
   }, 8);
+}
+
+// P2-1 — visual concepts. Free-form short strings; we cap length and count
+// but don't try to enforce specificity beyond rejecting empties / dupes —
+// the prompt does that work, and the editor sees the list before render.
+function sanitiseVisualConcepts(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of input) {
+    if (out.length >= 5) break;
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
 }
 
 // P1-10 — factual conflicts. The LLM is prompted to report only when
