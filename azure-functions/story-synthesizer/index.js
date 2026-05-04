@@ -21,6 +21,8 @@ import { auditStory, persistAudit } from "../lib/storyAudit.js";
 import { enrichNarrative, emptyEnrichment, enrichmentSucceeded } from "../lib/enrichment.js";
 import { probeEntities } from "../lib/wikipedia.js";
 import { computeSourceDiversity } from "../lib/sourceDiversity.js";
+import { computeVideoEligibility } from "../lib/videoEligibility.js";
+import { computeStoryDecayAt } from "../lib/freshness.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
 const MAX_RETRIES       = 2;
@@ -337,6 +339,10 @@ function buildEnrichmentColumns(enrichment, enrichedEntities) {
     // shares the gate. A failed enrichment leaves any previously-persisted
     // conflicts on the row intact (River-merge correctness).
     factual_conflicts:         enrichment.factual_conflicts,
+    // P2-1: visual_concepts is emitted by the same enrichment LLM pass, so
+    // it follows the same gate — a failed enrichment leaves the previous
+    // list (or the migration's empty default) intact rather than wiping it.
+    visual_concepts:           enrichment.visual_concepts,
   };
 }
 
@@ -692,6 +698,28 @@ export default async function storySynthesizer(context, message) {
       merged_domains:  mergedDiversity.domain_count,
     }));
 
+    // P2-3: recompute eligibility against the *merged* evidence shelf —
+    // a story that gained an independent source since the prior synthesis
+    // may flip from "single_source_coverage" to eligible. Inputs other
+    // than diversity (confidence, posture, headline/summary) come from
+    // this synthesis pass since the row's text fields are being overwritten.
+    const mergedEligibility = computeVideoEligibility({
+      confidence_score:  narrative.confidence_score,
+      editorial_posture: enrichment.editorial_posture,
+      headline:          narrative.headline,
+      summary:           narrative.summary,
+      diversity:         mergedDiversity,
+      article_count:     mergedSourceDocs.length,
+    });
+    context.log(JSON.stringify({
+      event:       "video_eligibility_computed",
+      cluster_id,
+      story_id:    existingStory.id,
+      eligible:    mergedEligibility.eligible,
+      reason:      mergedEligibility.reason,
+      path:        "merge",
+    }));
+
     const { error: updateErr } = await supabase
       .from("stories")
       .update({
@@ -716,6 +744,14 @@ export default async function storySynthesizer(context, message) {
         // Editor decisions (verified/published/corrected/retracted) are
         // sticky across re-syntheses; overwriting them with 'draft' would
         // silently revert editorial review.
+        // P2-3: video_eligible recomputed every River-merge for the same
+        // reason as source_diversity — gained sources can flip an earlier
+        // skip-reason. video_skip_reason cleared to null on eligible=true.
+        video_eligible:            mergedEligibility.eligible,
+        video_skip_reason:         mergedEligibility.reason,
+        // P2-6: story_decay_at is intentionally NOT updated here. The
+        // freshness window is pinned to the original published_at; a new
+        // cluster pickup of the same story doesn't reset the clock.
         // P0-5 / P1 enrichment fields. Spread is empty (no columns touched)
         // when the enrichment pass fell back to defaults — see
         // buildEnrichmentColumns. Successful runs overwrite; failed runs
@@ -730,6 +766,30 @@ export default async function storySynthesizer(context, message) {
     story_id = existingStory.id;
     context.log(JSON.stringify({ event: "story_merged", cluster_id, story_id, story_score, disposition, global_significance_score: globalSignificanceScore }));
   } else {
+    // P2-3: eligibility for a fresh row uses the inserting cluster's
+    // articles + the synthesizer's diversity score (no merge to consider
+    // since this is the first synthesis).
+    const insertEligibility = computeVideoEligibility({
+      confidence_score:  narrative.confidence_score,
+      editorial_posture: enrichment.editorial_posture,
+      headline:          narrative.headline,
+      summary:           narrative.summary,
+      diversity,
+      article_count:     articles.length,
+    });
+    context.log(JSON.stringify({
+      event:       "video_eligibility_computed",
+      cluster_id,
+      eligible:    insertEligibility.eligible,
+      reason:      insertEligibility.reason,
+      path:        "insert",
+    }));
+
+    // P2-6: story_decay_at pinned to published_at + per-category window.
+    // Falls back to a default decay when category is missing/unknown so
+    // every row carries a defensible freshness timestamp.
+    const decayAt = computeStoryDecayAt(cluster.category_id, now);
+
     const { data: inserted, error: insertErr } = await supabase
       .from("stories")
       .insert({
@@ -756,6 +816,14 @@ export default async function storySynthesizer(context, message) {
         // back-filled existing is_verified=true rows to 'verified', so
         // both pre- and post-migration rows carry honest lifecycle state.
         verification_status:       "draft",
+        // P2-3: editorial gate, derived from this synthesis pass. Stored
+        // alongside the reason so the editor can see *why* without
+        // re-running the rule. Both fields stay queryable from SQL.
+        video_eligible:            insertEligibility.eligible,
+        video_skip_reason:         insertEligibility.reason,
+        // P2-6: per-category decay timestamp. Renderer flips to ARCHIVE
+        // posture chip after this point.
+        story_decay_at:            decayAt,
         // P0-5 / P1 enrichment fields. On a failed enrichment pass, the
         // spread is empty and Supabase falls back to the migration's column
         // defaults: NULL for the four text columns, `{}` / `[]` for jsonb.

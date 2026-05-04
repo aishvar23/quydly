@@ -257,6 +257,117 @@ test("enrichment: emptyEnrichment exposes all expected keys for downstream write
   assert.deepEqual(e.timeline_events, []);
   assert.deepEqual(e.primary_entities_enriched, []);
   assert.deepEqual(e.factual_conflicts, []);
+  assert.deepEqual(e.visual_concepts, []);
+});
+
+// ── P2-1 visual_concepts validation ──────────────────────────────────────────
+
+test("P2-1 visual_concepts: well-formed array passes through", async () => {
+  const body = JSON.stringify({
+    visual_concepts: [
+      "Manhattan federal courthouse exterior",
+      "FTX logo with customer-fund flow diagram",
+      "Defendant's mugshot, DOJ-public domain",
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.visual_concepts.length, 3);
+  assert.equal(result.visual_concepts[0], "Manhattan federal courthouse exterior");
+});
+
+test("P2-1 visual_concepts: caps at 5 entries", async () => {
+  const body = JSON.stringify({
+    visual_concepts: Array.from({ length: 9 }, (_, i) => `concept ${i}`),
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.visual_concepts.length, 5);
+});
+
+test("P2-1 visual_concepts: drops empty strings, non-strings, and case-insensitive duplicates", async () => {
+  const body = JSON.stringify({
+    visual_concepts: [
+      "Manhattan courthouse",
+      "",
+      42,
+      "MANHATTAN COURTHOUSE",  // case-insensitive dup
+      null,
+      "Trading floor at NYSE",
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.deepEqual(result.visual_concepts, ["Manhattan courthouse", "Trading floor at NYSE"]);
+});
+
+test("P2-1 visual_concepts: clamps each entry to 80 characters", async () => {
+  const body = JSON.stringify({ visual_concepts: ["x".repeat(200)] });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.visual_concepts.length, 1);
+  assert.ok(result.visual_concepts[0].length <= 80);
+});
+
+test("P2-1 visual_concepts: non-array input coerces to []", async () => {
+  const body = JSON.stringify({ visual_concepts: "not an array" });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.deepEqual(result.visual_concepts, []);
+});
+
+// ── P2-7 entity phonetic hint ────────────────────────────────────────────────
+
+test("P2-7 entity phonetic: well-formed hint passes through", async () => {
+  const body = JSON.stringify({
+    primary_entities_enriched: [
+      { name: "Lula da Silva", type: "person", phonetic: "LOO-lah da SEEL-vah" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.primary_entities_enriched.length, 1);
+  assert.equal(result.primary_entities_enriched[0].phonetic, "LOO-lah da SEEL-vah");
+});
+
+test("P2-7 entity phonetic: omitted when missing — entity still passes", async () => {
+  const body = JSON.stringify({
+    primary_entities_enriched: [
+      { name: "John Smith", type: "person", role: "subject" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.primary_entities_enriched.length, 1);
+  assert.equal(result.primary_entities_enriched[0].phonetic, undefined);
+});
+
+test("P2-7 entity phonetic: rejects when phonetic is just the name retyped", async () => {
+  // The renderer's TTS substitution layer would replace "Smith" with "Smith"
+  // — wasted work and a false signal that we have a real phonetic. Drop it.
+  const body = JSON.stringify({
+    primary_entities_enriched: [
+      { name: "John Smith", type: "person", phonetic: "John Smith" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.primary_entities_enriched[0].phonetic, undefined);
+});
+
+test("P2-7 entity phonetic: rejects when no syllable separator present", async () => {
+  // A non-syllabified single token can't be a phonetic — it's just the name
+  // misspelled. The validator requires a hyphen or whitespace separator.
+  const body = JSON.stringify({
+    primary_entities_enriched: [
+      { name: "Xi", type: "person", phonetic: "Shee" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.primary_entities_enriched[0].phonetic, undefined);
+});
+
+test("P2-7 entity phonetic: clamps overlong values to 80 chars", async () => {
+  const body = JSON.stringify({
+    primary_entities_enriched: [
+      { name: "Some Person", type: "person", phonetic: "X-".repeat(60) },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  const phonetic = result.primary_entities_enriched[0].phonetic;
+  assert.ok(typeof phonetic === "string" && phonetic.length <= 80);
 });
 
 // ── Factual conflicts validation (P1-10) ──────────────────────────────────────

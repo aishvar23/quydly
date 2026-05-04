@@ -3,7 +3,8 @@
 > Owner: synthesizer / scraper team
 > Consumer: `video-pipeline-v2` and the question generator
 > Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
-> P1-8 / P1-9 / P1-10 in flight on `feat/pipeline-data-quality-p1-final`)
+> P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in flight on
+> `feat/pipeline-p2-improvements`)
 
 ## Why this exists
 
@@ -455,7 +456,7 @@ research problem; minimum viable: numeric-extraction divergence.
 
 ## P2 — Polish / future
 
-### P2-1 ☐ Suggested visual concepts per story
+### P2-1 ☑ Suggested visual concepts per story
 
 **What**: 3-5 concrete visual concepts the renderer can map to module
 beats:
@@ -507,7 +508,7 @@ elevate context.
 
 ---
 
-### P2-3 ☐ Quote-eligibility flag for video render
+### P2-3 ☑ Quote-eligibility flag for video render
 
 **What**: Synthesizer flags whether the story's content is
 appropriate for video synthesis:
@@ -571,7 +572,7 @@ checks the override list before falling back to Wikipedia.
 
 ---
 
-### P2-6 ☐ Story expiry / freshness markers
+### P2-6 ☑ Story expiry / freshness markers
 
 **What**: Per-story "decay" timestamp. Stories older than N days get
 flagged as "history" rather than "news".
@@ -587,7 +588,7 @@ but rendering it as a video without a freshness marker is dishonest.
 
 ---
 
-### P2-7 ☐ Audio pronunciation hints for unusual names
+### P2-7 ☑ Audio pronunciation hints for unusual names
 
 **What**: Per-entity phonetic spelling for TTS:
 
