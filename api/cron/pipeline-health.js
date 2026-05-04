@@ -21,10 +21,11 @@ async function countWhere(table, filters = {}) {
 }
 
 async function getRawArticles() {
-  const [done, lowQuality, failed, unclustered] = await Promise.all([
+  const [done, lowQuality, failed, partial, unclustered] = await Promise.all([
     countWhere("raw_articles", { status: "DONE" }),
     countWhere("raw_articles", { status: "LOW_QUALITY" }),
     countWhere("raw_articles", { status: "FAILED" }),
+    countWhere("raw_articles", { status: "PARTIAL" }),
     supabase
       .from("raw_articles")
       .select("*", { count: "exact", head: true })
@@ -32,7 +33,7 @@ async function getRawArticles() {
       .is("clustered_at", null)
       .then(r => r.count ?? 0),
   ]);
-  return { total: done + lowQuality + failed, done, lowQuality, failed, unclustered };
+  return { total: done + lowQuality + failed + partial, done, lowQuality, failed, partial, unclustered };
 }
 
 async function getClusters() {
@@ -125,6 +126,7 @@ function buildEmail(art, clust, stor, queues, issues, date) {
     <tr><td style="padding:4px 12px">Total</td><td style="padding:4px 12px;text-align:right">${art.total.toLocaleString()}</td></tr>
     <tr><td style="padding:4px 12px">DONE</td><td style="padding:4px 12px;text-align:right">${art.done.toLocaleString()}</td></tr>
     <tr><td style="padding:4px 12px">LOW_QUALITY</td><td style="padding:4px 12px;text-align:right">${art.lowQuality}</td></tr>
+    <tr><td style="padding:4px 12px">PARTIAL</td><td style="padding:4px 12px;text-align:right">${art.partial}</td></tr>
     <tr><td style="padding:4px 12px">FAILED</td><td style="padding:4px 12px;text-align:right">${art.failed}</td></tr>
     <tr><td style="padding:4px 12px">Unclustered backlog ${statusDot(art.unclustered === 0)}</td><td style="padding:4px 12px;text-align:right">${art.unclustered}</td></tr>
 
@@ -180,12 +182,17 @@ export default async function handler(req, res) {
     ? `✅ Quydly Pipeline — ${date} — All healthy`
     : `⚠️ Quydly Pipeline — ${date} — ${issues.length} issue${issues.length > 1 ? "s" : ""}`;
 
-  await resend.emails.send({
+  const { error: sendError } = await resend.emails.send({
     from: "Quydly Pipeline <noreply@quydly.com>",
     to:   "aishvar.suhane@gmail.com",
     subject,
     html: buildEmail(art, clust, stor, queues, issues, date),
   });
+
+  if (sendError) {
+    console.error("[pipeline-health] Resend error:", sendError);
+    return res.status(500).json({ ok: false, error: sendError.message });
+  }
 
   return res.json({ ok: true, issues, date });
 }
