@@ -69,7 +69,7 @@ function buildEmail(art, clust, stor, queues, issues, date) {
     <tr><td style="padding:4px 12px">LOW_QUALITY</td><td style="padding:4px 12px;text-align:right">${art.lowQuality}</td></tr>
     <tr><td style="padding:4px 12px">PARTIAL</td><td style="padding:4px 12px;text-align:right">${art.partial}</td></tr>
     <tr><td style="padding:4px 12px">FAILED</td><td style="padding:4px 12px;text-align:right">${art.failed}</td></tr>
-    <tr><td style="padding:4px 12px">Unclustered backlog ${statusDot(art.unclustered === 0)}</td><td style="padding:4px 12px;text-align:right">${art.unclustered}</td></tr>
+    <tr><td style="padding:4px 12px">Unclustered backlog ${statusDot(art.unclustered <= 500)}</td><td style="padding:4px 12px;text-align:right">${art.unclustered}</td></tr>
 
     <tr style="background:#f5f5f5"><td colspan="2" style="padding:8px 12px 2px;font-weight:600;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:.5px">Clusters</td></tr>
     <tr><td style="padding:4px 12px">Total</td><td style="padding:4px 12px;text-align:right">${clust.total.toLocaleString()}</td></tr>
