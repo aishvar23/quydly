@@ -18,6 +18,10 @@
     {
       "path": "/api/cron/generate-silent",
       "schedule": "0 8 29 2 *"
+    },
+    {
+      "path": "/api/cron/pipeline-health",
+      "schedule": "0 9 * * *"
     }
   ]
 }
