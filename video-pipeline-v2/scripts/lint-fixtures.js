@@ -79,13 +79,16 @@ async function main() {
   printTable(results);
 
   const errorCount = results.filter((r) => r.status === 'ERROR').length;
+  const rejectedCount = results.filter((r) => r.status === 'REJECTED').length;
   const blockCount = results.filter((r) => r.status === 'WOULD_BLOCK').length;
   const passCount = results.filter((r) => r.status === 'PASS').length;
 
   console.log('');
-  console.log(`${passCount} pass · ${blockCount} would-block · ${errorCount} error`);
+  console.log(`${passCount} pass · ${blockCount} would-block · ${rejectedCount} rejected · ${errorCount} error`);
 
-  if (errorCount > 0) process.exit(1);
+  // REJECTED is a hard fail — the audit refused the story, so the pipeline
+  // never ran. Treat alongside ERROR for exit-code purposes.
+  if (errorCount > 0 || rejectedCount > 0) process.exit(1);
   if (strict && blockCount > 0) process.exit(1);
   process.exit(0);
 }
@@ -104,6 +107,19 @@ async function lintOne(fixturePath, { mode, outputRoot }) {
       mode,
       outputRoot,
     });
+    // Audit can refuse a story before any pipeline work happens. The early
+    // return has no fallbackReport / no storyPackage — treat as a distinct
+    // REJECTED status, not as a fall-through PASS.
+    if (r.state === 'VIDEO_CANDIDATE_REJECTED') {
+      return {
+        status: 'REJECTED',
+        storyType: '-',
+        wordCount: 0,
+        fallbacks: [],
+        durationSec: 0,
+        rejectReason: r.audit?.video_skip_reason || 'audit rejected (no reason supplied)',
+      };
+    }
     const fb = r.fallbackReport;
     const storyType = r.storyPackage?.story?.story_type
       || r.storyPackage?.story_type
@@ -152,6 +168,7 @@ function printTable(results) {
 
 function detailFor(r) {
   if (r.error) return r.error;
+  if (r.rejectReason) return `audit rejected: ${r.rejectReason}`;
   if (r.fallbacks.length === 0) return 'clean';
   return r.fallbacks.map((f) => f.detail ? `${f.kind}: ${f.detail}` : f.kind).join(' | ');
 }
@@ -191,8 +208,8 @@ function printUsage() {
 Options:
   --mode poc|production  Validation strictness (default: poc).
                          In production, fixtures with is_verified=false ERROR.
-  --strict               Exit non-zero on WOULD_BLOCK as well as ERROR.
-                         Default exits non-zero only on ERROR.
+  --strict               Exit non-zero on WOULD_BLOCK as well as ERROR/REJECTED.
+                         Default exits non-zero only on ERROR/REJECTED.
   --ci                   Shorthand for --strict (poc mode).
                          For pre-commit / GitHub Actions gating.
                          Use --exclude to skip expected-fail fixtures.
@@ -203,6 +220,8 @@ Status legend:
   PASS         Story validates and dry-run predicts no fallbacks.
   WOULD_BLOCK  Story validates but dry-run predicts at least one fallback
                (production gate would refuse to render).
+  REJECTED     Audit refused the story (state=VIDEO_CANDIDATE_REJECTED).
+               Pipeline never ran. Counts as a hard fail.
   ERROR        Story failed validation OR pipeline crashed.
 `);
 }

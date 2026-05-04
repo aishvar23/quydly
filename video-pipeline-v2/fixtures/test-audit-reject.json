@@ -1,0 +1,21 @@
+{
+  "id": "audit-reject-test",
+  "category_id": "world",
+  "headline": "Bodycam footage in mass casualty event prompts review",
+  "summary": "Reports include graphic bodycam footage from a mass casualty event. The agency is reviewing what should be released. Multiple agencies confirmed the incident.",
+  "key_points": [
+    "Bodycam footage under review for graphic content",
+    "Mass casualty event being investigated",
+    "Multiple agencies confirmed the incident"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.85,
+  "support_score": 0.85,
+  "story_score": 35.0,
+  "source_count": 3,
+  "is_verified": true,
+  "primary_entities": ["agency"],
+  "primary_geos": [],
+  "published_at": "2026-05-04T00:00:00.000Z",
+  "source_documents": []
+}

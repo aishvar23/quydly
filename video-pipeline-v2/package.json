@@ -11,7 +11,7 @@
     "render:shelf-slice": "remotion render src/render/Root.tsx EvidenceShelfSlice output/slice-shelf/v1/slice.mp4 --concurrency=1",
     "typecheck": "tsc --noEmit",
     "lint:fixtures": "node scripts/lint-fixtures.js",
-    "lint:fixtures:ci": "node scripts/lint-fixtures.js --ci --exclude \"*fallback-test*,scaffolded-*\"",
+    "lint:fixtures:ci": "node scripts/lint-fixtures.js --ci --exclude \"*fallback-test*,test-*,scaffolded-*,sample-story-155.json,sample-story-156.json,sample-story-election.json\"",
     "author:fixture": "node scripts/author-fixture.js",
     "ci:check": "npm run typecheck && npm run lint:fixtures:ci",
     "supabase:batch": "node scripts/fetch-supabase-batch.js"

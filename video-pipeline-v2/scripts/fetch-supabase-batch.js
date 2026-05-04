@@ -100,11 +100,14 @@ async function main() {
   printTable(results);
 
   const errs = results.filter((r) => r.status === 'ERROR').length;
+  const rejected = results.filter((r) => r.status === 'REJECTED').length;
+  // OK and FALLBACKS both produced an output dir; REJECTED and ERROR did not.
+  const completed = results.filter((r) => r.status === 'OK' || r.status === 'FALLBACKS').length;
   console.log('');
   console.log(`Frozen fixtures: ${path.relative(process.cwd(), FROZEN_DIR)}`);
-  console.log(`${results.length - errs}/${results.length} pipelines succeeded.`);
+  console.log(`${completed}/${results.length} pipelines completed (${rejected} rejected by audit, ${errs} errored).`);
 
-  if (errs > 0) process.exit(1);
+  if (errs > 0 || rejected > 0) process.exit(1);
 }
 
 async function runOne({ frozenPath, skipRender, useAI, dryRunFallbacks }) {
@@ -122,6 +125,20 @@ async function runOne({ frozenPath, skipRender, useAI, dryRunFallbacks }) {
       dryRunFallbacks,
       outputRoot: RUN_OUTPUT_ROOT,
     });
+    // Audit can refuse a story before any pipeline work happens. The early
+    // return has no fallbackReport / no storyPackage — surface as REJECTED
+    // so it doesn't get counted as a successful render.
+    if (r.state === 'VIDEO_CANDIDATE_REJECTED') {
+      return {
+        status: 'REJECTED',
+        storyType: '-',
+        wordCount: 0,
+        fallbacks: [],
+        duration: 0,
+        outputDir: r.outputDir ? path.relative(process.cwd(), r.outputDir) : '-',
+        rejectReason: r.audit?.video_skip_reason || 'audit rejected (no reason supplied)',
+      };
+    }
     const fb = r.fallbackReport;
     const storyType = r.storyPackage?.understanding?.story_type
       || r.storyPackage?.story?.story_type
@@ -171,6 +188,7 @@ function printTable(results) {
 
 function detailFor(r) {
   if (r.error) return r.error;
+  if (r.rejectReason) return `audit rejected: ${r.rejectReason}`;
   if (r.fallbacks.length > 0) return `${r.outputDir} :: ${r.fallbacks.join(', ')}`;
   return r.outputDir;
 }
