@@ -14,8 +14,10 @@ import {
   buildSourceDocuments,
   mergeSourceDocuments,
   extractQuotes,
+  attachWikipediaToEntities,
 } from "../story-synthesizer/index.js";
 import { resolvePrimaryPlaces, countryCodeToName } from "../lib/places.js";
+import { _resetCache as resetWikipediaCache } from "../lib/wikipedia.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -311,4 +313,80 @@ test("P0-3 resolvePrimaryPlaces handles empty / missing input", () => {
   assert.deepEqual(resolvePrimaryPlaces(undefined), []);
   assert.deepEqual(resolvePrimaryPlaces(null), []);
   assert.deepEqual(resolvePrimaryPlaces([]), []);
+});
+
+// ── P0-4: attachWikipediaToEntities ──────────────────────────────────────────
+
+function installFetchStub(handler) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (...args) => handler(...args);
+  return () => { globalThis.fetch = original; };
+}
+
+function jsonResp(status, body) {
+  return { status, ok: status >= 200 && status < 300, json: async () => body };
+}
+
+test("P0-4 attachWikipediaToEntities stitches probe metadata onto resolved entries", async () => {
+  resetWikipediaCache();
+  const restore = installFetchStub(async () =>
+    jsonResp(200, {
+      type:     "standard",
+      title:    "FTX",
+      extract:  "FTX is a defunct cryptocurrency exchange.",
+      thumbnail: { source: "https://upload.wikimedia.org/.../ftx.jpg" },
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/FTX" } },
+    })
+  );
+  try {
+    const out = await attachWikipediaToEntities([
+      { name: "FTX", type: "org", role: "subject company" },
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].wiki_resolved, true);
+    assert.equal(out[0].wikipedia_url, "https://en.wikipedia.org/wiki/FTX");
+    assert.match(out[0].wikipedia_thumbnail_url, /\/ftx\.jpg$/);
+    assert.match(out[0].context, /defunct cryptocurrency/);
+  } finally { restore(); }
+});
+
+test("P0-4 attachWikipediaToEntities preserves synthesizer-supplied context over Wikipedia summary", async () => {
+  resetWikipediaCache();
+  const restore = installFetchStub(async () =>
+    jsonResp(200, {
+      type:     "standard",
+      title:    "Sam Bankman-Fried",
+      extract:  "Boilerplate Wikipedia opening.",
+      thumbnail: { source: "https://upload.wikimedia.org/.../sbf.jpg" },
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Sam_Bankman-Fried" } },
+    })
+  );
+  try {
+    const out = await attachWikipediaToEntities([
+      { name: "Sam Bankman-Fried", type: "person", role: "defendant", context: "Editor-set context wins." },
+    ]);
+    assert.equal(out[0].context, "Editor-set context wins.",
+      "Wikipedia summary must NOT overwrite a context the synthesizer already supplied");
+  } finally { restore(); }
+});
+
+test("P0-4 attachWikipediaToEntities surfaces failure metadata without dropping the entity", async () => {
+  resetWikipediaCache();
+  const restore = installFetchStub(async () => jsonResp(404, {}));
+  try {
+    const out = await attachWikipediaToEntities([
+      { name: "Definitely Not A Real Person 9999", type: "person", role: "ghost" },
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].wiki_resolved, false);
+    assert.equal(out[0].wiki_reason, "not_found");
+    assert.equal(out[0].name, "Definitely Not A Real Person 9999",
+      "the synthesizer-supplied entity must survive even when Wikipedia rejects");
+  } finally { restore(); }
+});
+
+test("P0-4 attachWikipediaToEntities returns [] for empty / non-array input", async () => {
+  assert.deepEqual(await attachWikipediaToEntities([]), []);
+  assert.deepEqual(await attachWikipediaToEntities(null), []);
+  assert.deepEqual(await attachWikipediaToEntities(undefined), []);
 });

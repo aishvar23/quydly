@@ -18,6 +18,8 @@ import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
 import { AUDIENCES, computeAudienceProjection } from "../lib/geo.js";
 import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
+import { enrichNarrative, emptyEnrichment } from "../lib/enrichment.js";
+import { probeEntities } from "../lib/wikipedia.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
 const MAX_RETRIES       = 2;
@@ -299,6 +301,61 @@ export function mergeSourceDocuments(existing, incoming) {
   return [...byId.values()].sort(compareSourceDocs);
 }
 
+// Telemetry helper for the enrichment log line — total count of numeric
+// extractions across the structured_numbers buckets, for at-a-glance lift.
+function countNumbers(structured) {
+  if (!structured || typeof structured !== "object") return 0;
+  return ["money", "counts", "percentages", "magnitudes", "casualties"]
+    .reduce((acc, key) => acc + (Array.isArray(structured[key]) ? structured[key].length : 0), 0);
+}
+
+// ── Wikipedia attach (P0-4) ───────────────────────────────────────────────────
+// Probe Wikipedia REST for each enriched entity and stitch the metadata onto
+// the entity object. Stays out of band of synthesis: any per-entity error
+// degrades to `resolved: false` (the probe utility never throws), and a
+// global failure of probeEntities only loses the metadata for this run —
+// the entity is still written with the synthesizer-supplied name/type/role.
+//
+// `existingContext` survives if the LLM enrichment already wrote a context
+// line (e.g. from article quotes); the Wikipedia summary fills in only when
+// the enriched entry lacks its own context.
+export async function attachWikipediaToEntities(entities, { signal } = {}) {
+  if (!Array.isArray(entities) || entities.length === 0) return [];
+
+  const names = entities.map(e => e?.name).filter(Boolean);
+  let probes;
+  try {
+    probes = await probeEntities(names, { signal });
+  } catch {
+    return entities.map(e => ({ ...e, wiki_resolved: false, wiki_reason: "probe_failed" }));
+  }
+
+  let probeIdx = 0;
+  return entities.map(e => {
+    if (!e?.name) return e;
+    const probe = probes[probeIdx++];
+    if (!probe) return e;
+    if (probe.resolved) {
+      return {
+        ...e,
+        wikipedia_url:           probe.wikipedia_url ?? null,
+        wikipedia_thumbnail_url: probe.wikipedia_thumbnail_url ?? null,
+        wikipedia_summary:       probe.wikipedia_summary ?? null,
+        wikipedia_title:         probe.wikipedia_title ?? null,
+        image_license:           probe.image_license ?? null,
+        wiki_resolved:           true,
+        // Synthesizer-supplied context wins; Wikipedia summary fills only when blank.
+        context: e.context ?? probe.wikipedia_summary ?? null,
+      };
+    }
+    return {
+      ...e,
+      wiki_resolved: false,
+      wiki_reason:   probe.reason ?? "unknown",
+    };
+  });
+}
+
 // ── Global significance score (design §7.2) ───────────────────────────────────
 
 function computeGlobalSignificance(cluster, synthesis, articles) {
@@ -467,6 +524,43 @@ export default async function storySynthesizer(context, message) {
     }));
   }
 
+  // P0-5 + P1 batch: enrichment pass produces story_type / editorial_posture /
+  // hook_sentence / why_it_matters / structured_numbers / timeline_events /
+  // primary_entities_enriched. Self-contained against failure — defaults out
+  // to an empty enrichment shape so the story still writes.
+  let enrichment = emptyEnrichment();
+  try {
+    enrichment = await enrichNarrative(ai, cluster, articles, narrative);
+  } catch (err) {
+    context.log.warn(JSON.stringify({
+      event:      "enrichment_failed",
+      cluster_id,
+      error:      err.message,
+    }));
+  }
+
+  // P0-4: Wikipedia probe for each enriched entity. Fills in image URL +
+  // summary so video-pipeline-v2 can render DossierCard / MapCallout without
+  // making render-time API calls. Honours the strict-title-match guard inside
+  // probeEntities — a wrong-target page is recorded as resolved=false, not
+  // attached as if it were the right photo.
+  const enrichedEntities = await attachWikipediaToEntities(
+    enrichment.primary_entities_enriched,
+  );
+
+  context.log(JSON.stringify({
+    event:                  "enrichment_completed",
+    cluster_id,
+    story_type:             enrichment.story_type,
+    editorial_posture:      enrichment.editorial_posture,
+    hook_present:           Boolean(enrichment.hook_sentence),
+    why_it_matters_present: Boolean(enrichment.why_it_matters),
+    structured_numbers_count: countNumbers(enrichment.structured_numbers),
+    timeline_events_count:  enrichment.timeline_events.length,
+    entities_count:         enrichedEntities.length,
+    entities_resolved:      enrichedEntities.filter(e => e.wiki_resolved).length,
+  }));
+
   // ── 4b. Phase B: quality gates + River lookup + DB write ─────────────────
   const now = new Date().toISOString();
 
@@ -546,6 +640,17 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          mergedSourceDocs,
+        // P0-5 / P1 enrichment fields. Always overwrite on River-merge —
+        // newer synthesis passes have access to the same article corpus the
+        // old pass saw plus any newcomers, so the enriched view is at least
+        // as informed as the prior one.
+        story_type:                enrichment.story_type,
+        editorial_posture:         enrichment.editorial_posture,
+        hook_sentence:             enrichment.hook_sentence,
+        why_it_matters:            enrichment.why_it_matters,
+        structured_numbers:        enrichment.structured_numbers,
+        timeline_events:           enrichment.timeline_events,
+        primary_entities_enriched: enrichedEntities,
         updated_at:                now,
       })
       .eq("id", existingStory.id);
@@ -573,6 +678,17 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          incomingSourceDocs,
+        // P0-5 / P1 enrichment fields. NULL is a meaningful state — it tells
+        // downstream consumers "we tried but didn't have a value", separate
+        // from "we never enriched this row" (which can't happen post-migration
+        // because every fresh insert runs through this code path).
+        story_type:                enrichment.story_type,
+        editorial_posture:         enrichment.editorial_posture,
+        hook_sentence:             enrichment.hook_sentence,
+        why_it_matters:            enrichment.why_it_matters,
+        structured_numbers:        enrichment.structured_numbers,
+        timeline_events:           enrichment.timeline_events,
+        primary_entities_enriched: enrichedEntities,
         is_verified:               false,
         published_at:              now,
         updated_at:                now,
