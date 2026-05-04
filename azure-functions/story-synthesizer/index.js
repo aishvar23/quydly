@@ -662,6 +662,24 @@ export function pickRelatedStories(currentEntities, candidates, opts = {}) {
   return scored.slice(0, cap).map(({ id, headline, date }) => ({ id, headline, date }));
 }
 
+// Codex P1 fix on PR #82 — anchor the 90-day cutoff to the story's own
+// `published_at`, not Date.now(). The original `Date.now() - 90d`
+// formulation broke historical re-syntheses: a 2023 story reprocessed in
+// 2026 produced contradictory filters
+//   published_at >= 2026-02 (now − 90d)
+//   published_at <  2023-xx (anchor)
+// → empty intersection → all related links silently dropped. The
+// lookback is logically "90 days BEFORE this story", not "90 days
+// before today."
+//
+// Falls back to `Date.now() - 90d` only when the anchor is absent
+// (defensive — synthesizer call sites always pass published_at).
+export function relatedStoryCutoff(published_at, lookback_days = RELATED_LOOKBACK_DAYS) {
+  const anchorMs = typeof published_at === "string" ? Date.parse(published_at) : NaN;
+  const baseMs = Number.isFinite(anchorMs) ? anchorMs : Date.now();
+  return new Date(baseMs - lookback_days * 86400 * 1000).toISOString();
+}
+
 // Fetch candidates from supabase + delegate ranking to pickRelatedStories.
 // Excludes the current story by id when known, and only considers stories
 // strictly older than the current row's published_at (no future-arc links).
@@ -678,7 +696,7 @@ export async function findRelatedStories(supabase, params) {
     return [];
   }
 
-  const cutoff = new Date(Date.now() - lookback_days * 86400 * 1000).toISOString();
+  const cutoff = relatedStoryCutoff(published_at, lookback_days);
   let q = supabase
     .from("stories")
     .select("id, headline, published_at, primary_entities")

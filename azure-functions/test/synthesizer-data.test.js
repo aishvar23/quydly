@@ -20,6 +20,7 @@ import {
   cleanPrimaryEntities,
   countEntityOverlap,
   pickRelatedStories,
+  relatedStoryCutoff,
 } from "../story-synthesizer/index.js";
 import { resolvePrimaryPlaces, countryCodeToName } from "../lib/places.js";
 import { _resetCache as resetWikipediaCache } from "../lib/wikipedia.js";
@@ -926,6 +927,51 @@ test("P2-2 pickRelatedStories: respects custom cap and minOverlap", () => {
   assert.equal(pickRelatedStories(current, candidates, { cap: 2 }).length, 2);
   // minOverlap=10 (impossible) → empty.
   assert.equal(pickRelatedStories(current, candidates, { minOverlap: 10 }).length, 0);
+});
+
+// ── P2-2 relatedStoryCutoff (Codex P1 fix on PR #82) ─────────────────────────
+
+test("P2-2 relatedStoryCutoff: anchored to published_at, not Date.now()", () => {
+  // Codex P1 regression — historical re-synth case. Anchor in 2023.
+  // Pre-fix: cutoff = Date.now() - 90d (a 2026 timestamp), the supabase
+  // query becomes published_at >= 2026 AND published_at < 2023 → empty.
+  const anchor = "2023-06-15T00:00:00.000Z";
+  const cutoff = relatedStoryCutoff(anchor, 90);
+  // Cutoff must be 90 days BEFORE the anchor, not before today.
+  const expected = new Date(Date.parse(anchor) - 90 * 86400 * 1000).toISOString();
+  assert.equal(cutoff, expected);
+  // And the cutoff must be strictly before the anchor — sanity guard.
+  assert.ok(cutoff < anchor, "cutoff must precede anchor");
+});
+
+test("P2-2 relatedStoryCutoff: respects custom lookback window", () => {
+  const anchor = "2026-04-01T00:00:00.000Z";
+  const c30 = relatedStoryCutoff(anchor, 30);
+  const c180 = relatedStoryCutoff(anchor, 180);
+  assert.equal(c30,  new Date(Date.parse(anchor) - 30  * 86400 * 1000).toISOString());
+  assert.equal(c180, new Date(Date.parse(anchor) - 180 * 86400 * 1000).toISOString());
+  assert.ok(c180 < c30, "longer lookback yields earlier cutoff");
+});
+
+test("P2-2 relatedStoryCutoff: missing anchor falls back to now (defensive)", () => {
+  const before = Date.now();
+  const cutoff = relatedStoryCutoff(undefined, 90);
+  const after = Date.now();
+  // Cutoff is now − 90d ± a few ms.
+  const cutoffMs = Date.parse(cutoff);
+  const expectedMin = before - 90 * 86400 * 1000;
+  const expectedMax = after - 90 * 86400 * 1000;
+  assert.ok(cutoffMs >= expectedMin && cutoffMs <= expectedMax,
+    `fallback cutoff ${cutoff} must be near now-90d`);
+});
+
+test("P2-2 relatedStoryCutoff: invalid anchor string falls back to now", () => {
+  const before = Date.now();
+  const cutoff = relatedStoryCutoff("not-a-date", 90);
+  const cutoffMs = Date.parse(cutoff);
+  // Should be roughly now − 90d, not NaN.
+  assert.ok(Number.isFinite(cutoffMs));
+  assert.ok(cutoffMs >= before - 90 * 86400 * 1000 - 1000, "invalid input must not poison the cutoff");
 });
 
 test("P3-5 cleanPrimaryEntities: enriched-only mode ignores cluster fallback even when populated", () => {
