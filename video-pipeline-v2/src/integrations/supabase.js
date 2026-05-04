@@ -119,9 +119,10 @@ async function fetchStories({
   let query = supabase
     .from('stories')
     .select(
-      'id, cluster_id, category_id, primary_entities, primary_geos, ' +
+      'id, cluster_id, category_id, primary_entities, primary_geos, primary_places, ' +
       'headline, summary, key_points, confidence_score, coherence_score, ' +
-      'support_score, story_score, source_count, is_verified, published_at',
+      'support_score, story_score, source_count, is_verified, published_at, ' +
+      'source_documents',
     )
     .eq('is_verified', isVerified)
     .gte('story_score', scoreFloor)
@@ -200,6 +201,30 @@ function articlesToSourceDocs(articles) {
   }));
 }
 
+// Normalise source_documents that the synthesizer wrote inline on the story
+// row (P0-1) into the fixture shape the v2 renderer expects. Quotes (P0-2)
+// pass through onto QuoteCard. Older stories without inline source_documents
+// fall through to the raw_articles fetch path in fetchSourceArticles.
+function snapshotToSourceDocs(snapshot) {
+  if (!Array.isArray(snapshot)) return [];
+  return snapshot.map((d) => {
+    const out = {
+      id: `raw-${d.id ?? ''}`,
+      type: d.type || 'news article',
+      title: d.title || '',
+      issuer: d.issuer || '',
+      url: d.url || '',
+      date: formatPublishedAt(d.date),
+    };
+    if (d.quote_text) {
+      out.quote_text = d.quote_text;
+      out.quote_speaker = d.quote_speaker || '';
+      out.quote_role = d.quote_role || '';
+    }
+    return out;
+  });
+}
+
 function formatPublishedAt(iso) {
   if (!iso) return '';
   try {
@@ -223,10 +248,26 @@ function translateGeos(codes) {
     .filter(Boolean);
 }
 
+// Prefer the synthesizer-resolved `primary_places` (P0-3) when present —
+// names land at synthesis time so the gazetteer translation here is no
+// longer the source of truth. Older stories fall back to translateGeos.
+function readableGeos(row) {
+  const places = Array.isArray(row?.primary_places) ? row.primary_places : [];
+  const fromPlaces = places.map((p) => p?.name).filter(Boolean);
+  if (fromPlaces.length > 0) return fromPlaces;
+  return translateGeos(row?.primary_geos);
+}
+
 // Convert a Supabase story row + its source articles into a fixture-shape
-// object the v2 pipeline can consume. Fills in the fields v2 requires that
-// Supabase doesn't store directly (source_documents, readable geos).
+// object the v2 pipeline can consume. Prefers fields the synthesizer now
+// snapshots inline (P0-1 source_documents, P0-3 primary_places) and falls
+// back to fetched raw_articles + the local geo gazetteer for older rows.
 function storyRowToFixture(row, sourceDocs) {
+  const inlineSnapshot = Array.isArray(row.source_documents) ? row.source_documents : [];
+  const resolvedSourceDocs = inlineSnapshot.length > 0
+    ? snapshotToSourceDocs(inlineSnapshot)
+    : (sourceDocs || []);
+
   return {
     id: String(row.id),
     category_id: row.category_id,
@@ -237,12 +278,12 @@ function storyRowToFixture(row, sourceDocs) {
     coherence_score: row.coherence_score ?? 0,
     support_score: row.support_score ?? 0,
     story_score: row.story_score ?? 0,
-    source_count: row.source_count ?? (sourceDocs.length || 0),
+    source_count: row.source_count ?? (resolvedSourceDocs.length || 0),
     is_verified: Boolean(row.is_verified),
     primary_entities: Array.isArray(row.primary_entities) ? row.primary_entities : [],
-    primary_geos: translateGeos(row.primary_geos),
+    primary_geos: readableGeos(row),
     published_at: row.published_at || new Date().toISOString(),
-    source_documents: sourceDocs,
+    source_documents: resolvedSourceDocs,
   };
 }
 
@@ -251,7 +292,9 @@ module.exports = {
   fetchStories,
   fetchSourceArticles,
   articlesToSourceDocs,
+  snapshotToSourceDocs,
   storyRowToFixture,
   translateGeos,
+  readableGeos,
   geoCodeToName,
 };

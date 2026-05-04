@@ -77,13 +77,20 @@ async function main() {
 
   const fixtures = [];
   for (const story of stories) {
-    const articles = await fetchSourceArticles(story.cluster_id);
-    const sourceDocs = articlesToSourceDocs(articles);
+    // Stories synthesized after P0-1 carry source_documents inline. Skip the
+    // raw_articles roundtrip in that case — articles get retention-pruned and
+    // the inline snapshot is the authoritative source anyway.
+    const hasInlineSnapshot = Array.isArray(story.source_documents) && story.source_documents.length > 0;
+    let sourceDocs = [];
+    if (!hasInlineSnapshot) {
+      const articles = await fetchSourceArticles(story.cluster_id);
+      sourceDocs = articlesToSourceDocs(articles);
+    }
     const fixture = storyRowToFixture(story, sourceDocs);
     const frozenPath = path.join(FROZEN_DIR, `story-${fixture.id}.json`);
     fs.writeFileSync(frozenPath, JSON.stringify(fixture, null, 2) + '\n', 'utf8');
     fixtures.push({ frozenPath, fixture });
-    console.log(`        - story ${fixture.id} "${truncate(fixture.headline, 60)}" ${sourceDocs.length}src ${fixture.primary_geos.length}geo`);
+    console.log(`        - story ${fixture.id} "${truncate(fixture.headline, 60)}" ${fixture.source_documents.length}src ${fixture.primary_geos.length}geo`);
   }
 
   console.log(`[batch] Running pipeline on ${fixtures.length} stories…`);
