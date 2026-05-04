@@ -16,6 +16,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
 import { AUDIENCES, computeAudienceProjection } from "../lib/geo.js";
+import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
@@ -132,6 +133,153 @@ Rules:
   return result;
 }
 
+// ── Verbatim quote extraction (P0-2) ──────────────────────────────────────────
+// Pass 3 of the synthesizer. Pulls 0-3 quotable statements from the article
+// bodies, then verifies each is present *verbatim* in its claimed source
+// article before we let it through. The video pipeline never invents quotes —
+// paraphrasing real people is a trust violation — so support has to come from
+// here or QuoteCard never fires.
+
+const QUOTE_MAX_PER_STORY = 3;
+const QUOTE_MIN_WORDS     = 4;
+const QUOTE_MAX_CHARS     = 280;
+
+// Strip surrounding curly/straight quotes and collapse whitespace so the
+// verbatim check tolerates the articles' typesetting drift but still catches
+// paraphrase. Keeps inner punctuation, casing, and word order — those are the
+// real signals.
+function normaliseQuoteForCheck(s) {
+  return String(s)
+    .replace(/[‘’“”"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function articleBodyText(a) {
+  return [a.title, a.description, a.content].filter(Boolean).join(" ");
+}
+
+export async function extractQuotes(ai, articles) {
+  if (!articles || articles.length === 0) return [];
+
+  const articleBlocks = articles
+    .map((a, i) => {
+      const body = [a.title, a.description, a.content ? a.content.slice(0, CONTENT_TRUNCATE) : null]
+        .filter(Boolean)
+        .join(" ");
+      return `[Article ${i + 1} — ${a.domain}]\n${body}`;
+    })
+    .join("\n\n");
+
+  const prompt = `You are a quote extractor for a news synthesis engine.
+
+From these ${articles.length} articles, extract up to ${QUOTE_MAX_PER_STORY} verbatim
+quotes. Each quote MUST appear word-for-word in the article body — do not
+paraphrase, do not combine sentences, do not translate. Prefer quotes attributed
+to a named person; skip wire-attribution boilerplate ("officials said").
+
+${articleBlocks}
+
+Respond ONLY with a valid JSON array, no markdown fences. Empty array if no
+quotable statements exist:
+[
+  { "source_index": <1-based article number>, "text": "verbatim quote here", "speaker": "Name", "role": "their title or affiliation, or null" },
+  ...
+]
+
+Rules:
+- text: the quoted statement only. Do not include surrounding narrative.
+- text length: between ${QUOTE_MIN_WORDS} words and ${QUOTE_MAX_CHARS} characters.
+- speaker: required. If the article does not name a speaker, omit that quote.
+- role: optional; null if not stated in the article.`;
+
+  const msg = await ai.messages.create({
+    model:      MODEL,
+    max_tokens: 768,
+    messages:   [{ role: "user", content: prompt }],
+  });
+
+  const raw = msg.content[0].text.trim();
+  let candidates;
+  try {
+    candidates = JSON.parse(raw);
+  } catch {
+    // Quote extraction is non-essential — never fail synthesis on a bad parse.
+    return [];
+  }
+  if (!Array.isArray(candidates)) return [];
+
+  const verified = [];
+  for (const c of candidates) {
+    if (verified.length >= QUOTE_MAX_PER_STORY) break;
+    if (!c || typeof c.text !== "string" || typeof c.speaker !== "string") continue;
+    if (!Number.isInteger(c.source_index) || c.source_index < 1 || c.source_index > articles.length) continue;
+    if (c.text.length > QUOTE_MAX_CHARS) continue;
+    if (c.text.trim().split(/\s+/).length < QUOTE_MIN_WORDS) continue;
+
+    const article = articles[c.source_index - 1];
+    const haystack = normaliseQuoteForCheck(articleBodyText(article));
+    const needle   = normaliseQuoteForCheck(c.text);
+    if (!haystack.includes(needle)) continue;
+
+    verified.push({
+      source_id: article.id,
+      text:      c.text.trim(),
+      speaker:   c.speaker.trim(),
+      role:      typeof c.role === "string" && c.role.trim() ? c.role.trim() : null,
+    });
+  }
+  return verified;
+}
+
+// ── Source-document snapshot (P0-1) ───────────────────────────────────────────
+// Project article fields onto the story row at synthesis time so downstream
+// consumers (video-pipeline-v2 EvidenceShelf, attribution chips) can render
+// after raw_articles get retention-pruned.
+//
+// `verbatim_quotes` (optional) is the P0-2 output from the synthesis prompt;
+// each quote is attached to whichever source_documents entry it was extracted
+// from after passing the verbatim-presence guard.
+export function buildSourceDocuments(articles, verbatimQuotes = []) {
+  const docs = articles.map(a => ({
+    id:             String(a.id),
+    type:           "article",
+    title:          a.title ?? null,
+    issuer:         a.domain ?? null,
+    url:            a.canonical_url ?? null,
+    date:           a.published_at ?? null,
+    authority:      Number(a.authority_score ?? 0),
+    source_country: a.source_country ?? null,
+  }));
+
+  for (const q of verbatimQuotes) {
+    if (q.source_id == null) continue;
+    const target = docs.find(d => d.id === String(q.source_id));
+    if (!target) continue;
+    target.quote_text    = q.text;
+    target.quote_speaker = q.speaker ?? null;
+    target.quote_role    = q.role ?? null;
+  }
+
+  return docs;
+}
+
+// Merge docs from a new synthesis into existing source_documents preserving
+// previously-snapshotted entries (River-merged stories accrue evidence over
+// time as new clusters land). Dedupe by id.
+export function mergeSourceDocuments(existing, incoming) {
+  const byId = new Map();
+  for (const d of Array.isArray(existing) ? existing : []) {
+    if (d && d.id != null) byId.set(String(d.id), d);
+  }
+  for (const d of incoming) {
+    if (!d || d.id == null) continue;
+    byId.set(String(d.id), { ...(byId.get(String(d.id)) ?? {}), ...d });
+  }
+  return [...byId.values()];
+}
+
 // ── Global significance score (design §7.2) ───────────────────────────────────
 
 function computeGlobalSignificance(cluster, synthesis, articles) {
@@ -159,7 +307,7 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   // Strategy 1: same cluster_id
   const { data: byCluster, error: e1 } = await supabase
     .from("stories")
-    .select("id, primary_entities, key_points, updated_at")
+    .select("id, primary_entities, key_points, source_documents, updated_at")
     .eq("cluster_id", cluster.id)
     .gte("updated_at", riverCutoff)
     .order("updated_at", { ascending: false })
@@ -174,7 +322,7 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   // Strategy 2: entity overlap in same category
   const { data: candidates, error: e2 } = await supabase
     .from("stories")
-    .select("id, primary_entities, key_points, updated_at")
+    .select("id, primary_entities, key_points, source_documents, updated_at")
     .eq("category_id", cluster.category_id)
     .gte("updated_at", riverCutoff)
     .order("updated_at", { ascending: false })
@@ -235,9 +383,11 @@ export default async function storySynthesizer(context, message) {
     .eq("id", cluster_id);
 
   // ── 3. Fetch article content ──────────────────────────────────────────────
+  // canonical_url / published_at / author are needed in addition to NLP fields
+  // because we snapshot a source_documents projection onto the story row (P0-1).
   const { data: articles, error: artErr } = await supabase
     .from("raw_articles")
-    .select("id, title, description, content, domain, mentioned_geos, source_country, geo_scores, authority_score")
+    .select("id, title, description, content, domain, canonical_url, published_at, author, mentioned_geos, source_country, geo_scores, authority_score")
     .in("id", cluster.article_ids);
 
   if (artErr) {
@@ -284,6 +434,20 @@ export default async function storySynthesizer(context, message) {
     throw lastErr;
   }
 
+  // P0-2: verbatim quote extraction. Non-essential pass — if Claude fails or
+  // the response can't be verified, we proceed with no quotes rather than
+  // killing the synthesis. QuoteCard simply won't fire for this story.
+  let verbatimQuotes = [];
+  try {
+    verbatimQuotes = await extractQuotes(ai, articles);
+  } catch (err) {
+    context.log.warn(JSON.stringify({
+      event:      "quote_extraction_failed",
+      cluster_id,
+      error:      err.message,
+    }));
+  }
+
   // ── 4b. Phase B: quality gates + River lookup + DB write ─────────────────
   const now = new Date().toISOString();
 
@@ -319,10 +483,22 @@ export default async function storySynthesizer(context, message) {
   const globalSignificanceScore = computeGlobalSignificance(cluster, narrative, articles);
   const storyPrimaryGeos = cluster.primary_geos ?? [];
   const storyGeoScores   = cluster.geo_scores   ?? {};
+  const storyPrimaryPlaces = resolvePrimaryPlaces(storyPrimaryGeos);
 
   // Extras for computeAudienceProjection (india_article_fraction requires article-level data)
   const indianArticleCount    = articles.filter(a => a.source_country === "in").length;
   const indianArticleFraction = articles.length > 0 ? indianArticleCount / articles.length : 0;
+
+  // P0-1 + P0-2: snapshot source documents from the cluster's articles, with
+  // any verified verbatim quotes attached to the originating doc.
+  const incomingSourceDocs = buildSourceDocuments(articles, verbatimQuotes);
+
+  context.log(JSON.stringify({
+    event:           "source_documents_snapshot",
+    cluster_id,
+    document_count:  incomingSourceDocs.length,
+    quote_count:     verbatimQuotes.length,
+  }));
 
   // River model: find or create story — Step 2 of processing contract
   const riverCutoff   = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
@@ -333,6 +509,7 @@ export default async function storySynthesizer(context, message) {
   if (existingStory) {
     const existingPoints  = Array.isArray(existingStory.key_points) ? existingStory.key_points : [];
     const mergedKeyPoints = [...new Set([...existingPoints, ...narrative.key_points])].slice(0, 10);
+    const mergedSourceDocs = mergeSourceDocuments(existingStory.source_documents, incomingSourceDocs);
 
     const { error: updateErr } = await supabase
       .from("stories")
@@ -346,8 +523,10 @@ export default async function storySynthesizer(context, message) {
         consistency_score,
         source_count,
         primary_geos:              storyPrimaryGeos,
+        primary_places:            storyPrimaryPlaces,
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
+        source_documents:          mergedSourceDocs,
         updated_at:                now,
       })
       .eq("id", existingStory.id);
@@ -371,8 +550,10 @@ export default async function storySynthesizer(context, message) {
         consistency_score,
         source_count,
         primary_geos:              storyPrimaryGeos,
+        primary_places:            storyPrimaryPlaces,
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
+        source_documents:          incomingSourceDocs,
         is_verified:               false,
         published_at:              now,
         updated_at:                now,
