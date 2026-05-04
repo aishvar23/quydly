@@ -1,0 +1,36 @@
+{
+  "name": "quydly-evidence-first-video-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-first animated editorial video pipeline for Quydly stories.",
+  "main": "index.js",
+  "scripts": {
+    "generate": "node index.js",
+    "lint": "node src/dev/check-foundation.js && tsc --noEmit",
+    "studio": "remotion studio src/render/Root.tsx",
+    "render:still": "remotion still src/render/Root.tsx EvidenceVideo output/preview.png --props=fixtures/sample-props.json --frame=30 --scale=0.25"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@remotion/cli": "4.0.456",
+    "@remotion/media-utils": "4.0.456",
+    "axios": "^1.7.9",
+    "dotenv": "^17.4.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "remotion": "4.0.456",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "@types/react": "18.2.0",
+    "typescript": "5.8.3"
+  },
+  "remotion": {
+    "entryPoint": "src/render/Root.tsx",
+    "fps": 30,
+    "width": 1080,
+    "height": 1920
+  }
+}

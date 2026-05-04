@@ -1,0 +1,22 @@
+{
+  "id": 155,
+  "cluster_id": 513,
+  "category_id": "world",
+  "headline": "US Special Forces Soldier Charged for Making $400K on Classified Venezuela Betting",
+  "summary": "A US Army Special Forces soldier has been charged with using classified information to make over $400,000 betting on Polymarket prediction markets. Gannon Ken Van Dyke, 38, allegedly used confidential details about a January operation to capture former Venezuelan President Nicolas Maduro to place 13 successful wagers.",
+  "key_points": [
+    "Van Dyke made approximately $400,000 through betting on classified military operations",
+    "The soldier was involved in the January operation that captured Nicolas Maduro",
+    "Charges include wire fraud, commodities fraud, and theft of government information",
+    "Van Dyke placed around 13 wagers on Polymarket using insider knowledge of US forces entering Caracas"
+  ],
+  "confidence_score": 9,
+  "coherence_score": 1,
+  "support_score": 1,
+  "story_score": 48.82,
+  "source_count": 2,
+  "is_verified": false,
+  "primary_entities": ["prosecutors", "polymarket", "venezuela", "maduro", "us"],
+  "primary_geos": ["Venezuela", "Caracas"],
+  "published_at": "2026-04-25T17:44:36.810Z"
+}

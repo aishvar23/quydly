@@ -1,0 +1,51 @@
+{
+  "id": "sydney-trader-charged-insider-trading-takeover",
+  "category_id": "business",
+  "headline": "Australian Federal Police Charge Sydney Trader With Insider Trading on $2.4 Billion Takeover Deal",
+  "summary": "The Australian Federal Police charged Marcus Chen, a 38-year-old equity trader at a Sydney investment firm, with insider trading related to a $2.4 billion corporate takeover announced in March 2026. Prosecutors allege Chen purchased 47,000 shares in the target company two weeks before the public announcement, profiting approximately $890,000. The Australian Securities and Investments Commission assisted in the 14-month investigation that examined trading records and communications across three financial institutions.",
+  "key_points": [
+    "Marcus Chen faces criminal charges for allegedly purchasing 47,000 shares using non-public information about an upcoming $2.4 billion acquisition.",
+    "The Sydney trader reportedly gained $890,000 in profit from trades executed two weeks before the March 2026 takeover announcement.",
+    "The Australian Securities and Investments Commission conducted a 14-month investigation examining records across three financial institutions.",
+    "This marks the eighth insider trading prosecution brought by Australian Federal Police since new enforcement guidelines took effect in January 2025.",
+    "If convicted, Chen faces up to 10 years imprisonment and financial penalties of three times the profit obtained under Australian securities law."
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.91,
+  "support_score": 0.89,
+  "story_score": 46,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": [
+    "marcus chen",
+    "australian federal police",
+    "australian securities and investments commission",
+    "sydney"
+  ],
+  "primary_geos": [
+    "Sydney",
+    "Australia"
+  ],
+  "published_at": "2026-05-18T08:30:00.000Z",
+  "source_documents": [
+    {
+      "id": "afp-statement-chen-052026",
+      "type": "press release",
+      "title": "AFP Charges Sydney Trader in Major Insider Trading Case",
+      "issuer": "Australian Federal Police",
+      "url": "https://example-fixture.test/afp/chen-insider-trading-052026",
+      "date": "May 18, 2026",
+      "quote_text": "This prosecution demonstrates our commitment to maintaining market integrity and deterring those who seek unfair advantage through illegal information access.",
+      "quote_speaker": "Commander Sarah Mitchell",
+      "quote_role": "AFP Financial Crime Operations"
+    },
+    {
+      "id": "asic-investigation-summary-052026",
+      "type": "regulatory filing",
+      "title": "ASIC Investigation Summary: Matter 2026-IC-0847",
+      "issuer": "Australian Securities and Investments Commission",
+      "url": "https://example-fixture.test/asic/investigation-summary-0847",
+      "date": "May 18, 2026"
+    }
+  ]
+}

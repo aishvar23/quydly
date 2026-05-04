@@ -1,0 +1,38 @@
+{
+  "id": "sbf-sentencing-2024",
+  "category_id": "us",
+  "headline": "Sam Bankman-Fried Sentenced to 25 Years for FTX Fraud in Manhattan Federal Court",
+  "summary": "Sam Bankman-Fried, the founder of crypto exchange FTX, has been sentenced to 25 years in federal prison for orchestrating a multibillion-dollar fraud. Judge Lewis A. Kaplan handed down the sentence in Manhattan after Bankman-Fried's November 2023 conviction on seven counts including wire fraud, securities fraud, and conspiracy. Prosecutors said the FTX collapse cost customers approximately $8 billion. The Department of Justice called the sentence one of the most significant white-collar prosecutions in recent years.",
+  "key_points": [
+    "Sam Bankman-Fried sentenced to 25 years in federal prison for orchestrating FTX fraud",
+    "Convicted in November 2023 on seven counts including wire fraud and securities fraud",
+    "Prosecutors estimated approximately $8 billion in customer losses from FTX collapse",
+    "Judge Lewis A. Kaplan handed down the sentence at Manhattan federal court"
+  ],
+  "confidence_score": 10,
+  "coherence_score": 1,
+  "support_score": 1,
+  "story_score": 50.0,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": ["sam bankman-fried", "ftx", "doj", "lewis kaplan"],
+  "primary_geos": ["Manhattan", "New York"],
+  "published_at": "2024-03-28T16:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "doj_press_release",
+      "type": "press release",
+      "title": "Samuel Bankman-Fried Sentenced To 25 Years In Prison",
+      "issuer": "U.S. Attorney's Office, Southern District of New York",
+      "url": "https://www.justice.gov/usao-sdny/pr/samuel-bankman-fried-sentenced-25-years-prison",
+      "date": "March 28, 2024"
+    },
+    {
+      "id": "court_docket_sentencing",
+      "type": "court filing",
+      "title": "United States v. Bankman-Fried, S2 22 Cr 673 (LAK) - Judgment",
+      "issuer": "U.S. District Court, S.D.N.Y.",
+      "date": "March 28, 2024"
+    }
+  ]
+}

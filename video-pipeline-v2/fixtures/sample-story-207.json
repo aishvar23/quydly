@@ -1,0 +1,40 @@
+{
+  "id": 207,
+  "cluster_id": 901,
+  "category_id": "world",
+  "headline": "EU Imposes $4.2 Billion Sanctions Package on Russian Oil Exports",
+  "summary": "European Union foreign ministers approved a fresh sanctions package targeting Russian oil exports worth approximately $4.2 billion, marking the bloc's 17th round of penalties since 2022. The measures restrict trading with five additional shipping firms and lower the price cap on Russian crude from $60 to $45 per barrel.",
+  "key_points": [
+    "EU imposed an estimated $4.2 billion in new sanctions on Russian oil",
+    "The price cap on Russian crude drops from $60 to $45 per barrel",
+    "Five additional shipping firms were added to the sanctions list",
+    "European Council foreign affairs chief Kaja Kallas announced the measures in Brussels"
+  ],
+  "confidence_score": 9,
+  "coherence_score": 0.95,
+  "support_score": 0.9,
+  "story_score": 47.3,
+  "source_count": 3,
+  "is_verified": false,
+  "primary_entities": ["european union", "russia", "kallas", "brussels"],
+  "primary_geos": ["European Union", "Russia"],
+  "published_at": "2026-05-02T11:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "eu_council_decision",
+      "type": "council decision",
+      "title": "Council Decision (CFSP) 2026/612 on restrictive measures against Russia",
+      "issuer": "Council of the European Union",
+      "url": "https://eur-lex.europa.eu/eli/dec/2026/612/oj",
+      "date": "May 2, 2026"
+    },
+    {
+      "id": "kallas_statement",
+      "type": "statement",
+      "title": "Statement by High Representative Kaja Kallas on the 17th sanctions package",
+      "issuer": "European External Action Service",
+      "url": "https://www.eeas.europa.eu/eeas/statement-17th-package",
+      "date": "May 2, 2026"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "quydly-evidence-first-remotion",
+  "version": "1.0.0",
+  "description": "Evidence-first animated editorial module renderer for Quydly video pipeline",
+  "scripts": {
+    "preview": "npx remotion preview src/Root.tsx",
+    "studio":  "npx remotion studio src/Root.tsx",
+    "render":  "npx remotion render src/Root.tsx ShortVideo output/render.mp4"
+  },
+  "dependencies": {
+    "remotion":             "4.0.456",
+    "@remotion/cli":        "4.0.456",
+    "@remotion/media-utils": "4.0.456",
+    "react":                "18.2.0",
+    "react-dom":            "18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.2.0",
+    "typescript":   "5.8.3"
+  },
+  "remotion": {
+    "entryPoint": "src/Root.tsx",
+    "fps":    30,
+    "width":  1080,
+    "height": 1920
+  }
+}

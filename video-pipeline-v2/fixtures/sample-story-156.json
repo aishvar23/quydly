@@ -1,0 +1,40 @@
+{
+  "id": 156,
+  "cluster_id": 514,
+  "category_id": "business",
+  "headline": "Hedge Fund Manager Indicted for Trading $1.2 Million on Confidential Merger Data via Kalshi",
+  "summary": "A hedge fund executive has been charged with using nonpublic merger talks to make about $1.2 million in trades on Kalshi prediction markets. Marcus T. Reilly, 51, allegedly used confidential information about a pending acquisition to place 47 successful wagers ahead of the deal announcement.",
+  "key_points": [
+    "Reilly allegedly profited approximately $1.2 million through 47 wagers on Kalshi over six weeks",
+    "Charges include securities fraud, insider trading, and wire fraud",
+    "Reilly received the nonpublic merger information in his role as a fund advisor",
+    "The SEC has filed a parallel civil complaint seeking $87,000 in disgorgement of related fees"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.95,
+  "support_score": 0.9,
+  "story_score": 42.0,
+  "source_count": 2,
+  "is_verified": false,
+  "primary_entities": ["sec", "kalshi", "manhattan", "reilly", "doj"],
+  "primary_geos": ["Manhattan", "New York"],
+  "published_at": "2026-04-30T14:22:11.000Z",
+  "source_documents": [
+    {
+      "id": "sec_reilly_complaint",
+      "type": "civil complaint",
+      "title": "SEC v. Marcus T. Reilly: Civil Complaint for Securities Fraud and Insider Trading",
+      "issuer": "Securities and Exchange Commission",
+      "url": "https://www.sec.gov/litigation/litreleases/2026/lr-25789.htm",
+      "date": "Apr. 30, 2026"
+    },
+    {
+      "id": "doj_reilly_indictment",
+      "type": "indictment",
+      "title": "U.S. v. Marcus T. Reilly",
+      "issuer": "U.S. Attorney's Office, SDNY",
+      "url": "https://www.justice.gov/usao-sdny/pr/manhattan-fund-manager-charged-trading-merger-data",
+      "date": "Apr. 30, 2026"
+    }
+  ]
+}

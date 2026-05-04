@@ -1,0 +1,43 @@
+{
+  "id": 311,
+  "cluster_id": 1107,
+  "category_id": "business",
+  "headline": "Federal Reserve Cuts Rates 25 Basis Points to 4.25% as Inflation Eases",
+  "summary": "The Federal Open Market Committee cut its benchmark interest rate by 25 basis points to a target range of 4.00 to 4.25% on Wednesday, marking the third consecutive rate cut as core PCE inflation drifted toward 2.4%. Federal Reserve Chair Jerome Powell pointed to a softening labor market in his post-meeting press conference.",
+  "key_points": [
+    "FOMC cut rates 25 basis points to a 4.00 to 4.25% target range",
+    "Third consecutive rate cut as core PCE inflation reached 2.4%",
+    "Unemployment ticked up to 4.3% in the prior month's report",
+    "Fed Chair Jerome Powell signaled openness to additional cuts at upcoming meetings"
+  ],
+  "confidence_score": 9,
+  "coherence_score": 1,
+  "support_score": 1,
+  "story_score": 49.0,
+  "source_count": 3,
+  "is_verified": false,
+  "primary_entities": ["federal reserve", "fomc", "powell", "treasury"],
+  "primary_geos": ["Washington", "United States"],
+  "published_at": "2026-05-01T18:30:00.000Z",
+  "source_documents": [
+    {
+      "id": "fomc_statement_may_2026",
+      "type": "statement",
+      "title": "Federal Reserve issues FOMC statement on monetary policy",
+      "issuer": "Federal Open Market Committee",
+      "url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260501a.htm",
+      "date": "May 1, 2026",
+      "quote_text": "Recent indicators suggest that economic activity has continued to expand at a solid pace, but job gains have moderated and the unemployment rate has moved up since earlier in the year.",
+      "quote_speaker": "Federal Open Market Committee",
+      "quote_role": "U.S. central bank policy committee"
+    },
+    {
+      "id": "powell_press_conference",
+      "type": "press conference transcript",
+      "title": "Press Conference of Chair Powell, May 1, 2026",
+      "issuer": "Federal Reserve Board",
+      "url": "https://www.federalreserve.gov/mediacenter/files/FOMCpresconf20260501.pdf",
+      "date": "May 1, 2026"
+    }
+  ]
+}

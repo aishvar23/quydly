@@ -1,0 +1,42 @@
+{
+  "id": "cyber-fixture-001",
+  "category_id": "tech",
+  "headline": "Aurora DevCloud Confirms Ransomware Breach Exposing 3.6 Million Developer Accounts",
+  "summary": "Singapore-based code-hosting vendor Aurora DevCloud disclosed a ransomware breach that exposed approximately 3.6 million developer accounts, including hashed credentials and source-code metadata. The BlueGale ransomware group claimed responsibility and demanded a $14 million ransom. CISO Reed Tanaka said the company will not pay and filed notification with regulators 11 days after detection. Tracked as CVE-2026-31104.",
+  "key_points": [
+    "Aurora DevCloud confirmed 3.6 million developer accounts exposed in the breach",
+    "BlueGale ransomware group claimed responsibility and demanded $14 million",
+    "Disclosure was filed with regulators 11 days after the initial detection",
+    "The vulnerability is tracked as CVE-2026-31104 in the public catalogue"
+  ],
+  "confidence_score": 8,
+  "coherence_score": 0.92,
+  "support_score": 0.9,
+  "story_score": 44.0,
+  "source_count": 2,
+  "is_verified": true,
+  "primary_entities": ["aurora devcloud", "bluegale", "reed tanaka", "cisa"],
+  "primary_geos": ["Singapore"],
+  "published_at": "2026-05-03T16:00:00.000Z",
+  "source_documents": [
+    {
+      "id": "aurora_disclosure_8k",
+      "type": "disclosure statement",
+      "title": "Aurora DevCloud — Notice of Cybersecurity Incident",
+      "issuer": "Aurora DevCloud",
+      "url": "https://example-fixture-cyber.test/disclosure-2026-05-03",
+      "date": "May 3, 2026",
+      "quote_text": "We confirm an unauthorized actor accessed our developer-account store. We will not pay the ransom and have filed notification with regulators.",
+      "quote_speaker": "Reed Tanaka",
+      "quote_role": "Chief Information Security Officer"
+    },
+    {
+      "id": "cisa_advisory_31104",
+      "type": "advisory",
+      "title": "CISA Advisory CVE-2026-31104 — Auth-flow vulnerability in Aurora DevCloud",
+      "issuer": "Cybersecurity and Infrastructure Security Agency",
+      "url": "https://example-fixture-cyber.test/cisa/CVE-2026-31104",
+      "date": "May 3, 2026"
+    }
+  ]
+}

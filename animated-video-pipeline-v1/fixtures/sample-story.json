@@ -1,0 +1,21 @@
+{
+  "id": "sample-legal-001",
+  "cluster_id": "sample-cluster-001",
+  "category_id": "world",
+  "headline": "Former official charged over alleged classified document betting scheme",
+  "summary": "Prosecutors say a former official used sensitive information to place bets on political outcomes. The case centers on alleged misuse of documents, online betting activity, and questions about oversight.",
+  "key_points": [
+    "Federal prosecutors filed fraud and conspiracy charges.",
+    "Investigators say the alleged activity involved sensitive government information.",
+    "The case has prompted questions about betting markets and national security controls."
+  ],
+  "confidence_score": 8.4,
+  "coherence_score": 0.88,
+  "support_score": 0.82,
+  "story_score": 87,
+  "source_count": 5,
+  "is_verified": true,
+  "primary_entities": ["former official", "federal prosecutors"],
+  "primary_geos": ["United States"],
+  "published_at": "2026-05-01T12:00:00Z"
+}
