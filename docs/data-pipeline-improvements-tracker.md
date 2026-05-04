@@ -3,8 +3,8 @@
 > Owner: synthesizer / scraper team
 > Consumer: `video-pipeline-v2` and the question generator
 > Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
-> P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in flight on
-> `feat/pipeline-p2-improvements`)
+> P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in PR #73;
+> P3-1..5 filed from story 170 audit)
 
 ## Why this exists
 
@@ -608,6 +608,160 @@ substitution layer.
 
 **Video impact**: Audible quality improvement on every story with a
 non-English name.
+
+---
+
+## P3 — Quality issues surfaced by real-story audit
+
+These items were filed from a concrete audit of story 170 (Iran/Hormuz,
+2026-05-04) — a story that **passes every P0/P1/P2 gate** but would still
+render a flawed video. The gates check column presence; these items
+address the *quality* of what's in those columns. Each is independently
+shippable.
+
+### P3-1 ☐ Geo selection weights mentioned-in-content over source-country aggregation
+
+**What**: Today `clusters.primary_geos` rolls up from `source_country`
+of the clustered articles. Switch the rollup to weight `mentioned_geos`
+(extracted from article bodies) and `primary_entities_enriched[*]` of
+`type: "place"` above source-country. Source country becomes a
+tiebreak / boost, not the primary signal.
+
+**Why**: Story 170 produced `primary_geos: ["in"]` because most
+articles were from Indian outlets (`indianexpress.com`, `timesofindia`,
+`indiatoday.in`) — but the story is about Iran / Strait of Hormuz / US
+naval blockade. The story's own enriched entities correctly tag Iran
+and Strait of Hormuz as `place` types; that signal exists and is
+ignored. MapCallout would render a map of India on a Persian Gulf
+story.
+
+**Where**: `azure-functions/article-clusterer/index.js` — the geo
+aggregation step that writes `clusters.primary_geos`. Cluster geos
+flow into the story unchanged.
+
+**Effort**: M (rewrite the geo scoring weight + add entity-place
+lookup; existing data structures sufficient).
+
+**Video impact**: MapCallout targets the right place. Place photos
+load the right Wikipedia article. No more rendering "India" on a
+Middle East story.
+
+---
+
+### P3-2 ☐ Quote validator rejects truncated / mid-clause quotes
+
+**What**: Extend the P0-2 verbatim guard. Reject any quote whose
+`text` ends in:
+- A coordinating conjunction: `and`, `but`, `or`, `nor`, `yet`, `so`
+- An article: `the`, `a`, `an`
+- A common preposition: `of`, `to`, `for`, `in`, `on`, `with`, `by`, `as`
+- Any character other than terminal punctuation (`.`, `!`, `?`, `"`, `'`)
+
+**Why**: Story 170's Ghalibaf quote: `"A full ceasefire only makes
+sense if it is not violated by the naval blockade and"` — verbatim,
+but obviously incomplete. The current validator only checks length
++ verbatim presence. The cause is upstream: the synthesizer trims
+article bodies to `CONTENT_TRUNCATE = 500` chars, which can split
+mid-sentence; quotes pulled from that window inherit the truncation.
+QuoteCard renders this as a complete utterance.
+
+**Where**: `azure-functions/story-synthesizer/index.js` —
+`extractQuotes()` post-verification step. New small predicate.
+
+**Effort**: S (~20 lines + tests).
+
+**Video impact**: QuoteCard fires only on coherent, complete quotes.
+Editorial gravitas preserved.
+
+---
+
+### P3-3 ☐ Structured-number dedup across buckets
+
+**What**: When the same numeric `value` appears in two buckets of
+`structured_numbers` for the same underlying fact, collapse to one
+entry. Heuristic: same value + overlapping label tokens (e.g.
+"crew members" / "killed" / "casualties") → collapse, prefer the
+`casualties` bucket for human-life numbers.
+
+**Why**: Story 170 has `104` in both `counts` ("104 crew members")
+and `casualties` ("104 dead") for the same warship-strike death
+toll. NumberCard / casualty bar would either render two separate
+beats (visually duplicate) or pick one arbitrarily.
+
+**Where**: `azure-functions/lib/enrichment.js` —
+`sanitiseStructuredNumbers()` post-validation step. Pure function,
+no I/O.
+
+**Effort**: S (~30 lines + tests).
+
+**Video impact**: One stat, one beat. Cleaner narration.
+
+---
+
+### P3-4 ☐ Timeline diversity check / single-day downgrade
+
+**What**: When all `timeline_events` collapse to a single date, mark
+the timeline as low-quality and either:
+
+1. Skip TimelineCard render, or
+2. Surface a `timeline_disposition: "single_day" | "multi_day" | "absent"`
+   field for the renderer to decide, or
+3. Fall back to deriving events from `source_documents[i].date +
+   title` when the LLM extraction yields ≤ 1 distinct date.
+
+**Why**: Story 170 has 11 articles spanning Apr 18-25 with multiple
+distinct events (strait closure, ship attacks, US warship strike, Pak
+intervention, Iran "no reopening", Trump quotes). Only 2 timeline
+events were extracted, **both Apr 18**. Either the LLM didn't see
+the date arc or the validator dropped events with non-ISO dates —
+investigate which. TimelineCard with all dots on the same day is
+worse than no TimelineCard: it implies a single-day event when the
+story spans a week.
+
+**Where**: `azure-functions/lib/enrichment.js` (extraction prompt +
+validator) and possibly a fallback-from-source-docs step in
+`story-synthesizer/index.js`.
+
+**Effort**: M (prompt tightening + validator + fallback path).
+
+**Video impact**: TimelineCard renders only on stories with real
+chronological depth. Or fallback timeline pulls from source-doc
+dates when the LLM extraction is thin.
+
+---
+
+### P3-5 ☐ Replace or drop the legacy `primary_entities text[]` column
+
+**What**: Either:
+
+1. Rewrite `primary_entities` from `primary_entities_enriched[*].name`
+   at synthesis insert/update time (cheap), or
+2. Drop the column and migrate consumers to read
+   `primary_entities_enriched[*].name` (correct).
+
+**Why**: Story 170's `primary_entities = ["pakistan field marshal
+asim", "middle east news", "hormuz india", "hormuz the", "two
+india", "correspondent", "washington", "surviving"]` is full of
+garbage tokens from cluster-level NLP extraction. This is a
+clusterer-side artifact present on ~every story (not specific to
+170). The enriched jsonb column has been clean since P1-4 landed,
+but the flat array is still the source of truth for some readers
+— including `findExistingStory()`'s entity-overlap River-merge
+logic in the synthesizer itself, which means dirty tokens here
+poison merge decisions.
+
+**Where**: Option 1 — `azure-functions/story-synthesizer/index.js`
+at insert/update time. Option 2 —
+`azure-functions/article-clusterer/index.js` + every consumer
+(question generator, video pipeline adapter, audit step).
+
+**Effort**: S (option 1) or L (option 2 — schema removal + consumer
+migration).
+
+**Video impact**: Indirect — cleaner entity tokens means better
+River-merge decisions, which means fewer split stories that should
+have unified, which means richer evidence shelves on the merged
+result.
 
 ---
 
