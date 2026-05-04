@@ -18,7 +18,7 @@ import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
 import { AUDIENCES, computeAudienceProjection } from "../lib/geo.js";
 import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
-import { enrichNarrative, emptyEnrichment } from "../lib/enrichment.js";
+import { enrichNarrative, emptyEnrichment, enrichmentSucceeded } from "../lib/enrichment.js";
 import { probeEntities } from "../lib/wikipedia.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
@@ -307,6 +307,32 @@ function countNumbers(structured) {
   if (!structured || typeof structured !== "object") return 0;
   return ["money", "counts", "percentages", "magnitudes", "casualties"]
     .reduce((acc, key) => acc + (Array.isArray(structured[key]) ? structured[key].length : 0), 0);
+}
+
+// Build the enrichment-column subset of an UPDATE/INSERT payload.
+//
+// Returns `{}` (no enrichment columns) when the LLM enrichment pass did not
+// succeed. The empty object is critical: spread into the writer's payload, it
+// causes the columns to be omitted entirely. On UPDATE that preserves any
+// previously-enriched values on the row; on INSERT the migration's column
+// defaults take over (NULL for the four text columns, `{}`/`[]` for jsonb).
+//
+// Per Codex P1 review on PR #71: previously this function unconditionally
+// emitted column values even when `enrichment` was the `emptyEnrichment()`
+// fallback, which on River-merge let a transient enrichment LLM failure reset
+// `story_type='general'` and clear structured fields on already-enriched
+// stories. Gating on `enrichmentSucceeded` removes that data regression.
+function buildEnrichmentColumns(enrichment, enrichedEntities) {
+  if (!enrichmentSucceeded(enrichment)) return {};
+  return {
+    story_type:                enrichment.story_type,
+    editorial_posture:         enrichment.editorial_posture,
+    hook_sentence:             enrichment.hook_sentence,
+    why_it_matters:            enrichment.why_it_matters,
+    structured_numbers:        enrichment.structured_numbers,
+    timeline_events:           enrichment.timeline_events,
+    primary_entities_enriched: enrichedEntities,
+  };
 }
 
 // ── Wikipedia attach (P0-4) ───────────────────────────────────────────────────
@@ -640,17 +666,11 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          mergedSourceDocs,
-        // P0-5 / P1 enrichment fields. Always overwrite on River-merge —
-        // newer synthesis passes have access to the same article corpus the
-        // old pass saw plus any newcomers, so the enriched view is at least
-        // as informed as the prior one.
-        story_type:                enrichment.story_type,
-        editorial_posture:         enrichment.editorial_posture,
-        hook_sentence:             enrichment.hook_sentence,
-        why_it_matters:            enrichment.why_it_matters,
-        structured_numbers:        enrichment.structured_numbers,
-        timeline_events:           enrichment.timeline_events,
-        primary_entities_enriched: enrichedEntities,
+        // P0-5 / P1 enrichment fields. Spread is empty (no columns touched)
+        // when the enrichment pass fell back to defaults — see
+        // buildEnrichmentColumns. Successful runs overwrite; failed runs
+        // leave the previously-persisted enrichment intact.
+        ...buildEnrichmentColumns(enrichment, enrichedEntities),
         updated_at:                now,
       })
       .eq("id", existingStory.id);
@@ -678,17 +698,13 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          incomingSourceDocs,
-        // P0-5 / P1 enrichment fields. NULL is a meaningful state — it tells
-        // downstream consumers "we tried but didn't have a value", separate
-        // from "we never enriched this row" (which can't happen post-migration
-        // because every fresh insert runs through this code path).
-        story_type:                enrichment.story_type,
-        editorial_posture:         enrichment.editorial_posture,
-        hook_sentence:             enrichment.hook_sentence,
-        why_it_matters:            enrichment.why_it_matters,
-        structured_numbers:        enrichment.structured_numbers,
-        timeline_events:           enrichment.timeline_events,
-        primary_entities_enriched: enrichedEntities,
+        // P0-5 / P1 enrichment fields. On a failed enrichment pass, the
+        // spread is empty and Supabase falls back to the migration's column
+        // defaults: NULL for the four text columns, `{}` / `[]` for jsonb.
+        // NULL is the honest "we didn't enrich this row" signal — distinct
+        // from a successful enrichment that genuinely picked story_type
+        // 'general'.
+        ...buildEnrichmentColumns(enrichment, enrichedEntities),
         is_verified:               false,
         published_at:              now,
         updated_at:                now,

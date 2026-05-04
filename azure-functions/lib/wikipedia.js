@@ -39,6 +39,26 @@ const RETRY_BASE_MS    = 400;
 // pays for itself in the first repeat.
 const memCache = new Map();
 
+// Failure reasons safe to cache — they reflect the state of Wikipedia, not
+// transient network conditions, so re-trying within the same process is a
+// waste. Anything NOT on this list (network_error, http_5xx, invalid_json,
+// http_4xx-other-than-404) is treated as transient and never memoised, so
+// a flicker doesn't lock the entity out for the rest of the process.
+//
+// Per Codex P2 review on PR #71.
+const PERMANENT_FAILURE_REASONS = new Set([
+  "empty_name",         // input never had a chance to resolve — repeat call would behave identically
+  "not_found",          // 404 from Wikipedia REST
+  "redirect_refused",   // page is a redirect we deliberately don't follow
+  "disambiguation",     // page is a disambig listing
+  "title_mismatch",     // returned page title doesn't match query tokens
+]);
+
+function shouldCache(result) {
+  if (result?.resolved === true) return true;
+  return PERMANENT_FAILURE_REASONS.has(result?.reason);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -71,7 +91,9 @@ export async function probeEntityWikipedia(name, { signal } = {}) {
   if (memCache.has(cacheKey)) return memCache.get(cacheKey);
 
   const result = await lookupSummary(trimmed, signal);
-  memCache.set(cacheKey, result);
+  // Only memoise stable outcomes — transient failures (network, 5xx, parse)
+  // must remain retry-eligible on the next probe. See PERMANENT_FAILURE_REASONS.
+  if (shouldCache(result)) memCache.set(cacheKey, result);
   return result;
 }
 

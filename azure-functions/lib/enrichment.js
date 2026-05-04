@@ -99,6 +99,16 @@ export function emptyEnrichment() {
  * Run the enrichment Claude pass. Never throws — failures degrade to
  * `emptyEnrichment()` so the synthesiser can still write the core story.
  *
+ * The success path attaches a non-enumerable `_ok: true` marker so callers
+ * can distinguish "we synthesised this story but enrichment LLM failed" from
+ * "we genuinely picked the empty defaults". Critical for River-merge: a
+ * transient LLM blip must NOT overwrite previously-enriched columns with
+ * fallback values. See `enrichmentSucceeded` for the read side.
+ *
+ * The `_ok` field is non-enumerable, so `JSON.stringify`, `Object.entries`,
+ * and object spread (`{...enrichment}`) all ignore it — the marker never
+ * leaks into the persisted row.
+ *
  * @param {Anthropic} ai
  * @param {{ category_id?: string, primary_entities?: string[] }} cluster
  * @param {Array<{ id, title, description?, content?, domain, canonical_url?, published_at? }>} articles
@@ -122,7 +132,23 @@ export async function enrichNarrative(ai, cluster, articles, narrative) {
     return emptyEnrichment();
   }
 
-  return validateEnrichment(parsed, articles);
+  return markOk(validateEnrichment(parsed, articles));
+}
+
+/**
+ * True when the enrichment LLM call succeeded and produced parseable JSON
+ * (validation may still have dropped malformed individual fields). Callers
+ * use this to gate database writes that would otherwise overwrite previously-
+ * persisted enrichment with fallback defaults.
+ */
+export function enrichmentSucceeded(enrichment) {
+  return Boolean(enrichment && enrichment._ok === true);
+}
+
+// Internal: stamp the result with a non-enumerable success marker.
+function markOk(result) {
+  Object.defineProperty(result, "_ok", { value: true, enumerable: false });
+  return result;
 }
 
 // ── LLM call ──────────────────────────────────────────────────────────────────

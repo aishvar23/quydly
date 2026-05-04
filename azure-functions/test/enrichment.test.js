@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
   enrichNarrative,
   emptyEnrichment,
+  enrichmentSucceeded,
   STORY_TYPES,
   EDITORIAL_POSTURES,
   ENTITY_TYPES,
@@ -255,4 +256,46 @@ test("enrichment: emptyEnrichment exposes all expected keys for downstream write
   assert.deepEqual(e.structured_numbers.money, []);
   assert.deepEqual(e.timeline_events, []);
   assert.deepEqual(e.primary_entities_enriched, []);
+});
+
+// ── Codex P1 fix: enrichmentSucceeded marker ─────────────────────────────────
+
+test("enrichmentSucceeded: empty fallback is NOT marked succeeded", () => {
+  // Critical: this is the gate that prevents River-merge from overwriting a
+  // previously-enriched row when the current run's enrichment LLM failed.
+  assert.equal(enrichmentSucceeded(emptyEnrichment()), false);
+  assert.equal(enrichmentSucceeded(null), false);
+  assert.equal(enrichmentSucceeded(undefined), false);
+  assert.equal(enrichmentSucceeded({}), false);
+});
+
+test("enrichmentSucceeded: marks true on a successful enrichNarrative call", async () => {
+  const result = await enrichNarrative(makeStubAi(validResponse), {}, makeArticles(), makeNarrative());
+  assert.equal(enrichmentSucceeded(result), true);
+});
+
+test("enrichmentSucceeded: stays false when LLM throws", async () => {
+  const result = await enrichNarrative(makeStubAiThatThrows(), {}, makeArticles(), makeNarrative());
+  assert.equal(enrichmentSucceeded(result), false);
+});
+
+test("enrichmentSucceeded: stays false on invalid JSON response", async () => {
+  const result = await enrichNarrative(makeStubAi("not json at all"), {}, makeArticles(), makeNarrative());
+  assert.equal(enrichmentSucceeded(result), false);
+});
+
+test("enrichment: _ok marker is non-enumerable — does not leak through spread or JSON", async () => {
+  // The synthesizer writes `{ ...buildEnrichmentColumns(enrichment, ...) }`
+  // into the Supabase payload. If `_ok` were enumerable, it would attempt
+  // to write a column named `_ok` and the row write would fail (or worse,
+  // succeed and leave a phantom column).
+  const result = await enrichNarrative(makeStubAi(validResponse), {}, makeArticles(), makeNarrative());
+  assert.equal(Object.keys(result).includes("_ok"), false, "Object.keys must not list _ok");
+  assert.equal(Object.entries(result).some(([k]) => k === "_ok"), false, "Object.entries must not list _ok");
+  const json = JSON.parse(JSON.stringify(result));
+  assert.equal("_ok" in json, false, "JSON.stringify must drop _ok");
+  const spread = { ...result };
+  assert.equal("_ok" in spread, false, "object spread must drop _ok");
+  // But direct read still returns true so callers can gate on it.
+  assert.equal(result._ok, true);
 });

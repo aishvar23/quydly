@@ -220,6 +220,117 @@ test("P0-4 probeEntityWikipedia caches results by lowercased name across calls",
   }
 });
 
+// ── Codex P2 fix: cache only stable outcomes ─────────────────────────────────
+
+test("P0-4 cache: 404 (permanent) is memoized — repeat calls don't re-fetch", async () => {
+  let fetchCalls = 0;
+  const restore = installFetchStub(async () => {
+    fetchCalls += 1;
+    return { status: 404, ok: false, json: async () => ({}) };
+  });
+  try {
+    const a = await probeEntityWikipedia("Definitely Not Real");
+    const b = await probeEntityWikipedia("Definitely Not Real");
+    assert.equal(a.reason, "not_found");
+    assert.equal(b.reason, "not_found");
+    assert.equal(fetchCalls, 1, "404 is permanent and must be cached");
+  } finally { restore(); }
+});
+
+test("P0-4 cache: redirect_refused, disambiguation, title_mismatch are all memoized", async () => {
+  // redirect_refused
+  {
+    let fetchCalls = 0;
+    const restore = installFetchStub(async () => { fetchCalls += 1; return { status: 302, ok: false, json: async () => ({}) }; });
+    try {
+      await probeEntityWikipedia("Redirected Page");
+      await probeEntityWikipedia("Redirected Page");
+      assert.equal(fetchCalls, 1, "redirect_refused must be cached");
+    } finally { restore(); }
+  }
+  // disambiguation
+  {
+    let fetchCalls = 0;
+    const restore = installFetchStub(async () => { fetchCalls += 1; return jsonResponse(200, { type: "disambiguation", title: "Manhattan" }); });
+    try {
+      await probeEntityWikipedia("Manhattan Disambig");
+      await probeEntityWikipedia("Manhattan Disambig");
+      assert.equal(fetchCalls, 1, "disambiguation must be cached");
+    } finally { restore(); }
+  }
+  // title_mismatch
+  {
+    let fetchCalls = 0;
+    const restore = installFetchStub(async () => {
+      fetchCalls += 1;
+      return jsonResponse(200, { type: "standard", title: "Totally Different Article", thumbnail: { source: "x.jpg" } });
+    });
+    try {
+      await probeEntityWikipedia("Some Mismatched Query");
+      await probeEntityWikipedia("Some Mismatched Query");
+      assert.equal(fetchCalls, 1, "title_mismatch must be cached");
+    } finally { restore(); }
+  }
+});
+
+test("P0-4 cache: network_error (transient) is NOT memoized — retry on next call", async () => {
+  // First probe: every fetch attempt throws (defeats fetchWithRetry's retry
+  // budget) so the probe surfaces network_error. Second probe: stub flips to
+  // success. After Codex P2 the first failure must NOT be cached, so the
+  // second probe hits the network and resolves.
+  let fetchCalls = 0;
+  let mode = "throw";
+  const restore = installFetchStub(async () => {
+    fetchCalls += 1;
+    if (mode === "throw") throw new Error("simulated DNS flap");
+    return jsonResponse(200, {
+      type:     "standard",
+      title:    "Flaky Network Subject",
+      extract:  "Recovered.",
+      thumbnail: { source: "https://x/y.jpg" },
+    });
+  });
+  try {
+    const first = await probeEntityWikipedia("Flaky Network Subject");
+    assert.equal(first.resolved, false);
+    assert.match(String(first.reason), /network_error/);
+    const fetchCallsAfterFirst = fetchCalls;
+    mode = "ok";
+    const second = await probeEntityWikipedia("Flaky Network Subject");
+    assert.equal(second.resolved, true,
+      "transient network failures must NOT be cached — retry must hit the network");
+    assert.ok(fetchCalls > fetchCallsAfterFirst,
+      `second probe must reach the network; first=${fetchCallsAfterFirst}, total=${fetchCalls}`);
+  } finally { restore(); }
+});
+
+test("P0-4 cache: 5xx (transient, after retry exhaustion) is NOT memoized", async () => {
+  // fetchWithRetry exhausts retries on persistent 5xx and surfaces an
+  // http_500 result. That's still a transient signal — Wikipedia might
+  // recover. Repeat probes must hit the network.
+  let fetchCalls = 0;
+  let mode = "5xx";
+  const restore = installFetchStub(async () => {
+    fetchCalls += 1;
+    if (mode === "5xx") return { status: 503, ok: false, json: async () => ({}) };
+    return jsonResponse(200, {
+      type:     "standard",
+      title:    "Recovered After 503",
+      extract:  "Now resolves.",
+      thumbnail: { source: "https://x/y.jpg" },
+    });
+  });
+  try {
+    const first = await probeEntityWikipedia("Recovered After 503");
+    assert.equal(first.resolved, false, "503 surfaces as failure after retries");
+    mode = "ok";
+    const fetchCallsAfterFirst = fetchCalls;
+    const second = await probeEntityWikipedia("Recovered After 503");
+    assert.equal(second.resolved, true, "second probe must succeed once Wikipedia recovers");
+    assert.ok(fetchCalls > fetchCallsAfterFirst, "second probe must reach the network");
+  } finally { restore(); }
+});
+
 // ── Batch helper ──────────────────────────────────────────────────────────────
 
 test("P0-4 probeEntities preserves input order and returns one result per input", async () => {
