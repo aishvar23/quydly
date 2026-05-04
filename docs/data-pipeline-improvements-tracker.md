@@ -4,8 +4,9 @@
 > Consumer: `video-pipeline-v2` and the question generator
 > Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
 > P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in PR #73;
-> P3-1..5 filed from story 170 audit in PR #74; P3-1 / P3-2 / P3-3 in flight on
-> `feat/pipeline-p3-quality`)
+> P3-1..5 filed from story 170 audit in PR #74; P3-1 / P3-2 / P3-3 in PR #77;
+> P4-1 / P4-2 filed after live re-synth validation; P3-4 / P3-5 in flight on
+> `feat/pipeline-p3-final`)
 
 ## Why this exists
 
@@ -699,7 +700,7 @@ no I/O.
 
 ---
 
-### P3-4 ☐ Timeline diversity check / single-day downgrade
+### P3-4 ☑ Timeline diversity check / single-day downgrade
 
 **What**: When all `timeline_events` collapse to a single date, mark
 the timeline as low-quality and either:
@@ -731,7 +732,7 @@ dates when the LLM extraction is thin.
 
 ---
 
-### P3-5 ☐ Replace or drop the legacy `primary_entities text[]` column
+### P3-5 ☑ Replace or drop the legacy `primary_entities text[]` column
 
 **What**: Either:
 
@@ -763,6 +764,79 @@ migration).
 River-merge decisions, which means fewer split stories that should
 have unified, which means richer evidence shelves on the merged
 result.
+
+---
+
+## P4 — Issues surfaced during validation
+
+These items were filed after a live re-synth of cluster 663 (story 170)
+on the P3-1/2/3 changes. The new code worked, but persisting against
+already-synthesised data exposed two follow-ups the unit tests couldn't
+catch.
+
+### P4-1 ☐ River-merge resurrects stale quote fields on re-synth
+
+**What**: `mergeSourceDocuments()` preserves any field on an existing
+source-document entry that the incoming entry does not overwrite. When
+the new P3-2 quote-tail validator rejects a quote that a prior synthesis
+had stored, the new `buildSourceDocuments()` doesn't include
+`quote_text` / `quote_speaker` / `quote_role` for that doc — but the
+merger keeps the OLD values.
+
+Concretely: re-synth on cluster 663 produced 1 verified quote (the
+sailor) and rejected the truncated Ghalibaf line. After merge, the DB
+still showed BOTH quotes attached; source 93656 carried
+`"...ated by the naval blockade and"` from the prior synthesis. The new
+validator's intent ("drop this quote") was overridden by River-merge's
+preservation policy.
+
+**Why**: The merge logic was designed assuming evidence is additive.
+With stricter validators (P3-2 today, more in the future), evidence is
+also retractive. We need explicit clearing.
+
+**Where**: `azure-functions/story-synthesizer/index.js` —
+`mergeSourceDocuments()`. Two options:
+
+1. When the incoming doc has no quote fields, treat that as a SIGNAL TO
+   CLEAR rather than preserve. Risky because it conflates "no quote
+   this run" with "quote was valid but the LLM didn't repeat it" —
+   single LLM blip would wipe a good quote.
+2. Have `buildSourceDocuments()` emit explicit `quote_text: null` on
+   docs whose candidate failed validation. Merge clears on null,
+   preserves on absent. Cleaner separation.
+
+**Effort**: S (~30 lines + tests).
+
+**Video impact**: QuoteCard renders the validator's verdict, not a
+stale snapshot. Editorial integrity restored across re-syntheses.
+
+---
+
+### P4-2 ☐ `story_decay_at` is NULL on pre-migration rows forever
+
+**What**: P2-6 design intentionally pins `story_decay_at` to original
+publication and does NOT update on River-merge ("a re-pickup shouldn't
+reset the freshness clock"). Correct in steady state. But pre-P2 rows
+have `story_decay_at = NULL`, and the UPDATE path keeps it NULL forever
+because the synthesizer's River-merge UPDATE doesn't write the column.
+
+Concretely: cluster 663 / story 170 was re-synthesised after the P2
+migration applied; `story_decay_at` is still NULL on the row.
+
+**Why**: Pre-P2 rows look indistinguishable from "decay unknown" to the
+renderer's freshness check. Ten thousand historical stories effectively
+opt out of the ARCHIVE chip.
+
+**Where**: `azure-functions/story-synthesizer/index.js` UPDATE branch —
+write `story_decay_at: COALESCE(existing, computeStoryDecayAt(category, published_at))`.
+Or a one-time backfill SQL: `UPDATE stories SET story_decay_at =
+published_at + interval '<N> days' WHERE story_decay_at IS NULL`.
+
+**Effort**: S (one-line synth fix + optional backfill).
+
+**Video impact**: ARCHIVE chip works on re-renders of historical
+content. Without this, "is this story old?" check is silently broken
+for everything synthesised before the P2 migration.
 
 ---
 

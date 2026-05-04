@@ -13,6 +13,7 @@
 //   P1-10 factual_conflicts (numeric / factual divergence between sources)
 //   P2-1  visual_concepts (concrete renderable visuals per story)
 //   P2-7  per-entity phonetic hint (TTS pronunciation)
+//   P3-4  timeline_disposition + article-date fallback when LLM extraction is thin
 //
 // Design choices:
 //   - One Claude pass, structured JSON. The synthesizer narrative pass already
@@ -94,6 +95,14 @@ export function emptyEnrichment() {
       casualties:   [],
     },
     timeline_events:           [],
+    // P3-4 — disposition tells the renderer what it's getting:
+    //   "absent"    — no events, neither LLM nor fallback could derive any
+    //   "single_day" — events all collapse to one date (TimelineCard should skip)
+    //   "multi_day"  — at least 2 distinct dates (TimelineCard renders)
+    //   "fallback"   — LLM yielded ≤1 distinct date, but article-date fallback
+    //                  produced multi-day events (TimelineCard renders, but
+    //                  editor knows the chronology was not LLM-extracted)
+    timeline_disposition:      "absent",
     primary_entities_enriched: [],
     factual_conflicts:         [],
     visual_concepts:           [],
@@ -270,6 +279,12 @@ function validateEnrichment(input, articles) {
   out.factual_conflicts  = sanitiseFactualConflicts(input.factual_conflicts);
   out.visual_concepts    = sanitiseVisualConcepts(input.visual_concepts);
 
+  // P3-4 — enforce timeline quality. Single-day timelines (story 170:
+  // 11 articles across Apr 18-25, LLM extracted 2 events both Apr 18) are
+  // worse than no timeline. Try the article-date fallback before giving up.
+  ({ events: out.timeline_events, disposition: out.timeline_disposition } =
+    enforceTimelineQuality(out.timeline_events, articles));
+
   return out;
 }
 
@@ -376,6 +391,81 @@ function sanitiseNumberEntry(entry, required, optional) {
   // If neither role nor unit/label survived, that's still acceptable — display+value alone is renderable.
   void required;
   return out;
+}
+
+// P3-4 — timeline quality gate.
+//
+// After the LLM-extraction pass and validator, count distinct dates in the
+// timeline. If we have ≥2, the timeline is healthy — render. If we have ≤1,
+// try a fallback: derive events from `articles[i].published_at + title`
+// (one event per distinct publication date). If the fallback yields ≥2
+// distinct dates, replace the LLM's thin output with article-derived events
+// and mark the disposition `fallback` so the editor can see what happened.
+// If even the fallback can't produce multi-day events, mark `single_day`
+// (one event total) or `absent` (zero) — the renderer can decide whether
+// to suppress TimelineCard.
+const TIMELINE_FALLBACK_MAX = 5;
+const TIMELINE_FALLBACK_LABEL_MAX = 60;
+
+export function enforceTimelineQuality(events, articles) {
+  const safeEvents = Array.isArray(events) ? events : [];
+  const distinctDates = new Set(safeEvents.map((e) => e?.date).filter(Boolean));
+
+  if (distinctDates.size >= 2) {
+    return { events: safeEvents, disposition: "multi_day" };
+  }
+
+  // LLM thin / single-day. Try article-date fallback.
+  const fallback = deriveTimelineFromArticles(articles);
+  const fallbackDates = new Set(fallback.map((e) => e.date));
+
+  if (fallbackDates.size >= 2) {
+    return { events: fallback, disposition: "fallback" };
+  }
+
+  // Both thin. Honest signal so the renderer can decide.
+  if (distinctDates.size === 1 || safeEvents.length > 0) {
+    return { events: safeEvents, disposition: "single_day" };
+  }
+  return { events: [], disposition: "absent" };
+}
+
+function deriveTimelineFromArticles(articles) {
+  if (!Array.isArray(articles) || articles.length === 0) return [];
+
+  // Group by YYYY-MM-DD; pick the most authoritative title per date so the
+  // event label is the strongest available headline rather than a wire pickup.
+  const byDate = new Map();
+  for (const a of articles) {
+    if (!a?.published_at) continue;
+    const date = String(a.published_at).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+
+    const authority = Number.isFinite(a.authority_score) ? a.authority_score : 0;
+    const existing = byDate.get(date);
+    if (!existing || authority > existing.authority) {
+      byDate.set(date, {
+        date,
+        title:     typeof a.title === "string" ? a.title.trim() : "",
+        source_id: Number.isFinite(Number(a.id)) ? Number(a.id) : null,
+        authority,
+      });
+    }
+  }
+
+  // Sort newest-first (timeline reads top-down chronologically descending);
+  // truncate label to keep the renderer's TimelineCard readable.
+  return [...byDate.values()]
+    .filter((e) => e.title.length > 0)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .slice(0, TIMELINE_FALLBACK_MAX)
+    .map((e) => ({
+      date:      e.date,
+      label:     e.title.length > TIMELINE_FALLBACK_LABEL_MAX
+                   ? e.title.slice(0, TIMELINE_FALLBACK_LABEL_MAX - 1).replace(/\s+\S*$/, "") + "…"
+                   : e.title,
+      source_id: e.source_id,
+    }));
 }
 
 function sanitiseTimelineEvents(input, articles) {
