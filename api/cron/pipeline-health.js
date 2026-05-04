@@ -114,6 +114,7 @@ export default async function handler(req, res) {
     art.failed > 0            && `${art.failed} articles in FAILED status`,
     clust.stuckProcessing > 0 && `${clust.stuckProcessing} clusters stuck in PROCESSING`,
     stor.last24h === 0        && "No stories synthesised in the last 24h",
+    queues === null           && "Service Bus telemetry unavailable — DLQ status unknown",
     queues?.scrapeDlq > 0    && `scrape-queue DLQ: ${queues.scrapeDlq} messages`,
     queues?.synthDlq  > 0    && `synthesize-queue DLQ: ${queues.synthDlq} messages`,
   ].filter(Boolean);
@@ -125,7 +126,7 @@ export default async function handler(req, res) {
 
   const { error: sendError } = await resend.emails.send({
     from: "Quydly Pipeline <noreply@quydly.com>",
-    to:   "aishvar.suhane@gmail.com",
+    to:   process.env.HEALTH_REPORT_EMAIL,
     subject,
     html: buildEmail(art, clust, stor, queues, issues, date),
   });
