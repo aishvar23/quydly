@@ -594,8 +594,15 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
+//
+// Exported as `run` (the name function.json points to via entryPoint) AND
+// `storySynthesizer` (test imports use this name) AND default. Azure
+// Functions Node.js host can't auto-pick an entry point when a module has
+// multiple exports — without the explicit entryPoint it throws "Worker
+// was unable to load function story-synthesizer". Story 170 re-synth at
+// 21:23 dead-lettered after 3 attempts because of exactly this.
 
-export default async function storySynthesizer(context, message) {
+export async function run(context, message) {
   const { cluster_id } = message;
 
   const supabase = getSupabase();
@@ -1075,3 +1082,9 @@ export default async function storySynthesizer(context, message) {
     .update({ status: "PROCESSED", updated_at: now })
     .eq("id", cluster_id);
 }
+
+// Back-compat aliases for test imports (synthesizer-data.test.js,
+// smoke-p1-final.js) that historically used `storySynthesizer` or the
+// default export. The Azure Functions host uses `run` per function.json.
+export { run as storySynthesizer };
+export default run;

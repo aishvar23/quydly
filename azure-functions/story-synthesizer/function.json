@@ -1,4 +1,6 @@
 {
+  "scriptFile": "index.js",
+  "entryPoint": "run",
   "bindings": [
     {
       "name": "message",
