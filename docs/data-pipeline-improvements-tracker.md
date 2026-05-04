@@ -4,7 +4,8 @@
 > Consumer: `video-pipeline-v2` and the question generator
 > Last updated: 2026-05-04 (P0-1/2/3 landed in PR #69; P0-4/5 + P1-1..7 in PR #71;
 > P1-8 / P1-9 / P1-10 in PR #72; P2-1 / P2-3 / P2-6 / P2-7 in PR #73;
-> P3-1..5 filed from story 170 audit)
+> P3-1..5 filed from story 170 audit in PR #74; P3-1 / P3-2 / P3-3 in flight on
+> `feat/pipeline-p3-quality`)
 
 ## Why this exists
 
@@ -619,7 +620,7 @@ render a flawed video. The gates check column presence; these items
 address the *quality* of what's in those columns. Each is independently
 shippable.
 
-### P3-1 ☐ Geo selection weights mentioned-in-content over source-country aggregation
+### P3-1 ☑ Geo selection weights mentioned-in-content over source-country aggregation
 
 **What**: Today `clusters.primary_geos` rolls up from `source_country`
 of the clustered articles. Switch the rollup to weight `mentioned_geos`
@@ -648,7 +649,7 @@ Middle East story.
 
 ---
 
-### P3-2 ☐ Quote validator rejects truncated / mid-clause quotes
+### P3-2 ☑ Quote validator rejects truncated / mid-clause quotes
 
 **What**: Extend the P0-2 verbatim guard. Reject any quote whose
 `text` ends in:
@@ -675,7 +676,7 @@ Editorial gravitas preserved.
 
 ---
 
-### P3-3 ☐ Structured-number dedup across buckets
+### P3-3 ☑ Structured-number dedup across buckets
 
 **What**: When the same numeric `value` appears in two buckets of
 `structured_numbers` for the same underlying fact, collapse to one

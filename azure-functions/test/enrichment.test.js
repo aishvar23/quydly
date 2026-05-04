@@ -370,6 +370,97 @@ test("P2-7 entity phonetic: clamps overlong values to 80 chars", async () => {
   assert.ok(typeof phonetic === "string" && phonetic.length <= 80);
 });
 
+// ── P3-3 cross-bucket structured-number dedup (story 170 audit) ──────────────
+
+test("P3-3 dedup: story 170 case — '104 crew members' in counts + '104 dead' in casualties → counts entry drops", async () => {
+  // Reproduces story 170's structured_numbers: same value 104 lands in two
+  // buckets describing the same warship-strike death toll. The renderer
+  // would otherwise double-render the stat as two separate beats.
+  const body = JSON.stringify({
+    structured_numbers: {
+      money: [],
+      counts:      [{ display: "104 crew members", value: 104, unit: "people", label: "killed in warship strike" }],
+      percentages: [],
+      magnitudes:  [],
+      casualties:  [{ display: "104 dead",        value: 104, label: "Iranian naval casualties" }],
+    },
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.structured_numbers.counts.length, 0,
+    "counts entry must be dropped — same value, both labels carry casualty markers");
+  assert.equal(result.structured_numbers.casualties.length, 1,
+    "casualties entry must survive as the canonical reading");
+  assert.equal(result.structured_numbers.casualties[0].value, 104);
+});
+
+test("P3-3 dedup: same value but no casualty marker on the non-casualties side → no collapse", async () => {
+  // 25 in counts as "25 years sentence" + 25 in casualties as "25 victims"
+  // are unrelated; the labels don't share a casualty token in counts.
+  const body = JSON.stringify({
+    structured_numbers: {
+      money: [],
+      counts:      [{ display: "25 years",  value: 25, unit: "years", label: "sentence" }],
+      percentages: [],
+      magnitudes:  [],
+      casualties:  [{ display: "25 victims", value: 25, label: "named victims" }],
+    },
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.structured_numbers.counts.length, 1, "different facts must not collapse");
+  assert.equal(result.structured_numbers.casualties.length, 1);
+});
+
+test("P3-3 dedup: casualty bucket without casualty marker on its label does NOT trigger collapse", async () => {
+  // If the casualties bucket entry itself doesn't carry a casualty token in
+  // its label, treat it as miscategorised and don't use it as a dedup anchor.
+  // (Hardens against the LLM dumping unrelated values into casualties.)
+  const body = JSON.stringify({
+    structured_numbers: {
+      money:       [{ display: "$104", value: 104, role: "alleged take" }],
+      counts:      [],
+      percentages: [],
+      magnitudes:  [],
+      casualties:  [{ display: "104 entries", value: 104, label: "spreadsheet rows" }],
+    },
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.structured_numbers.money.length, 1,
+    "casualties entry without a casualty marker must not anchor a dedup");
+});
+
+test("P3-3 dedup: empty casualties bucket short-circuits — no walk needed", async () => {
+  const body = JSON.stringify({
+    structured_numbers: {
+      money:       [{ display: "$104M", value: 104, role: "fine" }],
+      counts:      [{ display: "104 violations", value: 104, label: "regulatory violations" }],
+      percentages: [],
+      magnitudes:  [],
+      casualties:  [],
+    },
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.structured_numbers.money.length, 1);
+  assert.equal(result.structured_numbers.counts.length, 1);
+});
+
+test("P3-3 dedup: works on `role` field as well as `label`", async () => {
+  // money entries use `role`, not `label`. A "wire transfer of 200 victims"
+  // role in money should still match a "200 victims" casualties entry.
+  const body = JSON.stringify({
+    structured_numbers: {
+      money:       [{ display: "200 victims compensated", value: 200, role: "victims compensated" }],
+      counts:      [],
+      percentages: [],
+      magnitudes:  [],
+      casualties:  [{ display: "200 victims", value: 200, label: "victims" }],
+    },
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.structured_numbers.money.length, 0,
+    "money entry collapses when its role overlaps casualty markers");
+  assert.equal(result.structured_numbers.casualties.length, 1);
+});
+
 // ── Factual conflicts validation (P1-10) ──────────────────────────────────────
 
 test("enrichment: factual conflicts — well-formed entry passes through", async () => {

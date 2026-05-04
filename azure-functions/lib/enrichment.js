@@ -304,7 +304,65 @@ function sanitiseStructuredNumbers(input) {
   result.percentages = arrayOf(input.percentages, (e) => sanitiseNumberEntry(e, ["display", "value"], { role: true }));
   result.magnitudes  = arrayOf(input.magnitudes,  (e) => sanitiseNumberEntry(e, ["display", "value"], { unit: true, label: true }));
   result.casualties  = arrayOf(input.casualties,  (e) => sanitiseNumberEntry(e, ["display", "value"], { label: true }));
-  return result;
+
+  return dedupStructuredNumbersAcrossBuckets(result);
+}
+
+// P3-2/P3-3 — when the same numeric `value` appears in multiple buckets and
+// the labels overlap on a casualty-flavoured token (dead, killed, casualties,
+// crew, victims, fatalities), collapse to one entry and prefer the
+// `casualties` bucket. Story 170 had `104` in both `counts` ("104 crew
+// members") and `casualties` ("104 dead") for the same warship-strike toll —
+// NumberCard would otherwise double-render.
+//
+// Conservative heuristic: only collapse when (a) value matches exactly and
+// (b) the labels share a casualty marker. A `25` in counts ("25 years") and
+// `25` in money ("25 million") for unrelated facts will NOT collapse —
+// different domains, different label vocab.
+const CASUALTY_LABEL_TOKENS = Object.freeze([
+  "dead", "deaths", "killed", "casualty", "casualties", "fatality", "fatalities",
+  "victim", "victims", "wounded", "injured", "missing",
+  // Story 170's specific case: "crew members" lands in counts paired with
+  // "104 dead" in casualties for the same ship-strike toll.
+  "crew",
+]);
+
+function labelTokens(entry) {
+  return [entry?.label, entry?.role]
+    .filter((s) => typeof s === "string")
+    .join(" ")
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+}
+
+function entryHasCasualtyMarker(entry) {
+  const tokens = labelTokens(entry);
+  return tokens.some((t) => CASUALTY_LABEL_TOKENS.includes(t));
+}
+
+function dedupStructuredNumbersAcrossBuckets(buckets) {
+  // Walk every non-casualties bucket; if an entry's value matches a
+  // casualties entry AND both carry a casualty-flavoured label token,
+  // drop the non-casualties duplicate. The casualties entry stays.
+  const casualties = buckets.casualties ?? [];
+  if (casualties.length === 0) return buckets;
+
+  const casualtyValues = new Set();
+  for (const c of casualties) {
+    if (entryHasCasualtyMarker(c)) casualtyValues.add(c.value);
+  }
+  if (casualtyValues.size === 0) return buckets;
+
+  for (const bucketName of ["money", "counts", "percentages", "magnitudes"]) {
+    const bucket = buckets[bucketName];
+    if (!Array.isArray(bucket) || bucket.length === 0) continue;
+    buckets[bucketName] = bucket.filter((entry) => {
+      if (!casualtyValues.has(entry.value)) return true;
+      return !entryHasCasualtyMarker(entry);
+    });
+  }
+  return buckets;
 }
 
 function sanitiseNumberEntry(entry, required, optional) {

@@ -15,7 +15,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
-import { AUDIENCES, computeAudienceProjection } from "../lib/geo.js";
+import { AUDIENCES, computeAudienceProjection, countryCodeForPlaceName } from "../lib/geo.js";
 import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
 import { enrichNarrative, emptyEnrichment, enrichmentSucceeded } from "../lib/enrichment.js";
@@ -149,6 +149,57 @@ const QUOTE_MAX_PER_STORY = 3;
 const QUOTE_MIN_WORDS     = 4;
 const QUOTE_MAX_CHARS     = 280;
 
+// P3-2 — tail-pattern guard for verbatim quotes. The verbatim check (P0-2)
+// only ensures the candidate appears word-for-word in the article body; it
+// does nothing about *where* in the body. The synthesizer truncates each
+// article to CONTENT_TRUNCATE chars before showing the LLM, which can split
+// mid-sentence — and the LLM happily emits the leading fragment as a
+// "quote". Story 170's Ghalibaf line is the canonical case:
+//   "A full ceasefire only makes sense if it is not violated by the naval blockade and"
+// Verbatim, but obviously incomplete. Reject any quote that ends in a word
+// signalling more sentence to come, or in a non-terminal character.
+const QUOTE_TAIL_BLOCKLIST = new Set([
+  // Coordinating conjunctions
+  "and", "but", "or", "nor", "yet", "so",
+  // Articles
+  "the", "a", "an",
+  // Common prepositions that strongly imply "more clause to come"
+  "of", "to", "for", "in", "on", "at", "with", "by", "as", "from", "into", "onto",
+  "about", "against", "among", "around", "before", "between", "during",
+  "through", "toward", "towards", "under", "until", "upon", "within", "without",
+  // Subordinators
+  "that", "which", "who", "whom", "whose", "because", "since", "while", "when", "where",
+  // Auxiliaries that need a complement
+  "is", "are", "was", "were", "be", "been", "being",
+  "has", "have", "had",
+  "will", "would", "shall", "should", "may", "might", "must", "can", "could",
+]);
+
+const QUOTE_TERMINAL_CHARS = new Set(['.', '!', '?', '"', "'", '”', '’', '…']);
+
+// Returns true when the candidate text ends in a way that signals a complete
+// utterance: terminal punctuation, OR a word that doesn't appear in the
+// blocklist of "more sentence to come" markers. False = reject.
+export function quoteHasCompleteTail(text) {
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  // Terminal punctuation is the strongest signal — accept regardless of last word.
+  const lastChar = trimmed[trimmed.length - 1];
+  if (QUOTE_TERMINAL_CHARS.has(lastChar)) return true;
+
+  // No terminal punctuation → check the final word. Strip trailing punctuation
+  // (commas, semicolons, parens) so "blockade," still resolves to "blockade".
+  const lastWord = trimmed
+    .split(/\s+/)
+    .pop()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}'-]+$/u, "");
+  if (!lastWord) return false;
+  return !QUOTE_TAIL_BLOCKLIST.has(lastWord);
+}
+
 // Normalise curly/straight quote drift and whitespace so the verbatim check
 // tolerates the article's typesetting but still catches paraphrase. Keeps
 // inner punctuation, casing, and word order — those are the real signals.
@@ -200,6 +251,11 @@ quotable statements exist:
 
 Rules:
 - text: the quoted statement only. Do not include surrounding narrative.
+- text MUST be a complete utterance — end in terminal punctuation (. ! ? " ') or
+  at least at a word that doesn't leave the sentence dangling. Do not emit a
+  fragment that ends in "and", "but", "the", "of", "to", "is", "was", etc.
+  If the article was truncated mid-sentence, skip that quote rather than
+  emitting the leading fragment.
 - text length: between ${QUOTE_MIN_WORDS} words and ${QUOTE_MAX_CHARS} characters.
 - speaker: required. If the article does not name a speaker, omit that quote.
 - role: optional; null if not stated in the article.`;
@@ -227,6 +283,8 @@ Rules:
     if (!Number.isInteger(c.source_index) || c.source_index < 1 || c.source_index > articles.length) continue;
     if (c.text.length > QUOTE_MAX_CHARS) continue;
     if (c.text.trim().split(/\s+/).length < QUOTE_MIN_WORDS) continue;
+    // P3-2: reject mid-clause / truncated tails.
+    if (!quoteHasCompleteTail(c.text)) continue;
 
     const article = articles[c.source_index - 1];
     const haystack = normaliseQuoteForCheck(articleBodyText(article));
@@ -310,6 +368,34 @@ function countNumbers(structured) {
   if (!structured || typeof structured !== "object") return 0;
   return ["money", "counts", "percentages", "magnitudes", "casualties"]
     .reduce((acc, key) => acc + (Array.isArray(structured[key]) ? structured[key].length : 0), 0);
+}
+
+// P3-1 — augment cluster-aggregated primary_geos with country codes derived
+// from synthesizer-tagged places. The synthesis LLM has already identified
+// each `primary_entities_enriched[*]` of type "place" as central to the
+// story — that's editorial-strength signal that the cluster-level mention
+// rollup may have missed (e.g. when an article uses a city name not yet
+// in the gazetteer). Entity-derived codes are PREPENDED so the strongest
+// editorial signal lands at index 0 (drives MapCallout); cluster codes
+// follow in their existing rank order. Output is deduped and capped.
+const STORY_PRIMARY_GEO_CAP = 5;
+
+export function mergeEntityAndClusterGeos(clusterPrimaryGeos, enrichedEntities) {
+  const out = [];
+  const seen = new Set();
+  for (const e of Array.isArray(enrichedEntities) ? enrichedEntities : []) {
+    if (e?.type !== "place") continue;
+    const code = countryCodeForPlaceName(e.name);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
+  }
+  for (const code of Array.isArray(clusterPrimaryGeos) ? clusterPrimaryGeos : []) {
+    if (typeof code !== "string" || seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
+  }
+  return out.slice(0, STORY_PRIMARY_GEO_CAP);
 }
 
 // Build the enrichment-column subset of an UPDATE/INSERT payload.
@@ -631,9 +717,22 @@ export default async function storySynthesizer(context, message) {
 
   // Geo metadata for story
   const globalSignificanceScore = computeGlobalSignificance(cluster, narrative, articles);
-  const storyPrimaryGeos = cluster.primary_geos ?? [];
+  // P3-1: merge entity-tagged places (LLM-identified, editorial-strength)
+  // with cluster-aggregated primary_geos. Entity-derived codes lead the
+  // list so MapCallout / `primary_geos[0]` resolves to the strongest
+  // editorial signal — fixes the story 170 case where Indian-outlet
+  // aggregation otherwise dominated a Persian Gulf story.
+  const storyPrimaryGeos = mergeEntityAndClusterGeos(cluster.primary_geos, enrichedEntities);
   const storyGeoScores   = cluster.geo_scores   ?? {};
   const storyPrimaryPlaces = resolvePrimaryPlaces(storyPrimaryGeos);
+
+  context.log(JSON.stringify({
+    event:               "primary_geos_merged",
+    cluster_id,
+    cluster_geos:        cluster.primary_geos ?? [],
+    entity_place_count:  Array.isArray(enrichedEntities) ? enrichedEntities.filter((e) => e?.type === "place").length : 0,
+    merged:              storyPrimaryGeos,
+  }));
 
   // Extras for computeAudienceProjection (india_article_fraction requires article-level data)
   const indianArticleCount    = articles.filter(a => a.source_country === "in").length;

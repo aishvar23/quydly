@@ -15,6 +15,8 @@ import {
   mergeSourceDocuments,
   extractQuotes,
   attachWikipediaToEntities,
+  quoteHasCompleteTail,
+  mergeEntityAndClusterGeos,
 } from "../story-synthesizer/index.js";
 import { resolvePrimaryPlaces, countryCodeToName } from "../lib/places.js";
 import { _resetCache as resetWikipediaCache } from "../lib/wikipedia.js";
@@ -428,4 +430,175 @@ test("P0-4 attachWikipediaToEntities returns [] for empty / non-array input", as
   assert.deepEqual(await attachWikipediaToEntities([]), []);
   assert.deepEqual(await attachWikipediaToEntities(null), []);
   assert.deepEqual(await attachWikipediaToEntities(undefined), []);
+});
+
+// ── P3-2: quote tail validator (story 170 audit) ─────────────────────────────
+
+test("P3-2 quoteHasCompleteTail accepts quotes ending in terminal punctuation", () => {
+  assert.equal(quoteHasCompleteTail("This is a complete sentence."), true);
+  assert.equal(quoteHasCompleteTail("Is it really?"), true);
+  assert.equal(quoteHasCompleteTail("Stop right now!"), true);
+  assert.equal(quoteHasCompleteTail("She said 'hello'"), true);
+  assert.equal(quoteHasCompleteTail('"Quoted within a quote"'), true);
+  assert.equal(quoteHasCompleteTail("Finished mid-thought…"), true, "ellipsis is terminal");
+});
+
+test("P3-2 quoteHasCompleteTail rejects quotes ending in coordinating conjunctions", () => {
+  // The story 170 case verbatim — Ghalibaf quote truncated at CONTENT_TRUNCATE.
+  assert.equal(
+    quoteHasCompleteTail("A full ceasefire only makes sense if it is not violated by the naval blockade and"),
+    false,
+    "story 170: trailing 'and' must reject",
+  );
+  assert.equal(quoteHasCompleteTail("We tried but"), false);
+  assert.equal(quoteHasCompleteTail("Fight or"), false);
+});
+
+test("P3-2 quoteHasCompleteTail rejects quotes ending in articles or prepositions", () => {
+  assert.equal(quoteHasCompleteTail("They walked into the"), false);
+  assert.equal(quoteHasCompleteTail("Looking for a"), false);
+  assert.equal(quoteHasCompleteTail("Heading to"), false);
+  assert.equal(quoteHasCompleteTail("Concerned about"), false);
+  assert.equal(quoteHasCompleteTail("Brought together with"), false);
+});
+
+test("P3-2 quoteHasCompleteTail rejects quotes ending in dangling auxiliaries", () => {
+  assert.equal(quoteHasCompleteTail("The verdict is"), false);
+  assert.equal(quoteHasCompleteTail("She has"), false);
+  assert.equal(quoteHasCompleteTail("They will"), false);
+  assert.equal(quoteHasCompleteTail("It must"), false);
+});
+
+test("P3-2 quoteHasCompleteTail accepts quotes ending in non-blocklisted words", () => {
+  assert.equal(quoteHasCompleteTail("This signals real progress"), true);
+  assert.equal(quoteHasCompleteTail("The verdict came down today"), true);
+});
+
+test("P3-2 quoteHasCompleteTail tolerates trailing punctuation on the last word", () => {
+  // Comma / semicolon after a content word should still be acceptable —
+  // the word itself isn't a "more sentence to come" marker.
+  assert.equal(quoteHasCompleteTail("we accept the verdict,"), true);
+  assert.equal(quoteHasCompleteTail("tense moment;"), true);
+  // But comma after a blocklisted word still rejects.
+  assert.equal(quoteHasCompleteTail("we walked to the,"), false);
+});
+
+test("P3-2 quoteHasCompleteTail rejects empty / non-string / whitespace-only", () => {
+  assert.equal(quoteHasCompleteTail(""), false);
+  assert.equal(quoteHasCompleteTail("   "), false);
+  assert.equal(quoteHasCompleteTail(null), false);
+  assert.equal(quoteHasCompleteTail(undefined), false);
+  assert.equal(quoteHasCompleteTail(42), false);
+});
+
+test("P3-2 quoteHasCompleteTail is case-insensitive on the last word", () => {
+  assert.equal(quoteHasCompleteTail("we walked into THE"), false);
+  assert.equal(quoteHasCompleteTail("The Verdict Is"), false);
+});
+
+test("P3-2 extractQuotes integrates the tail validator — rejects trailing 'and'", async () => {
+  // Reuses makeArticles() / makeStubAi from earlier in this file.
+  const articles = makeArticles();
+  // Build an article whose body ends mid-sentence on 'and' — mirrors what
+  // CONTENT_TRUNCATE does on a real article. The LLM faithfully extracts
+  // the leading verbatim fragment.
+  articles.push({
+    id: 12,
+    title: "Ghalibaf statement",
+    description: null,
+    content: "Iran's parliament speaker Mohammad Bagher Ghalibaf declared today: A full ceasefire only makes sense if it is not violated by the naval blockade and",
+    domain: "irna.ir",
+  });
+  const llmResponse = JSON.stringify([
+    {
+      source_index: 3,
+      text: "A full ceasefire only makes sense if it is not violated by the naval blockade and",
+      speaker: "Mohammad Bagher Ghalibaf",
+      role: "Iran's parliament speaker",
+    },
+  ]);
+  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  assert.equal(verified.length, 0,
+    "P3-2 must reject the truncated quote even though it's verbatim");
+});
+
+test("P3-2 extractQuotes still accepts complete quotes after the new gate", async () => {
+  const articles = makeArticles();
+  const llmResponse = JSON.stringify([
+    {
+      source_index: 1,
+      text: "The defendant orchestrated one of the largest financial frauds in American history.",
+      speaker: "Lewis Kaplan",
+      role: "judge",
+    },
+  ]);
+  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  assert.equal(verified.length, 1, "complete-tail quote must still pass");
+});
+
+// ── P3-1: entity-derived geos prepend cluster geos at synthesis time ────────
+
+test("P3-1 mergeEntityAndClusterGeos: entity-tagged places lead, cluster geos follow", () => {
+  // Story 170 shape: cluster aggregation produced ["in"] (publisher heavy).
+  // Synthesis LLM tagged Iran, Strait of Hormuz, India as places. Entity
+  // signal prepends, cluster signal follows, dedupe applied.
+  const merged = mergeEntityAndClusterGeos(
+    ["in"],
+    [
+      { name: "Donald Trump", type: "person" },
+      { name: "Iran", type: "place" },
+      { name: "Strait of Hormuz", type: "place" },
+      { name: "India", type: "place" },
+    ],
+  );
+  assert.equal(merged[0], "ir", "Iran (entity) must lead — drives MapCallout");
+  assert.ok(merged.includes("in"), "India still present (entity tag + cluster signal both)");
+});
+
+test("P3-1 mergeEntityAndClusterGeos: dedupe — entity overrides cluster position but only appears once", () => {
+  const merged = mergeEntityAndClusterGeos(
+    ["us", "in"],
+    [{ name: "Iran", type: "place" }, { name: "United States", type: "place" }],
+  );
+  // Entities lead: ir, us. Cluster geos that aren't already there append: in.
+  assert.deepEqual(merged, ["ir", "us", "in"]);
+});
+
+test("P3-1 mergeEntityAndClusterGeos: ignores non-place entity types", () => {
+  const merged = mergeEntityAndClusterGeos(
+    ["in"],
+    [
+      { name: "Iran", type: "org" },        // misclassified as org, not place
+      { name: "Donald Trump", type: "person" },
+    ],
+  );
+  // Iran is not a place type → ignored. Cluster's "in" still appears.
+  assert.deepEqual(merged, ["in"]);
+});
+
+test("P3-1 mergeEntityAndClusterGeos: ignores place names not in the gazetteer", () => {
+  const merged = mergeEntityAndClusterGeos(
+    ["us"],
+    [
+      { name: "Some Obscure Hamlet", type: "place" },
+      { name: "Mumbai", type: "place" },
+    ],
+  );
+  // Mumbai resolves via India aliases; obscure name doesn't.
+  assert.deepEqual(merged.sort(), ["in", "us"].sort());
+  assert.equal(merged[0], "in", "entity-tagged Mumbai prepends ahead of cluster's us");
+});
+
+test("P3-1 mergeEntityAndClusterGeos: empty / null inputs are safe", () => {
+  assert.deepEqual(mergeEntityAndClusterGeos(null, null), []);
+  assert.deepEqual(mergeEntityAndClusterGeos([], []), []);
+  assert.deepEqual(mergeEntityAndClusterGeos(["in"], null), ["in"]);
+  assert.deepEqual(mergeEntityAndClusterGeos(null, [{ name: "Iran", type: "place" }]), ["ir"]);
+});
+
+test("P3-1 mergeEntityAndClusterGeos: caps at 5", () => {
+  const entities = ["Iran", "United States", "China", "Russia", "Israel", "Japan"]
+    .map((name) => ({ name, type: "place" }));
+  const merged = mergeEntityAndClusterGeos(["in", "pk"], entities);
+  assert.ok(merged.length <= 5);
 });
