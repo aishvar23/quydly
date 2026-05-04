@@ -20,6 +20,7 @@ import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
 import { enrichNarrative, emptyEnrichment, enrichmentSucceeded } from "../lib/enrichment.js";
 import { probeEntities } from "../lib/wikipedia.js";
+import { computeSourceDiversity } from "../lib/sourceDiversity.js";
 
 const MODEL             = "claude-sonnet-4-20250514";
 const MAX_RETRIES       = 2;
@@ -332,6 +333,10 @@ function buildEnrichmentColumns(enrichment, enrichedEntities) {
     structured_numbers:        enrichment.structured_numbers,
     timeline_events:           enrichment.timeline_events,
     primary_entities_enriched: enrichedEntities,
+    // P1-10: factual_conflicts is part of the same enrichment pass, so it
+    // shares the gate. A failed enrichment leaves any previously-persisted
+    // conflicts on the row intact (River-merge correctness).
+    factual_conflicts:         enrichment.factual_conflicts,
   };
 }
 
@@ -639,6 +644,22 @@ export default async function storySynthesizer(context, message) {
     quote_count:     verbatimQuotes.length,
   }));
 
+  // P1-8: source diversity score. Computed from the same article set the
+  // source_documents snapshot uses — so the score is consistent with what
+  // the renderer will see in EvidenceShelf. Pure function, no I/O. Always
+  // recompute on River merge: a story that gained an independent source
+  // since the prior synthesis should reflect the higher diversity.
+  const diversity = computeSourceDiversity(articles);
+  context.log(JSON.stringify({
+    event:                  "source_diversity_computed",
+    cluster_id,
+    score:                  diversity.score,
+    label:                  diversity.label,
+    domain_count:           diversity.domain_count,
+    wire_count:             diversity.wire_count,
+    non_wire_count:         diversity.non_wire_count,
+  }));
+
   // River model: find or create story — Step 2 of processing contract
   const riverCutoff   = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
   const existingStory = await findExistingStory(supabase, cluster, riverCutoff);
@@ -666,6 +687,13 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          mergedSourceDocs,
+        // P1-8: recompute on every River-merge — the article set just grew.
+        source_diversity_score:    diversity.score,
+        source_diversity_label:    diversity.label,
+        // P1-9: verification_status is intentionally NOT updated here.
+        // Editor decisions (verified/published/corrected/retracted) are
+        // sticky across re-syntheses; overwriting them with 'draft' would
+        // silently revert editorial review.
         // P0-5 / P1 enrichment fields. Spread is empty (no columns touched)
         // when the enrichment pass fell back to defaults — see
         // buildEnrichmentColumns. Successful runs overwrite; failed runs
@@ -698,6 +726,14 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          incomingSourceDocs,
+        // P1-8: source diversity for the inserting article set.
+        source_diversity_score:    diversity.score,
+        source_diversity_label:    diversity.label,
+        // P1-9: every synthesizer-emitted row enters as 'draft'. Editor
+        // promotes to 'verified' / 'published' downstream. Migration
+        // back-filled existing is_verified=true rows to 'verified', so
+        // both pre- and post-migration rows carry honest lifecycle state.
+        verification_status:       "draft",
         // P0-5 / P1 enrichment fields. On a failed enrichment pass, the
         // spread is empty and Supabase falls back to the migration's column
         // defaults: NULL for the four text columns, `{}` / `[]` for jsonb.

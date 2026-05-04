@@ -122,7 +122,13 @@ async function fetchStories({
       'id, cluster_id, category_id, primary_entities, primary_geos, primary_places, ' +
       'headline, summary, key_points, confidence_score, coherence_score, ' +
       'support_score, story_score, source_count, is_verified, published_at, ' +
-      'source_documents',
+      'source_documents, ' +
+      // P1-8 / P1-9 / P1-10 — surface the data-quality columns the renderer
+      // can use to honestly attribute, gate, and adjudicate. NULL on rows
+      // synthesised before the migration; storyRowToFixture handles that.
+      'source_diversity_score, source_diversity_label, ' +
+      'verification_status, verification_notes, corrections, ' +
+      'factual_conflicts',
     )
     .eq('is_verified', isVerified)
     .gte('story_score', scoreFloor)
@@ -284,6 +290,26 @@ function storyRowToFixture(row, sourceDocs) {
     primary_geos: readableGeos(row),
     published_at: row.published_at || new Date().toISOString(),
     source_documents: resolvedSourceDocs,
+    // P1-8: weighted source-diversity score plus its 'single|narrow|diverse'
+    // bucketing, so EvidenceShelf can pick honest attribution copy
+    // ("Sourced from 3 independent outlets" vs "Single-source coverage").
+    // Null on pre-migration rows — modules must fall back gracefully.
+    source_diversity_score: typeof row.source_diversity_score === 'number'
+      ? row.source_diversity_score
+      : null,
+    source_diversity_label: row.source_diversity_label ?? null,
+    // P1-9: verification lifecycle. Pre-migration rows carry no field;
+    // the migration backfills 'verified' for is_verified=true and 'draft'
+    // otherwise, so a non-null value here is always interpretable.
+    // Renderer policy ("don't render below verified") layers on top.
+    verification_status: row.verification_status ?? null,
+    verification_notes: row.verification_notes ?? null,
+    corrections: Array.isArray(row.corrections) ? row.corrections : [],
+    // P1-10: per-story factual conflicts. Empty array on rows with no
+    // detected divergence — distinct from pre-migration null. Modules can
+    // render "DOJ says $8B; NYT says $10B" or hide the figure until
+    // editor reconciles.
+    factual_conflicts: Array.isArray(row.factual_conflicts) ? row.factual_conflicts : [],
   };
 }
 

@@ -256,6 +256,70 @@ test("enrichment: emptyEnrichment exposes all expected keys for downstream write
   assert.deepEqual(e.structured_numbers.money, []);
   assert.deepEqual(e.timeline_events, []);
   assert.deepEqual(e.primary_entities_enriched, []);
+  assert.deepEqual(e.factual_conflicts, []);
+});
+
+// ── Factual conflicts validation (P1-10) ──────────────────────────────────────
+
+test("enrichment: factual conflicts — well-formed entry passes through", async () => {
+  const body = JSON.stringify({
+    factual_conflicts: [
+      { claim: "fraud amount", values: ["$8B (DOJ)", "$10B (NYT)"], preferred: "$8B (DOJ)" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.factual_conflicts.length, 1);
+  assert.equal(result.factual_conflicts[0].claim, "fraud amount");
+  assert.deepEqual(result.factual_conflicts[0].values, ["$8B (DOJ)", "$10B (NYT)"]);
+  assert.equal(result.factual_conflicts[0].preferred, "$8B (DOJ)");
+});
+
+test("enrichment: factual conflicts — single value drops the entry (no real disagreement)", async () => {
+  const body = JSON.stringify({
+    factual_conflicts: [
+      { claim: "fraud amount", values: ["$8B"], preferred: "$8B" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.factual_conflicts.length, 0,
+    "fewer than 2 distinct values must drop — no real conflict");
+});
+
+test("enrichment: factual conflicts — preferred not in values is dropped from entry", async () => {
+  const body = JSON.stringify({
+    factual_conflicts: [
+      { claim: "casualty count", values: ["14 dead (Reuters)", "17 dead (BNPB)"], preferred: "20 dead (BBC)" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  // Entry survives (≥ 2 values) but preferred is dropped — synthesised pick
+  // shouldn't reach the renderer as if the editor had made it.
+  assert.equal(result.factual_conflicts.length, 1);
+  assert.equal(result.factual_conflicts[0].preferred, undefined);
+  assert.deepEqual(result.factual_conflicts[0].values, ["14 dead (Reuters)", "17 dead (BNPB)"]);
+});
+
+test("enrichment: factual conflicts — duplicate values collapse, dropping the entry if < 2 remain", async () => {
+  const body = JSON.stringify({
+    factual_conflicts: [
+      { claim: "vote share", values: ["54.3%", "54.3%"], preferred: "54.3%" },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.factual_conflicts.length, 0,
+    "identical values are not a conflict");
+});
+
+test("enrichment: factual conflicts — caps at 4 entries", async () => {
+  const body = JSON.stringify({
+    factual_conflicts: Array.from({ length: 8 }, (_, i) => ({
+      claim:     `claim ${i}`,
+      values:    [`a${i}`, `b${i}`],
+      preferred: `a${i}`,
+    })),
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticles(), makeNarrative());
+  assert.equal(result.factual_conflicts.length, 4);
 });
 
 // ── Codex P1 fix: enrichmentSucceeded marker ─────────────────────────────────

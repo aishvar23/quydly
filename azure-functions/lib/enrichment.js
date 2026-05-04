@@ -10,6 +10,7 @@
 //   P1-5  timeline_events (date / label / source_id)
 //   P1-6  per-entity context bio (Wikipedia summary stitches in here)
 //   P1-7  why_it_matters
+//   P1-10 factual_conflicts (numeric / factual divergence between sources)
 //
 // Design choices:
 //   - One Claude pass, structured JSON. The synthesizer narrative pass already
@@ -92,6 +93,7 @@ export function emptyEnrichment() {
     },
     timeline_events:           [],
     primary_entities_enriched: [],
+    factual_conflicts:         [],
   };
 }
 
@@ -202,6 +204,11 @@ Respond ONLY with a single JSON object — no markdown fences, no preamble. Use 
   ],
   "primary_entities_enriched": [
     { "name": "Display Name", "type": "person|place|org", "role": "their role in this story (≤ 6 words)", "context": "One-sentence bio or context (≤ 30 words). Optional — null if unknown." }
+  ],
+  "factual_conflicts": [
+    { "claim": "what the conflicting sources disagree about (≤ 8 words)",
+      "values": ["value as reported by source A (issuer)", "value as reported by source B (issuer)"],
+      "preferred": "the value you would lead with, must match one of \`values\` verbatim" }
   ]
 }
 
@@ -216,6 +223,10 @@ Rules:
   - Skip undated context. ≤ 5 events.
 - primary_entities_enriched: ≤ 6 entries. Display names should be the canonical proper-cased form. Drop generic terms like "the company" or "the agency".
   - Use the topic-entity hints as candidates only — refine names, drop noise, add anyone material the hints missed.
+- factual_conflicts: report ONLY when two or more sources above give materially different values for the same claim (e.g. casualty count, dollar amount, vote share). Do not invent disagreement.
+  - "values" entries should each name the issuer in parentheses so an editor can adjudicate. ≤ 4 entries.
+  - "preferred" must match one of the entries in \`values\` exactly. Prefer official / primary sources over wire / aggregator sources.
+  - Empty array if all sources agree or only one source covers the claim.
 - Every field is required. If you have nothing for a field, emit the empty default (\`null\`, \`[]\`, or \`{...empty arrays...}\`).`;
 
   const msg = await ai.messages.create({
@@ -244,6 +255,7 @@ function validateEnrichment(input, articles) {
   out.structured_numbers = sanitiseStructuredNumbers(input.structured_numbers);
   out.timeline_events    = sanitiseTimelineEvents(input.timeline_events, articles);
   out.primary_entities_enriched = sanitiseEntities(input.primary_entities_enriched);
+  out.factual_conflicts  = sanitiseFactualConflicts(input.factual_conflicts);
 
   return out;
 }
@@ -321,6 +333,43 @@ function sanitiseEntities(input) {
     if (typeof e.context === "string" && e.context.trim()) out.context = e.context.trim().slice(0, 280);
     return out;
   }, 8);
+}
+
+// P1-10 — factual conflicts. The LLM is prompted to report only when
+// sources materially disagree; we drop anything that doesn't pass the
+// shape check (must have ≥ 2 distinct values, and `preferred` must match
+// one of them verbatim) so half-formed entries can't reach the renderer
+// and look like editor-adjudicated divergence.
+function sanitiseFactualConflicts(input) {
+  return arrayOf(input, (c) => {
+    if (!c || typeof c !== "object") return null;
+    if (typeof c.claim !== "string" || !c.claim.trim()) return null;
+    if (!Array.isArray(c.values)) return null;
+
+    const cleanValues = [];
+    for (const v of c.values) {
+      if (typeof v !== "string") continue;
+      const trimmed = v.trim();
+      if (!trimmed) continue;
+      if (cleanValues.length >= 4) break;
+      // Reject duplicate phrasings — "no conflict here" masquerading as one.
+      if (cleanValues.includes(trimmed)) continue;
+      cleanValues.push(trimmed.slice(0, 160));
+    }
+    if (cleanValues.length < 2) return null;
+
+    const out = { claim: c.claim.trim().slice(0, 120), values: cleanValues };
+
+    if (typeof c.preferred === "string" && c.preferred.trim()) {
+      const pref = c.preferred.trim().slice(0, 160);
+      // `preferred` must be one of the surviving values. If the LLM
+      // emitted something synthesised, drop the field rather than
+      // attaching a value the editor didn't actually pick.
+      if (cleanValues.includes(pref)) out.preferred = pref;
+    }
+
+    return out;
+  }, 4);
 }
 
 function arrayOf(input, mapper, max = 16) {
