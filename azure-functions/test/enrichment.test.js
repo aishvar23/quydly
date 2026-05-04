@@ -461,6 +461,117 @@ test("P3-3 dedup: works on `role` field as well as `label`", async () => {
   assert.equal(result.structured_numbers.casualties.length, 1);
 });
 
+// ── P3-4 timeline disposition (story 170 audit follow-up) ────────────────────
+
+function makeArticlesAcrossWeek() {
+  return [
+    { id: 100, title: "Day-1 headline",                domain: "a.com", authority_score: 0.9, published_at: "2026-04-18T10:00:00Z" },
+    { id: 101, title: "Day-2 escalation reported",     domain: "b.com", authority_score: 0.7, published_at: "2026-04-19T11:00:00Z" },
+    { id: 102, title: "Day-5 sailor interview",        domain: "c.com", authority_score: 0.6, published_at: "2026-04-22T12:00:00Z" },
+    { id: 103, title: "Day-7 diplomatic response",     domain: "d.com", authority_score: 0.6, published_at: "2026-04-25T14:00:00Z" },
+  ];
+}
+
+test("P3-4 disposition: multi-day LLM output passes through", async () => {
+  const body = JSON.stringify({
+    timeline_events: [
+      { date: "2026-04-18", label: "Strait closed",     source_id: 100 },
+      { date: "2026-04-25", label: "Diplomats respond", source_id: 103 },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticlesAcrossWeek(), makeNarrative());
+  assert.equal(result.timeline_disposition, "multi_day");
+  assert.equal(result.timeline_events.length, 2);
+});
+
+test("P3-4 disposition: single-day LLM falls back to article dates when corpus spans multiple days (story 170 case)", async () => {
+  // Story 170 reproduction: LLM extracted 2 events, both Apr 18.
+  // Article corpus actually spans Apr 18-25. Fallback should kick in.
+  const body = JSON.stringify({
+    timeline_events: [
+      { date: "2026-04-18", label: "India summons envoy",         source_id: 100 },
+      { date: "2026-04-18", label: "Two Indian ships attacked",   source_id: 100 },
+    ],
+  });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticlesAcrossWeek(), makeNarrative());
+  assert.equal(result.timeline_disposition, "fallback",
+    "single-day LLM with multi-day articles must trigger fallback");
+  // Fallback yields one event per distinct article date — 4 dates here.
+  const dates = new Set(result.timeline_events.map((e) => e.date));
+  assert.equal(dates.size, 4, "fallback should produce one event per distinct article date");
+  assert.ok(result.timeline_events.every((e) => typeof e.label === "string" && e.label.length > 0));
+});
+
+test("P3-4 disposition: single-day LLM AND single-day articles → single_day (no fallback help)", async () => {
+  const body = JSON.stringify({
+    timeline_events: [
+      { date: "2026-04-18", label: "One thing happened",  source_id: 100 },
+      { date: "2026-04-18", label: "Another same day",    source_id: 100 },
+    ],
+  });
+  // All articles published the same day.
+  const sameDayArticles = [
+    { id: 100, title: "x", domain: "a", authority_score: 0.5, published_at: "2026-04-18T10:00:00Z" },
+    { id: 101, title: "y", domain: "b", authority_score: 0.5, published_at: "2026-04-18T11:00:00Z" },
+  ];
+  const result = await enrichNarrative(makeStubAi(body), {}, sameDayArticles, makeNarrative());
+  assert.equal(result.timeline_disposition, "single_day");
+  // Original LLM events kept — fallback didn't help, no point swapping.
+  assert.equal(result.timeline_events.length, 2);
+});
+
+test("P3-4 disposition: empty LLM + multi-day articles → fallback", async () => {
+  const body = JSON.stringify({ timeline_events: [] });
+  const result = await enrichNarrative(makeStubAi(body), {}, makeArticlesAcrossWeek(), makeNarrative());
+  assert.equal(result.timeline_disposition, "fallback");
+  assert.ok(result.timeline_events.length >= 2);
+});
+
+test("P3-4 disposition: empty LLM + empty articles → absent", async () => {
+  const body = JSON.stringify({ timeline_events: [] });
+  // Articles with no published_at can't anchor a fallback.
+  const noDateArticles = [
+    { id: 100, title: "x", domain: "a", authority_score: 0.5 },
+  ];
+  const result = await enrichNarrative(makeStubAi(body), {}, noDateArticles, makeNarrative());
+  assert.equal(result.timeline_disposition, "absent");
+  assert.deepEqual(result.timeline_events, []);
+});
+
+test("P3-4 disposition: fallback prefers higher-authority article on a duplicate date", async () => {
+  // Two articles share a date; fallback should pick the higher-authority title.
+  const body = JSON.stringify({ timeline_events: [] });
+  const articles = [
+    { id: 200, title: "Wire pickup",  domain: "wire.com", authority_score: 0.4, published_at: "2026-04-18T10:00:00Z" },
+    { id: 201, title: "Primary report", domain: "primary.com", authority_score: 0.95, published_at: "2026-04-18T11:00:00Z" },
+    { id: 202, title: "Day-2 followup",  domain: "x.com",    authority_score: 0.8, published_at: "2026-04-19T11:00:00Z" },
+  ];
+  const result = await enrichNarrative(makeStubAi(body), {}, articles, makeNarrative());
+  assert.equal(result.timeline_disposition, "fallback");
+  // The Apr 18 event must use "Primary report" (higher authority) not "Wire pickup".
+  const apr18 = result.timeline_events.find((e) => e.date === "2026-04-18");
+  assert.ok(apr18);
+  assert.equal(apr18.label, "Primary report");
+});
+
+test("P3-4 disposition: fallback labels are clamped to a renderable length", async () => {
+  const body = JSON.stringify({ timeline_events: [] });
+  const longTitle = "x".repeat(200);
+  const articles = [
+    { id: 1, title: longTitle, domain: "a", authority_score: 0.5, published_at: "2026-04-18T10:00:00Z" },
+    { id: 2, title: "short",   domain: "b", authority_score: 0.5, published_at: "2026-04-19T10:00:00Z" },
+  ];
+  const result = await enrichNarrative(makeStubAi(body), {}, articles, makeNarrative());
+  assert.equal(result.timeline_disposition, "fallback");
+  const long = result.timeline_events.find((e) => e.label.startsWith("x"));
+  assert.ok(long.label.length <= 60, `label must clamp to ≤ 60 chars, got ${long.label.length}`);
+});
+
+test("P3-4 disposition: emptyEnrichment exposes timeline_disposition for downstream writers", () => {
+  const e = emptyEnrichment();
+  assert.equal(e.timeline_disposition, "absent");
+});
+
 // ── Factual conflicts validation (P1-10) ──────────────────────────────────────
 
 test("enrichment: factual conflicts — well-formed entry passes through", async () => {

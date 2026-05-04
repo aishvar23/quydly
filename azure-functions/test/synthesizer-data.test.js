@@ -17,6 +17,8 @@ import {
   attachWikipediaToEntities,
   quoteHasCompleteTail,
   mergeEntityAndClusterGeos,
+  cleanPrimaryEntities,
+  countEntityOverlap,
 } from "../story-synthesizer/index.js";
 import { resolvePrimaryPlaces, countryCodeToName } from "../lib/places.js";
 import { _resetCache as resetWikipediaCache } from "../lib/wikipedia.js";
@@ -601,4 +603,147 @@ test("P3-1 mergeEntityAndClusterGeos: caps at 5", () => {
     .map((name) => ({ name, type: "place" }));
   const merged = mergeEntityAndClusterGeos(["in", "pk"], entities);
   assert.ok(merged.length <= 5);
+});
+
+// ── P3-5: cleanPrimaryEntities (story 170 audit follow-up) ──────────────────
+
+test("P3-5 cleanPrimaryEntities: enriched names replace dirty cluster array", () => {
+  // Story 170 case verbatim — cluster.primary_entities is full of NLP
+  // garbage; primary_entities_enriched is clean.
+  const dirty = [
+    "pakistan field marshal asim",
+    "middle east news",
+    "two india",
+    "correspondent",
+    "washington",
+    "surviving",
+  ];
+  const enriched = [
+    { name: "Donald Trump",     type: "person" },
+    { name: "Asim Munir",       type: "person" },
+    { name: "Strait of Hormuz", type: "place"  },
+    { name: "Iran",             type: "place"  },
+  ];
+  const out = cleanPrimaryEntities(enriched, dirty);
+  assert.deepEqual(out, ["Donald Trump", "Asim Munir", "Strait of Hormuz", "Iran"]);
+  // No noise tokens survive.
+  for (const noise of dirty) assert.ok(!out.includes(noise), `noise ${noise} must be dropped`);
+});
+
+test("P3-5 cleanPrimaryEntities: falls back to cluster array when enrichment is empty", () => {
+  // Enrichment failed (or LLM returned nothing). We don't want to write []
+  // — that would erase entity-overlap signal for the next River-merge attempt.
+  // Fall back to the dirty cluster array as a least-bad option.
+  const dirty = ["asim munir", "donald trump"];
+  assert.deepEqual(cleanPrimaryEntities([], dirty), dirty);
+  assert.deepEqual(cleanPrimaryEntities(null, dirty), dirty);
+  assert.deepEqual(cleanPrimaryEntities(undefined, dirty), dirty);
+});
+
+test("P3-5 cleanPrimaryEntities: dedupes case-insensitively, preserves first proper-cased form", () => {
+  const enriched = [
+    { name: "Donald Trump", type: "person" },
+    { name: "donald trump", type: "person" },  // dup
+    { name: "Iran", type: "place" },
+  ];
+  assert.deepEqual(cleanPrimaryEntities(enriched, []), ["Donald Trump", "Iran"]);
+});
+
+test("P3-5 cleanPrimaryEntities: caps at 10 entities", () => {
+  const enriched = Array.from({ length: 15 }, (_, i) => ({ name: `Entity ${i}`, type: "person" }));
+  assert.equal(cleanPrimaryEntities(enriched, []).length, 10);
+});
+
+test("P3-5 cleanPrimaryEntities: drops empty / non-string names", () => {
+  const enriched = [
+    { name: "Iran", type: "place" },
+    { name: "",     type: "place" },
+    { name: null,   type: "place" },
+    { name: 42,     type: "place" },
+    { name: "  ",   type: "place" },
+    { name: "Real Name", type: "person" },
+  ];
+  assert.deepEqual(cleanPrimaryEntities(enriched, []), ["Iran", "Real Name"]);
+});
+
+// Codex P2 fix on PR #80 — when enrichment RAN successfully (input
+// non-empty) but every entry got filtered (e.g. all names blank),
+// cleanPrimaryEntities must NOT fall back to the dirty cluster array.
+// The validator's verdict ("nothing valid here") wins over noise.
+test("P3-5 cleanPrimaryEntities: enrichment ran but yielded nothing usable → empty (NO fallback to dirty cluster)", () => {
+  const enriched = [
+    { name: "" },
+    { name: null },
+    { name: "  " },
+  ];
+  const dirty = ["pakistan field marshal asim", "two india", "correspondent"];
+  assert.deepEqual(cleanPrimaryEntities(enriched, dirty), [],
+    "successful-but-empty enrichment must not resurrect the dirty cluster array");
+});
+
+// ── countEntityOverlap (Codex P2 fix on PR #80) ──────────────────────────────
+
+test("P3-5 countEntityOverlap: case-insensitive matches on both sides", () => {
+  // Cluster-side lowercased, story-side proper-cased — the post-P3-5
+  // transition state. Both should resolve to the same normalised token.
+  assert.equal(
+    countEntityOverlap(
+      ["asim munir", "donald trump", "iran"],
+      ["Asim Munir", "Donald Trump", "Iran"],
+    ),
+    3,
+  );
+});
+
+test("P3-5 countEntityOverlap: ≥ 2 shared with no false matches", () => {
+  assert.equal(
+    countEntityOverlap(
+      ["asim munir", "donald trump", "ftx"],
+      ["Asim Munir", "Donald Trump", "Sam Bankman-Fried"],
+    ),
+    2,
+  );
+});
+
+// Codex P2 regression test — case/whitespace variants of the SAME entity
+// must NOT inflate overlap past the threshold.
+test("P3-5 countEntityOverlap: duplicates on cluster side count as one (Codex P2 regression)", () => {
+  // Three case variants of "Asim Munir" plus one other; story has just
+  // "Asim Munir". Pre-fix: filter counted 3 hits → overlap = 3 → false
+  // ≥ 2 merge. Post-fix: dedupe → 1 unique shared → overlap = 1.
+  const overlap = countEntityOverlap(
+    ["Asim Munir", "asim munir", "ASIM MUNIR ", "Donald Trump"],
+    ["Asim Munir"],
+  );
+  assert.equal(overlap, 1, "case/whitespace variants must collapse to one shared entity");
+});
+
+test("P3-5 countEntityOverlap: duplicates on story side also collapse", () => {
+  const overlap = countEntityOverlap(
+    ["Asim Munir"],
+    ["Asim Munir", "asim munir", "ASIM MUNIR"],
+  );
+  assert.equal(overlap, 1);
+});
+
+test("P3-5 countEntityOverlap: empty / whitespace tokens drop, do not inflate", () => {
+  const overlap = countEntityOverlap(
+    ["Asim Munir", "", "  ", null, "Donald Trump"],
+    ["Asim Munir", "", "Donald Trump", "  "],
+  );
+  assert.equal(overlap, 2);
+});
+
+test("P3-5 countEntityOverlap: empty / null inputs are safe", () => {
+  assert.equal(countEntityOverlap([], []), 0);
+  assert.equal(countEntityOverlap(null, ["x"]), 0);
+  assert.equal(countEntityOverlap(["x"], null), 0);
+});
+
+test("P3-5 cleanPrimaryEntities: enriched-only mode ignores cluster fallback even when populated", () => {
+  // When enrichment succeeded, cluster fallback is not used at all —
+  // proves the synth-time clean replaces, not augments.
+  const dirty = ["completely irrelevant", "noise tokens"];
+  const enriched = [{ name: "Clean Name", type: "person" }];
+  assert.deepEqual(cleanPrimaryEntities(enriched, dirty), ["Clean Name"]);
 });

@@ -370,6 +370,45 @@ function countNumbers(structured) {
     .reduce((acc, key) => acc + (Array.isArray(structured[key]) ? structured[key].length : 0), 0);
 }
 
+// P3-5 — rewrite the legacy `primary_entities text[]` column from the
+// clean enriched names at synth time. The cluster-level array is dirty
+// in ~every story ("correspondent", "washington", "two india", "hormuz
+// the") because the clusterer's regex-based entity extraction can't tell
+// noise from signal. The enriched jsonb has been clean since P1-4 — but
+// any consumer still reading `primary_entities` (River-merge entity
+// overlap, the question generator) operates on the dirty array.
+//
+// Strategy: when enrichment succeeded, use enrichedEntities[*].name as
+// the source of truth. When enrichment failed (rare — LLM blip), fall
+// back to the dirty cluster array so we don't write an empty list and
+// regress entity-overlap matching for the next River-merge attempt.
+const PRIMARY_ENTITIES_CAP = 10;
+
+export function cleanPrimaryEntities(enrichedEntities, clusterEntities) {
+  // Codex P2 fix on PR #80: gate fallback on whether enrichment RAN
+  // (input non-empty), not on whether the cleaned output is non-empty.
+  // sanitiseEntities already drops invalid items; if enrichment ran
+  // successfully and somehow yielded no usable names, falling back to
+  // the dirty cluster array would resurrect noise the validator
+  // explicitly rejected. Empty-but-validated wins over dirty-but-full.
+  if (Array.isArray(enrichedEntities) && enrichedEntities.length > 0) {
+    const out = [];
+    const seen = new Set();
+    for (const e of enrichedEntities) {
+      if (typeof e?.name !== "string") continue;
+      const name = e.name.trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+      if (out.length >= PRIMARY_ENTITIES_CAP) break;
+    }
+    return out;
+  }
+  return Array.isArray(clusterEntities) ? clusterEntities : [];
+}
+
 // P3-1 — augment cluster-aggregated primary_geos with country codes derived
 // from synthesizer-tagged places. The synthesis LLM has already identified
 // each `primary_entities_enriched[*]` of type "place" as central to the
@@ -420,6 +459,11 @@ function buildEnrichmentColumns(enrichment, enrichedEntities) {
     why_it_matters:            enrichment.why_it_matters,
     structured_numbers:        enrichment.structured_numbers,
     timeline_events:           enrichment.timeline_events,
+    // P3-4: disposition reflects whether the LLM produced a healthy
+    // multi-day timeline, fell back to article-date derivation, or
+    // collapsed to one date. Stored as a column so the renderer can
+    // suppress TimelineCard on `single_day` / `absent` without re-deriving.
+    timeline_disposition:      enrichment.timeline_disposition,
     primary_entities_enriched: enrichedEntities,
     // P1-10: factual_conflicts is part of the same enrichment pass, so it
     // shares the gate. A failed enrichment leaves any previously-persisted
@@ -534,8 +578,7 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
 
   let best = null, bestOverlap = 0;
   for (const story of candidates) {
-    const storyEntities = Array.isArray(story.primary_entities) ? story.primary_entities : [];
-    const overlap = cluster.primary_entities.filter(e => storyEntities.includes(e)).length;
+    const overlap = countEntityOverlap(cluster.primary_entities, story.primary_entities);
     if (overlap >= 2 && overlap > bestOverlap) {
       best        = story;
       bestOverlap = overlap;
@@ -545,9 +588,49 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   return best;
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
+// P3-5 + Codex P2 fix on PR #80 — case-insensitive entity overlap with
+// dedup on both sides.
+//
+// Story-side primary_entities is proper-cased ("Asim Munir") after P3-5;
+// cluster-side is still lowercased from the clusterer's regex extraction
+// ("asim munir"). Without normalisation the overlap filter would silently
+// miss matches between post-P3-5 stories and pre-P3-5 clusters.
+//
+// Without dedup, case/whitespace variants ("Asim Munir", "asim munir",
+// "ASIM MUNIR ") collapse to the same normalised token and inflate
+// overlap past the ≥ 2 threshold with only one unique shared entity —
+// false River merges between stories that should remain separate.
+//
+// Returns the count of UNIQUE entities present in both lists.
+export function countEntityOverlap(clusterEntities, storyEntities) {
+  const norm = (e) => String(e ?? "").toLowerCase().trim();
+  const clusterSet = new Set(
+    (Array.isArray(clusterEntities) ? clusterEntities : [])
+      .map(norm)
+      .filter(Boolean),
+  );
+  const storySet = new Set(
+    (Array.isArray(storyEntities) ? storyEntities : [])
+      .map(norm)
+      .filter(Boolean),
+  );
+  let overlap = 0;
+  for (const e of clusterSet) {
+    if (storySet.has(e)) overlap++;
+  }
+  return overlap;
+}
 
-export default async function storySynthesizer(context, message) {
+// ── Main handler ──────────────────────────────────────────────────────────────
+//
+// Exported as `run` (the name function.json points to via entryPoint) AND
+// `storySynthesizer` (test imports use this name) AND default. Azure
+// Functions Node.js host can't auto-pick an entry point when a module has
+// multiple exports — without the explicit entryPoint it throws "Worker
+// was unable to load function story-synthesizer". Story 170 re-synth at
+// 21:23 dead-lettered after 3 attempts because of exactly this.
+
+export async function run(context, message) {
   const { cluster_id } = message;
 
   const supabase = getSupabase();
@@ -822,7 +905,10 @@ export default async function storySynthesizer(context, message) {
     const { error: updateErr } = await supabase
       .from("stories")
       .update({
-        primary_entities:          cluster.primary_entities,
+        // P3-5: clean entities from the enriched jsonb; falls back to
+        // cluster.primary_entities only when enrichment failed. Replaces
+        // the dirty cluster-NLP array on every successful re-synth.
+        primary_entities:          cleanPrimaryEntities(enrichedEntities, cluster.primary_entities),
         headline:                  narrative.headline,
         summary:                   narrative.summary,
         key_points:                mergedKeyPoints,
@@ -894,7 +980,9 @@ export default async function storySynthesizer(context, message) {
       .insert({
         cluster_id,
         category_id:               cluster.category_id,
-        primary_entities:          cluster.primary_entities,
+        // P3-5: clean entities from the enriched jsonb. See UPDATE branch
+        // above for the rationale.
+        primary_entities:          cleanPrimaryEntities(enrichedEntities, cluster.primary_entities),
         headline:                  narrative.headline,
         summary:                   narrative.summary,
         key_points:                narrative.key_points,
@@ -1022,3 +1110,9 @@ export default async function storySynthesizer(context, message) {
     .update({ status: "PROCESSED", updated_at: now })
     .eq("id", cluster_id);
 }
+
+// Back-compat aliases for test imports (synthesizer-data.test.js,
+// smoke-p1-final.js) that historically used `storySynthesizer` or the
+// default export. The Azure Functions host uses `run` per function.json.
+export { run as storySynthesizer };
+export default run;
