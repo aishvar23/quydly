@@ -671,6 +671,27 @@ export default async function storySynthesizer(context, message) {
     const mergedKeyPoints = [...new Set([...existingPoints, ...narrative.key_points])].slice(0, 10);
     const mergedSourceDocs = mergeSourceDocuments(existingStory.source_documents, incomingSourceDocs);
 
+    // P1-8 (Codex P1 fix on PR #72): recompute diversity from the merged
+    // source set — NOT from the current cluster's articles alone. The
+    // EvidenceShelf the renderer shows is built from mergedSourceDocs;
+    // storing diversity computed from a subset would mislabel an older
+    // multi-domain story as low-diversity the moment a single new wire
+    // pickup updates it. computeSourceDiversity reads `.domain`, source
+    // documents carry the same value under `.issuer`, hence the shape map.
+    const mergedDiversity = computeSourceDiversity(
+      mergedSourceDocs.map(d => ({ domain: d.issuer })),
+    );
+    context.log(JSON.stringify({
+      event:           "source_diversity_recomputed_on_merge",
+      cluster_id,
+      story_id:        existingStory.id,
+      pre_merge_score: diversity.score,
+      pre_merge_label: diversity.label,
+      merged_score:    mergedDiversity.score,
+      merged_label:    mergedDiversity.label,
+      merged_domains:  mergedDiversity.domain_count,
+    }));
+
     const { error: updateErr } = await supabase
       .from("stories")
       .update({
@@ -687,9 +708,10 @@ export default async function storySynthesizer(context, message) {
         geo_scores:                storyGeoScores,
         global_significance_score: globalSignificanceScore,
         source_documents:          mergedSourceDocs,
-        // P1-8: recompute on every River-merge — the article set just grew.
-        source_diversity_score:    diversity.score,
-        source_diversity_label:    diversity.label,
+        // P1-8: recompute on every River-merge from the merged evidence
+        // shelf, so the persisted score reflects what the renderer sees.
+        source_diversity_score:    mergedDiversity.score,
+        source_diversity_label:    mergedDiversity.label,
         // P1-9: verification_status is intentionally NOT updated here.
         // Editor decisions (verified/published/corrected/retracted) are
         // sticky across re-syntheses; overwriting them with 'draft' would

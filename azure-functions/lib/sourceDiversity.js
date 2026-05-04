@@ -46,11 +46,19 @@ const WIRE_DOMAINS = new Set([
 // parse country-code TLDs perfectly — just strips the leading subdomain
 // when it matches a known noise prefix. Domains that don't match pass
 // through unchanged.
+//
+// Per Codex P2 review on PR #72: a bare domain like "news.com" must NOT
+// collapse to "com" when its first label happens to match a noise prefix.
+// We only accept the strip when at least one dot remains afterwards
+// (i.e. there is still a registrable domain). Otherwise we fall back to
+// the original input — a legitimate bare domain stays as itself.
 function rootDomain(d) {
   if (!d || typeof d !== "string") return null;
   const lower = d.trim().toLowerCase();
   if (!lower) return null;
-  return lower.replace(/^(?:www|edition|amp|m|mobile|i|news|in|us|uk|ca|au)\./, "");
+  const stripped = lower.replace(/^(?:www|edition|amp|m|mobile|i|news|in|us|uk|ca|au)\./, "");
+  if (!stripped.includes(".")) return lower;
+  return stripped;
 }
 
 function isWire(d) {

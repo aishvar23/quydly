@@ -33,6 +33,26 @@ test("rootDomain: leaves unknown subdomains intact", () => {
   assert.equal(rootDomain("blogs.economist.com"), "blogs.economist.com");
 });
 
+// Codex P2 review on PR #72: the strip must NOT collapse a bare domain
+// like "news.com" into "com". We accept the strip only when at least one
+// dot remains afterwards. The bare-domain case is regression-tested here
+// for every prefix in the strip whitelist.
+test("rootDomain: bare domains whose first label matches a noise prefix are preserved", () => {
+  assert.equal(rootDomain("news.com"),    "news.com",
+    "first-label-only matches must NOT strip — prevents collapsing into TLD");
+  assert.equal(rootDomain("amp.com"),     "amp.com");
+  assert.equal(rootDomain("mobile.com"),  "mobile.com");
+  assert.equal(rootDomain("uk.co.uk"),    "co.uk",     // multi-label survives
+    "deeper bare-shape input still strips when a registrable domain remains");
+});
+
+test("rootDomain: noise-prefixed multi-label bare domains still strip cleanly", () => {
+  // Confirm the legitimate strip path didn't regress on the P2 fix.
+  assert.equal(rootDomain("news.bbc.co.uk"), "bbc.co.uk");
+  assert.equal(rootDomain("in.reuters.com"), "reuters.com");
+  assert.equal(rootDomain("amp.theguardian.com"), "theguardian.com");
+});
+
 test("rootDomain: returns null for empty / non-string input", () => {
   assert.equal(rootDomain(null),       null);
   assert.equal(rootDomain(undefined),  null);
