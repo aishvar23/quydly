@@ -22,6 +22,7 @@ const MIN_DOMAIN_COUNT     = 2;
 const MAX_CLUSTER_ENTITIES = 10;
 const SYNTHESIS_COOLDOWN_H = 4;       // re-enqueue only if synthesis_queued_at > 4h ago
 const ELIGIBLE_SCORE       = FLAGS.scoring.cluster.eligible;
+const BATCH_SIZE           = 2000;    // Consumption plan: 10-min max timeout
 
 // ── Entity helpers (identical to backend/engine/clusterer.js) ─────────────────
 
@@ -71,7 +72,8 @@ export default async function articleClusterer(context, timer) {
     .eq("status", "DONE")
     .is("clustered_at", null)
     .order("authority_score", { ascending: false })
-    .order("published_at",    { ascending: false });
+    .order("published_at",    { ascending: false })
+    .limit(BATCH_SIZE);
 
   if (artError) throw new Error(`[article-clusterer] fetch articles: ${artError.message}`);
 
