@@ -19,6 +19,8 @@ import {
   mergeEntityAndClusterGeos,
   cleanPrimaryEntities,
   countEntityOverlap,
+  pickRelatedStories,
+  relatedStoryCutoff,
 } from "../story-synthesizer/index.js";
 import { resolvePrimaryPlaces, countryCodeToName } from "../lib/places.js";
 import { _resetCache as resetWikipediaCache } from "../lib/wikipedia.js";
@@ -61,6 +63,10 @@ function makeArticles() {
 test("P0-1 buildSourceDocuments projects core fields onto each article", () => {
   const docs = buildSourceDocuments(makeArticles());
   assert.equal(docs.length, 2);
+  // P4-1: every doc carries explicit null on the three quote fields so
+  // mergeSourceDocuments can distinguish "this synth ran the validator
+  // and no quote attached" (clear) from "this synth didn't touch quotes"
+  // (preserve).
   assert.deepEqual(docs[0], {
     id:             "10",
     type:           "article",
@@ -70,6 +76,9 @@ test("P0-1 buildSourceDocuments projects core fields onto each article", () => {
     date:           "2026-04-01T10:00:00Z",
     authority:      0.9,
     source_country: "us",
+    quote_text:     null,
+    quote_speaker:  null,
+    quote_role:     null,
   });
   // ids stringified for JSON stability
   assert.equal(typeof docs[0].id, "string");
@@ -99,9 +108,14 @@ test("P0-2 buildSourceDocuments attaches verbatim quotes to the matching source 
   assert.equal(docs[0].quote_text, verbatimQuotes[0].text);
   assert.equal(docs[0].quote_speaker, "Lewis Kaplan");
   assert.equal(docs[0].quote_role, "judge");
-  // Article 11 must NOT pick up article 10's quote
-  assert.equal(docs[1].quote_text, undefined);
-  assert.equal(docs[1].quote_speaker, undefined);
+  // Article 11 must NOT pick up article 10's quote.
+  // P4-1: docs without an attached quote now carry explicit null on all
+  // three quote fields (was: undefined). The explicit null is the signal
+  // mergeSourceDocuments uses to clear stale quote data from prior synth
+  // runs — distinct from "this synth didn't touch quotes" (absent).
+  assert.equal(docs[1].quote_text, null);
+  assert.equal(docs[1].quote_speaker, null);
+  assert.equal(docs[1].quote_role, null);
 });
 
 test("P0-2 buildSourceDocuments drops quotes whose source_id does not match any article", () => {
@@ -110,8 +124,11 @@ test("P0-2 buildSourceDocuments drops quotes whose source_id does not match any 
     { source_id: 9999, text: "Orphan quote", speaker: "Nobody" },
   ];
   const docs = buildSourceDocuments(articles, verbatimQuotes);
+  // P4-1: explicit null on all three fields means "validator ran, no quote".
   for (const d of docs) {
-    assert.equal(d.quote_text, undefined);
+    assert.equal(d.quote_text, null);
+    assert.equal(d.quote_speaker, null);
+    assert.equal(d.quote_role, null);
   }
 });
 
@@ -141,6 +158,91 @@ test("P0-1 mergeSourceDocuments handles non-array existing (first River merge)",
   assert.deepEqual(merged, incoming);
   const merged2 = mergeSourceDocuments(null, incoming);
   assert.deepEqual(merged2, incoming);
+});
+
+// ── P4-1: tri-state quote semantics on River merge ──────────────────────────
+
+test("P4-1 mergeSourceDocuments: explicit quote_text:null clears prior quote (Ghalibaf regression)", () => {
+  // Reproduces story 170: prior synth stored a truncated Ghalibaf quote;
+  // new synth's P3-2 tail validator rejects it. buildSourceDocuments
+  // emits the doc with quote_text:null. Merge must wipe ALL prior quote
+  // fields (not just quote_text), since they're a tuple.
+  const existing = [
+    {
+      id: "93656", title: "Ghalibaf statement", issuer: "x.com",
+      quote_text:    "...by the naval blockade and",
+      quote_speaker: "Mohammad Bagher Ghalibaf",
+      quote_role:    "Iran's parliament speaker",
+    },
+  ];
+  const incoming = [
+    {
+      id: "93656", title: "Ghalibaf statement", issuer: "x.com",
+      // P4-1 contract: explicit null on all three quote fields.
+      quote_text: null, quote_speaker: null, quote_role: null,
+    },
+  ];
+  const merged = mergeSourceDocuments(existing, incoming);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].quote_text,    null, "stale quote_text must clear");
+  assert.equal(merged[0].quote_speaker, null, "stale speaker must clear");
+  assert.equal(merged[0].quote_role,    null, "stale role must clear");
+});
+
+test("P4-1 mergeSourceDocuments: absent quote fields preserve prior (no accidental clear)", () => {
+  // Some other code path (not buildSourceDocuments) might emit a doc
+  // without quote fields at all. That means "I'm not touching quotes" —
+  // prior values must survive.
+  const existing = [
+    { id: "10", title: "old", quote_text: "Real quote", quote_speaker: "Person" },
+  ];
+  const incoming = [
+    { id: "10", title: "updated" },  // no quote_text field at all
+  ];
+  const merged = mergeSourceDocuments(existing, incoming);
+  assert.equal(merged[0].quote_text,    "Real quote", "absent → preserve");
+  assert.equal(merged[0].quote_speaker, "Person");
+});
+
+test("P4-1 mergeSourceDocuments: incoming quote_text string overwrites prior value", () => {
+  const existing = [
+    { id: "10", quote_text: "old quote", quote_speaker: "old speaker" },
+  ];
+  const incoming = [
+    { id: "10", quote_text: "fresh quote", quote_speaker: "fresh speaker", quote_role: "fresh role" },
+  ];
+  const merged = mergeSourceDocuments(existing, incoming);
+  assert.equal(merged[0].quote_text,    "fresh quote");
+  assert.equal(merged[0].quote_speaker, "fresh speaker");
+  assert.equal(merged[0].quote_role,    "fresh role");
+});
+
+test("P4-1 mergeSourceDocuments: end-to-end with buildSourceDocuments — rejection clears prior", () => {
+  // Story 170 scenario: prior synth had 2 quotes attached. New synth's
+  // validator rejects one of them. buildSourceDocuments emits both docs;
+  // the rejected one has quote_text:null. Merge against the prior story
+  // row must wipe the rejected quote, keep the verified one.
+  const articles = [
+    { id: 100, title: "Sailor interview",        domain: "x.com", authority_score: 0.6 },
+    { id: 200, title: "Ghalibaf truncated",      domain: "y.com", authority_score: 0.6 },
+  ];
+  const verifiedQuotes = [
+    { source_id: 100, text: "Verified quote.", speaker: "Sailor", role: "crew" },
+    // Doc 200 — no verified quote this run (P3-2 rejected the truncated one).
+  ];
+  const newDocs = buildSourceDocuments(articles, verifiedQuotes);
+
+  const priorStored = [
+    { id: "100", title: "Sailor interview", quote_text: "Verified quote.", quote_speaker: "Sailor" },
+    { id: "200", title: "Ghalibaf truncated", quote_text: "...by the naval blockade and", quote_speaker: "Ghalibaf", quote_role: "speaker" },
+  ];
+
+  const merged = mergeSourceDocuments(priorStored, newDocs);
+  const byId = Object.fromEntries(merged.map((d) => [d.id, d]));
+  assert.equal(byId["100"].quote_text, "Verified quote.", "verified quote stays");
+  assert.equal(byId["200"].quote_text, null, "rejected quote drops");
+  assert.equal(byId["200"].quote_speaker, null);
+  assert.equal(byId["200"].quote_role, null);
 });
 
 // Codex P1 review on PR #72 — regression guard: in the synthesizer's
@@ -738,6 +840,138 @@ test("P3-5 countEntityOverlap: empty / null inputs are safe", () => {
   assert.equal(countEntityOverlap([], []), 0);
   assert.equal(countEntityOverlap(null, ["x"]), 0);
   assert.equal(countEntityOverlap(["x"], null), 0);
+});
+
+// ── P2-2: pickRelatedStories ─────────────────────────────────────────────────
+
+test("P2-2 pickRelatedStories: ranks by overlap desc, returns ≤ 3", () => {
+  const current = ["Sam Bankman-Fried", "FTX", "Department of Justice", "Lewis Kaplan"];
+  const candidates = [
+    // 4 overlap — strongest match
+    { id: 50, headline: "FTX founder convicted on seven counts",  published_at: "2026-01-15T00:00:00Z", primary_entities: ["Sam Bankman-Fried", "FTX", "Department of Justice", "Lewis Kaplan"] },
+    // 2 overlap — borderline
+    { id: 51, headline: "FTX bankruptcy claims update",            published_at: "2026-02-01T00:00:00Z", primary_entities: ["FTX", "Department of Justice", "Some Other Person"] },
+    // 1 overlap — below threshold, must be excluded
+    { id: 52, headline: "Crypto market overview",                   published_at: "2026-03-01T00:00:00Z", primary_entities: ["FTX", "Coinbase", "Binance"] },
+    // 3 overlap — middle
+    { id: 53, headline: "DOJ charges new defendant in fraud case", published_at: "2026-02-20T00:00:00Z", primary_entities: ["Sam Bankman-Fried", "Department of Justice", "Lewis Kaplan", "OtherFigure"] },
+  ];
+  const result = pickRelatedStories(current, candidates);
+  assert.equal(result.length, 3, "max 3 even when 4 candidates");
+  assert.equal(result[0].id, 50, "highest overlap (4) leads");
+  assert.equal(result[1].id, 53, "next highest (3) follows");
+  assert.equal(result[2].id, 51, "lowest passing (2) last");
+  // Stripped of internal _overlap field, only id/headline/date exposed.
+  for (const r of result) {
+    assert.deepEqual(Object.keys(r).sort(), ["date", "headline", "id"]);
+  }
+});
+
+test("P2-2 pickRelatedStories: requires minimum overlap (default 2)", () => {
+  const current = ["A", "B"];
+  const candidates = [
+    { id: 1, headline: "match A only", published_at: "2026-01-01T00:00:00Z", primary_entities: ["A"] },
+    { id: 2, headline: "match B only", published_at: "2026-01-01T00:00:00Z", primary_entities: ["B"] },
+  ];
+  assert.deepEqual(pickRelatedStories(current, candidates), [],
+    "single-entity overlap must not qualify");
+});
+
+test("P2-2 pickRelatedStories: tie-break by recency desc", () => {
+  const current = ["Trump", "Iran"];
+  const candidates = [
+    { id: 1, headline: "older", published_at: "2026-01-01T00:00:00Z", primary_entities: ["Trump", "Iran"] },
+    { id: 2, headline: "newer", published_at: "2026-04-01T00:00:00Z", primary_entities: ["Trump", "Iran"] },
+    { id: 3, headline: "middle", published_at: "2026-02-15T00:00:00Z", primary_entities: ["Trump", "Iran"] },
+  ];
+  const result = pickRelatedStories(current, candidates);
+  assert.equal(result[0].id, 2, "newest wins tie");
+  assert.equal(result[1].id, 3);
+  assert.equal(result[2].id, 1);
+});
+
+test("P2-2 pickRelatedStories: case-insensitive overlap (uses countEntityOverlap)", () => {
+  // Mixed case across current and candidate — same entities, different
+  // proper-cased forms (clean) vs lowercased (dirty cluster).
+  const current = ["Donald Trump", "Iran", "United States"];
+  const candidates = [
+    { id: 1, headline: "earlier", published_at: "2026-01-01Z", primary_entities: ["donald trump", "iran"] },
+  ];
+  const result = pickRelatedStories(current, candidates);
+  assert.equal(result.length, 1, "case-mixed entities must still match");
+});
+
+test("P2-2 pickRelatedStories: empty / null candidates", () => {
+  assert.deepEqual(pickRelatedStories(["A", "B"], null), []);
+  assert.deepEqual(pickRelatedStories(["A", "B"], []), []);
+  assert.deepEqual(pickRelatedStories(["A", "B"], undefined), []);
+});
+
+test("P2-2 pickRelatedStories: skips candidates without id", () => {
+  const candidates = [
+    { headline: "no id",  published_at: "2026-01-01Z", primary_entities: ["A", "B"] },
+    { id: 5, headline: "with id", published_at: "2026-01-02Z", primary_entities: ["A", "B"] },
+  ];
+  const result = pickRelatedStories(["A", "B", "C"], candidates);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 5);
+});
+
+test("P2-2 pickRelatedStories: respects custom cap and minOverlap", () => {
+  const current = ["A", "B", "C", "D", "E"];
+  const candidates = Array.from({ length: 10 }, (_, i) => ({
+    id: i + 1, headline: `c${i}`, published_at: "2026-01-01Z",
+    primary_entities: ["A", "B", "C", "D", "E"],
+  }));
+  // cap=2 → only 2 results.
+  assert.equal(pickRelatedStories(current, candidates, { cap: 2 }).length, 2);
+  // minOverlap=10 (impossible) → empty.
+  assert.equal(pickRelatedStories(current, candidates, { minOverlap: 10 }).length, 0);
+});
+
+// ── P2-2 relatedStoryCutoff (Codex P1 fix on PR #82) ─────────────────────────
+
+test("P2-2 relatedStoryCutoff: anchored to published_at, not Date.now()", () => {
+  // Codex P1 regression — historical re-synth case. Anchor in 2023.
+  // Pre-fix: cutoff = Date.now() - 90d (a 2026 timestamp), the supabase
+  // query becomes published_at >= 2026 AND published_at < 2023 → empty.
+  const anchor = "2023-06-15T00:00:00.000Z";
+  const cutoff = relatedStoryCutoff(anchor, 90);
+  // Cutoff must be 90 days BEFORE the anchor, not before today.
+  const expected = new Date(Date.parse(anchor) - 90 * 86400 * 1000).toISOString();
+  assert.equal(cutoff, expected);
+  // And the cutoff must be strictly before the anchor — sanity guard.
+  assert.ok(cutoff < anchor, "cutoff must precede anchor");
+});
+
+test("P2-2 relatedStoryCutoff: respects custom lookback window", () => {
+  const anchor = "2026-04-01T00:00:00.000Z";
+  const c30 = relatedStoryCutoff(anchor, 30);
+  const c180 = relatedStoryCutoff(anchor, 180);
+  assert.equal(c30,  new Date(Date.parse(anchor) - 30  * 86400 * 1000).toISOString());
+  assert.equal(c180, new Date(Date.parse(anchor) - 180 * 86400 * 1000).toISOString());
+  assert.ok(c180 < c30, "longer lookback yields earlier cutoff");
+});
+
+test("P2-2 relatedStoryCutoff: missing anchor falls back to now (defensive)", () => {
+  const before = Date.now();
+  const cutoff = relatedStoryCutoff(undefined, 90);
+  const after = Date.now();
+  // Cutoff is now − 90d ± a few ms.
+  const cutoffMs = Date.parse(cutoff);
+  const expectedMin = before - 90 * 86400 * 1000;
+  const expectedMax = after - 90 * 86400 * 1000;
+  assert.ok(cutoffMs >= expectedMin && cutoffMs <= expectedMax,
+    `fallback cutoff ${cutoff} must be near now-90d`);
+});
+
+test("P2-2 relatedStoryCutoff: invalid anchor string falls back to now", () => {
+  const before = Date.now();
+  const cutoff = relatedStoryCutoff("not-a-date", 90);
+  const cutoffMs = Date.parse(cutoff);
+  // Should be roughly now − 90d, not NaN.
+  assert.ok(Number.isFinite(cutoffMs));
+  assert.ok(cutoffMs >= before - 90 * 86400 * 1000 - 1000, "invalid input must not poison the cutoff");
 });
 
 test("P3-5 cleanPrimaryEntities: enriched-only mode ignores cluster fallback even when populated", () => {

@@ -321,6 +321,16 @@ function compareSourceDocs(a, b) {
   return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
 }
 
+// P4-1 — quote fields use a tri-state convention so River-merge can tell
+// "no quote this run" (CLEAR) from "this synth didn't touch quotes" (PRESERVE):
+//   explicit null   → clear any previously-stored quote on this doc
+//   absent (undef)  → preserve whatever the prior synthesis stored
+//   string value    → set / overwrite
+// Without this, P3-2's tail validator rejects a quote at extraction time,
+// but the old quote_text from a prior synth survives the merge — story 170
+// validation showed exactly this happen with the truncated Ghalibaf quote.
+const QUOTE_FIELDS = ["quote_text", "quote_speaker", "quote_role"];
+
 export function buildSourceDocuments(articles, verbatimQuotes = []) {
   const docs = articles.map(a => ({
     id:             String(a.id),
@@ -331,6 +341,12 @@ export function buildSourceDocuments(articles, verbatimQuotes = []) {
     date:           a.published_at ?? null,
     authority:      Number(a.authority_score ?? 0),
     source_country: a.source_country ?? null,
+    // P4-1: explicit null = "this synth verified no quote on this doc".
+    // Set unconditionally; loop below overwrites with strings when a
+    // quote attaches.
+    quote_text:    null,
+    quote_speaker: null,
+    quote_role:    null,
   }));
 
   for (const q of verbatimQuotes) {
@@ -350,6 +366,13 @@ export function buildSourceDocuments(articles, verbatimQuotes = []) {
 // previously-snapshotted entries (River-merged stories accrue evidence over
 // time as new clusters land). Dedupe by id, then re-sort by authority desc
 // so the primary-citation slot stays deterministic across merges.
+//
+// P4-1 — quote-field semantics: when the incoming doc carries an explicit
+// `quote_text: null`, treat that as "this synth ran the validator and
+// rejected", and CLEAR the corresponding quote_speaker / quote_role on the
+// merged result. Without this, a stale quote that the new validator rejects
+// would survive the merge — story 170 had exactly this with the Ghalibaf
+// quote ending in "...and".
 export function mergeSourceDocuments(existing, incoming) {
   const byId = new Map();
   for (const d of Array.isArray(existing) ? existing : []) {
@@ -357,7 +380,16 @@ export function mergeSourceDocuments(existing, incoming) {
   }
   for (const d of incoming) {
     if (!d || d.id == null) continue;
-    byId.set(String(d.id), { ...(byId.get(String(d.id)) ?? {}), ...d });
+    const prior = byId.get(String(d.id)) ?? {};
+    const merged = { ...prior, ...d };
+    // P4-1: if the incoming doc explicitly declared no quote (quote_text
+    // present and null), wipe all quote fields on the merged result. Don't
+    // wipe when quote_text is undefined — that means the caller didn't
+    // touch quotes and we should preserve.
+    if (Object.prototype.hasOwnProperty.call(d, "quote_text") && d.quote_text == null) {
+      for (const f of QUOTE_FIELDS) merged[f] = null;
+    }
+    byId.set(String(d.id), merged);
   }
   return [...byId.values()].sort(compareSourceDocs);
 }
@@ -550,7 +582,7 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   // Strategy 1: same cluster_id
   const { data: byCluster, error: e1 } = await supabase
     .from("stories")
-    .select("id, primary_entities, key_points, source_documents, updated_at")
+    .select("id, primary_entities, key_points, source_documents, updated_at, story_decay_at, published_at")
     .eq("cluster_id", cluster.id)
     .gte("updated_at", riverCutoff)
     .order("updated_at", { ascending: false })
@@ -565,7 +597,7 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   // Strategy 2: entity overlap in same category
   const { data: candidates, error: e2 } = await supabase
     .from("stories")
-    .select("id, primary_entities, key_points, source_documents, updated_at")
+    .select("id, primary_entities, key_points, source_documents, updated_at, story_decay_at, published_at")
     .eq("category_id", cluster.category_id)
     .gte("updated_at", riverCutoff)
     .order("updated_at", { ascending: false })
@@ -586,6 +618,102 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   }
 
   return best;
+}
+
+// P2-2 — related-story linking.
+//
+// At synth time, find ≤ 3 prior stories in the same category that share
+// ≥ 2 entities with the current story. Ranked by overlap count desc,
+// then by recency desc as a tiebreak. Stored as `related_stories jsonb`
+// on the row so the renderer can surface a Story Arc module without a
+// runtime query.
+//
+// Pure ranking function — supabase fetch is in `findRelatedStories`
+// below. The split makes the ranking unit-testable without supabase.
+const RELATED_STORY_CAP        = 3;
+const RELATED_MIN_OVERLAP      = 2;
+const RELATED_LOOKBACK_DAYS    = 90;
+const RELATED_CANDIDATE_LIMIT  = 50;
+
+export function pickRelatedStories(currentEntities, candidates, opts = {}) {
+  const cap = Number.isInteger(opts.cap) ? opts.cap : RELATED_STORY_CAP;
+  const minOverlap = Number.isInteger(opts.minOverlap) ? opts.minOverlap : RELATED_MIN_OVERLAP;
+  if (!Array.isArray(candidates) || candidates.length === 0) return [];
+
+  const scored = [];
+  for (const c of candidates) {
+    if (!c || c.id == null) continue;
+    const overlap = countEntityOverlap(currentEntities, c.primary_entities);
+    if (overlap < minOverlap) continue;
+    scored.push({
+      id:       c.id,
+      headline: typeof c.headline === "string" ? c.headline : null,
+      date:     c.published_at ?? null,
+      _overlap: overlap,
+    });
+  }
+
+  scored.sort((a, b) => {
+    if (a._overlap !== b._overlap) return b._overlap - a._overlap;
+    // Recency tiebreak — newer first.
+    return String(b.date ?? "").localeCompare(String(a.date ?? ""));
+  });
+
+  return scored.slice(0, cap).map(({ id, headline, date }) => ({ id, headline, date }));
+}
+
+// Codex P1 fix on PR #82 — anchor the 90-day cutoff to the story's own
+// `published_at`, not Date.now(). The original `Date.now() - 90d`
+// formulation broke historical re-syntheses: a 2023 story reprocessed in
+// 2026 produced contradictory filters
+//   published_at >= 2026-02 (now − 90d)
+//   published_at <  2023-xx (anchor)
+// → empty intersection → all related links silently dropped. The
+// lookback is logically "90 days BEFORE this story", not "90 days
+// before today."
+//
+// Falls back to `Date.now() - 90d` only when the anchor is absent
+// (defensive — synthesizer call sites always pass published_at).
+export function relatedStoryCutoff(published_at, lookback_days = RELATED_LOOKBACK_DAYS) {
+  const anchorMs = typeof published_at === "string" ? Date.parse(published_at) : NaN;
+  const baseMs = Number.isFinite(anchorMs) ? anchorMs : Date.now();
+  return new Date(baseMs - lookback_days * 86400 * 1000).toISOString();
+}
+
+// Fetch candidates from supabase + delegate ranking to pickRelatedStories.
+// Excludes the current story by id when known, and only considers stories
+// strictly older than the current row's published_at (no future-arc links).
+export async function findRelatedStories(supabase, params) {
+  const {
+    story_id,
+    category_id,
+    primary_entities,
+    published_at,
+    lookback_days = RELATED_LOOKBACK_DAYS,
+  } = params ?? {};
+
+  if (!category_id || !Array.isArray(primary_entities) || primary_entities.length < RELATED_MIN_OVERLAP) {
+    return [];
+  }
+
+  const cutoff = relatedStoryCutoff(published_at, lookback_days);
+  let q = supabase
+    .from("stories")
+    .select("id, headline, published_at, primary_entities")
+    .eq("category_id", category_id)
+    .gte("published_at", cutoff)
+    .order("published_at", { ascending: false })
+    .limit(RELATED_CANDIDATE_LIMIT);
+
+  if (typeof published_at === "string") q = q.lt("published_at", published_at);
+  if (story_id != null) q = q.neq("id", story_id);
+
+  const { data: candidates, error } = await q;
+  if (error) {
+    // Related-stories is non-essential — never fail synthesis on a query error.
+    return [];
+  }
+  return pickRelatedStories(primary_entities, candidates ?? []);
 }
 
 // P3-5 + Codex P2 fix on PR #80 — case-insensitive entity overlap with
@@ -825,6 +953,10 @@ export async function run(context, message) {
   // any verified verbatim quotes attached to the originating doc.
   const incomingSourceDocs = buildSourceDocuments(articles, verbatimQuotes);
 
+  // P3-5: clean entity names — used for both the `primary_entities` column
+  // write and the P2-2 related-story overlap match.
+  const cleanedEntities = cleanPrimaryEntities(enrichedEntities, cluster.primary_entities);
+
   context.log(JSON.stringify({
     event:           "source_documents_snapshot",
     cluster_id,
@@ -851,6 +983,26 @@ export async function run(context, message) {
   // River model: find or create story — Step 2 of processing contract
   const riverCutoff   = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
   const existingStory = await findExistingStory(supabase, cluster, riverCutoff);
+
+  // P2-2: find ≤ 3 prior related stories in same category sharing ≥ 2
+  // entities. Computed against cleanedEntities (post-P3-5 proper-cased
+  // names). For River-merge UPDATE, anchor "before this row" at the
+  // existing row's published_at so the arc stays directional. For INSERT,
+  // anchor at synth time. Non-essential — defaults to [] on query error.
+  const relatedAnchorDate = existingStory ? existingStory.published_at : now;
+  const relatedStories = await findRelatedStories(supabase, {
+    story_id:         existingStory?.id ?? null,
+    category_id:      cluster.category_id,
+    primary_entities: cleanedEntities,
+    published_at:     relatedAnchorDate,
+  });
+  context.log(JSON.stringify({
+    event:           "related_stories_computed",
+    cluster_id,
+    story_id:        existingStory?.id ?? null,
+    related_count:   relatedStories.length,
+    related_ids:     relatedStories.map((r) => r.id),
+  }));
 
   let story_id;
 
@@ -908,7 +1060,7 @@ export async function run(context, message) {
         // P3-5: clean entities from the enriched jsonb; falls back to
         // cluster.primary_entities only when enrichment failed. Replaces
         // the dirty cluster-NLP array on every successful re-synth.
-        primary_entities:          cleanPrimaryEntities(enrichedEntities, cluster.primary_entities),
+        primary_entities:          cleanedEntities,
         headline:                  narrative.headline,
         summary:                   narrative.summary,
         key_points:                mergedKeyPoints,
@@ -934,9 +1086,18 @@ export async function run(context, message) {
         // skip-reason. video_skip_reason cleared to null on eligible=true.
         video_eligible:            mergedEligibility.eligible,
         video_skip_reason:         mergedEligibility.reason,
-        // P2-6: story_decay_at is intentionally NOT updated here. The
-        // freshness window is pinned to the original published_at; a new
-        // cluster pickup of the same story doesn't reset the clock.
+        // P4-2: story_decay_at backfill. Pre-P2-6 rows have NULL forever
+        // because the previous policy was "never update on River-merge"
+        // (correct in steady state, but starves historical rows that have
+        // no decay value). New policy: COALESCE — keep an existing
+        // timestamp if present, else fill from the row's actual
+        // published_at + per-category window. Pinned-to-publication
+        // semantics preserved; no reset on re-pickup.
+        story_decay_at:            existingStory.story_decay_at ??
+                                    computeStoryDecayAt(cluster.category_id, existingStory.published_at),
+        // P2-2: refresh on every River-merge — gained entity coverage may
+        // unlock new related-story matches that weren't visible at insert.
+        related_stories:           relatedStories,
         // P0-5 / P1 enrichment fields. Spread is empty (no columns touched)
         // when the enrichment pass fell back to defaults — see
         // buildEnrichmentColumns. Successful runs overwrite; failed runs
@@ -982,7 +1143,7 @@ export async function run(context, message) {
         category_id:               cluster.category_id,
         // P3-5: clean entities from the enriched jsonb. See UPDATE branch
         // above for the rationale.
-        primary_entities:          cleanPrimaryEntities(enrichedEntities, cluster.primary_entities),
+        primary_entities:          cleanedEntities,
         headline:                  narrative.headline,
         summary:                   narrative.summary,
         key_points:                narrative.key_points,
@@ -1011,6 +1172,8 @@ export async function run(context, message) {
         // P2-6: per-category decay timestamp. Renderer flips to ARCHIVE
         // posture chip after this point.
         story_decay_at:            decayAt,
+        // P2-2: ≤ 3 prior stories with ≥ 2 entity overlap.
+        related_stories:           relatedStories,
         // P0-5 / P1 enrichment fields. On a failed enrichment pass, the
         // spread is empty and Supabase falls back to the migration's column
         // defaults: NULL for the four text columns, `{}` / `[]` for jsonb.
