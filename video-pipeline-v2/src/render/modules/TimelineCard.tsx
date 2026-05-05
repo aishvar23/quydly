@@ -1,5 +1,5 @@
 import React from "react";
-import { interpolate } from "remotion";
+import { interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { BRAND, SAFE } from "../shared/brand";
 import { ZONE } from "../shared/layout";
 import { ModuleSurface } from "../shared/ModuleSurface";
@@ -17,8 +17,8 @@ import {
   useBeat,
   useFadeIn,
   useRiseIn,
-  useStaggered,
 } from "../shared/motion";
+import { Icon, FinanceIconKey } from "../shared/FinanceIcons";
 import type { RenderModule } from "../shared/types";
 
 const FONT = BRAND.fontFamily;
@@ -30,11 +30,10 @@ const T = {
   title:          BEAT.short,
   lineDraw:       BEAT.short + BEAT.flash,
   eventsBase:     BEAT.short + BEAT.long,
-  eventStagger:   8,
   source:         130,
 } as const;
 
-type TimelineEvent = { label: string; detail: string };
+type TimelineEvent = { label: string; detail: string; icon?: FinanceIconKey };
 
 export const TimelineCard: React.FC<{ module: RenderModule; accentColor: string }> = ({
   module,
@@ -100,14 +99,45 @@ const BigTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   );
 };
 
+// Staged reveal — each event drops, holds for ~2-3 seconds while the
+// narrator describes what happened, then the next event drops. The active
+// event is bright + scaled up; previous events dim down so the eye stays
+// on the current beat. Total module duration is split equally across the
+// events; the planner sets durationSec to (event_count * per_event_seconds).
 const EventList: React.FC<{ events: TimelineEvent[]; accentColor: string }> = ({
   events,
   accentColor,
 }) => {
-  const compact = events.length >= 5;
-  const rowHeight = compact ? 110 : 140;
-  const totalHeight = events.length * rowHeight;
-  const drawProgress = useBeat(T.lineDraw, BEAT.long, EASE.out);
+  const { durationInFrames } = useVideoConfig();
+  const visibleEvents = events.slice(0, 5);
+  const rowHeight = visibleEvents.length >= 5 ? 110 : 140;
+  const totalHeight = visibleEvents.length * rowHeight;
+
+  // Reserve ~1s for the title to land before the first event, then split
+  // the remaining time equally across events.
+  const titleHoldFrames = 30;
+  const perEventFrames = Math.max(
+    45,
+    Math.floor((durationInFrames - titleHoldFrames) / Math.max(1, visibleEvents.length)),
+  );
+
+  // Connector line draws progressively from the top down, in lockstep
+  // with which event is currently active.
+  const frame = useCurrentFrame();
+  const activeIndex = Math.max(
+    0,
+    Math.min(
+      visibleEvents.length - 1,
+      Math.floor((frame - titleHoldFrames) / perEventFrames),
+    ),
+  );
+  const lineFillProgress = Math.max(
+    0,
+    Math.min(
+      1,
+      (frame - titleHoldFrames) / (perEventFrames * Math.max(1, visibleEvents.length)),
+    ),
+  );
 
   return (
     <div style={{
@@ -117,23 +147,24 @@ const EventList: React.FC<{ events: TimelineEvent[]; accentColor: string }> = ({
       right: SAFE.right,
       height: totalHeight,
     }}>
-      {/* Vertical connector line drawing top → bottom */}
       <div style={{
         position: "absolute",
         top: 8,
         left: 12,
         width: 2,
-        height: totalHeight * drawProgress - 16,
+        height: totalHeight * lineFillProgress - 16,
         background: `${accentColor}aa`,
         boxShadow: `0 0 6px ${accentColor}66`,
       }} />
-      {events.slice(0, 5).map((event, i) => (
+      {visibleEvents.map((event, i) => (
         <EventRow
           key={i}
           event={event}
           index={i}
+          startFrame={titleHoldFrames + i * perEventFrames}
+          activeIndex={activeIndex}
           rowHeight={rowHeight}
-          compact={compact}
+          compact={visibleEvents.length >= 5}
           accentColor={accentColor}
         />
       ))}
@@ -144,15 +175,35 @@ const EventList: React.FC<{ events: TimelineEvent[]; accentColor: string }> = ({
 const EventRow: React.FC<{
   event: TimelineEvent;
   index: number;
+  startFrame: number;
+  activeIndex: number;
   rowHeight: number;
   compact: boolean;
   accentColor: string;
-}> = ({ event, index, rowHeight, compact, accentColor }) => {
-  const progress = useStaggered(T.eventsBase, index, T.eventStagger, BEAT.short);
-  const dotScale = interpolate(progress, [0, 0.6, 1], [0.4, 1.2, 1.0], { easing: EASE.punch });
+}> = ({ event, index, startFrame, activeIndex, rowHeight, compact, accentColor }) => {
+  const frame = useCurrentFrame();
+  const local = frame - startFrame;
+
+  // Fade-in over ~0.5s. After the event's window passes, dim to muted
+  // text so the eye knows the story has moved on.
+  const enterProgress = interpolate(local, [0, 18], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const dotScale = interpolate(enterProgress, [0, 0.6, 1], [0.4, 1.3, 1.0], {
+    easing: EASE.punch,
+  });
+  const isActive = index === activeIndex;
+  const isPast = index < activeIndex;
+  const opacityFloor = isPast ? 0.42 : 1.0;
   const dotSize = compact ? 18 : 22;
   const labelSize = compact ? 26 : 30;
   const detailSize = compact ? 22 : 26;
+
+  // Active event gets a subtle scale boost so the row "holds" attention.
+  const activeBoost = isActive ? 1.04 : 1.0;
+  const textColor = isPast ? BRAND.muted : BRAND.text;
+  const labelColor = isPast ? `${accentColor}88` : accentColor;
 
   return (
     <div style={{
@@ -164,38 +215,61 @@ const EventRow: React.FC<{
       display: "flex",
       alignItems: "flex-start",
       gap: 32,
+      transform: `scale(${activeBoost})`,
+      transformOrigin: "left center",
+      transition: "transform 200ms",
     }}>
-      {/* Dot column */}
       <div style={{
         flexShrink: 0,
-        width: 32,
+        width: 88,
         position: "relative",
         paddingTop: 4,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8,
       }}>
         <div style={{
           width: dotSize,
           height: dotSize,
           borderRadius: dotSize / 2,
           background: accentColor,
-          opacity: progress,
-          transform: `scale(${dotScale}) translateX(${(12 + 1) - (dotSize / 2)}px)`,
-          transformOrigin: "left center",
-          boxShadow: `0 0 14px ${accentColor}88`,
+          opacity: enterProgress * opacityFloor,
+          transform: `scale(${dotScale})`,
+          transformOrigin: "center center",
+          boxShadow: isActive
+            ? `0 0 22px ${accentColor}cc`
+            : `0 0 8px ${accentColor}55`,
         }} />
+        {event.icon ? (
+          <div style={{
+            width: 64,
+            height: 64,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: enterProgress * opacityFloor,
+            background: isActive ? `${accentColor}1a` : "transparent",
+            border: isActive ? `1.5px solid ${accentColor}66` : "1.5px solid transparent",
+            borderRadius: 12,
+            transition: "background 200ms, border-color 200ms",
+          }}>
+            <Icon iconKey={event.icon} color={accentColor} size={44} strokeWidth={2.2} />
+          </div>
+        ) : null}
       </div>
 
-      {/* Label + detail */}
       <div style={{
         flex: 1,
         minWidth: 0,
-        opacity: progress,
-        transform: `translateX(${(1 - progress) * 18}px)`,
+        opacity: enterProgress * opacityFloor,
+        transform: `translateX(${(1 - enterProgress) * 18}px)`,
       }}>
         <div style={{
           fontFamily: FONT,
           fontSize: labelSize,
           fontWeight: 850,
-          color: accentColor,
+          color: labelColor,
           letterSpacing: 1.2,
           textTransform: "uppercase",
           marginBottom: 6,
@@ -206,7 +280,7 @@ const EventRow: React.FC<{
           fontFamily: FONT,
           fontSize: detailSize,
           fontWeight: 700,
-          color: BRAND.text,
+          color: textColor,
           lineHeight: 1.22,
           letterSpacing: 0,
         }}>
@@ -226,8 +300,9 @@ function readEvents(data: Record<string, unknown>, key: string): TimelineEvent[]
       const r = item as Record<string, unknown>;
       const label = typeof r.label === "string" ? r.label.trim() : "";
       const detail = typeof r.detail === "string" ? r.detail.trim() : "";
+      const icon = typeof r.icon === "string" ? (r.icon as FinanceIconKey) : undefined;
       if (!label && !detail) return null;
-      return { label, detail };
+      return { label, detail, icon };
     })
     .filter((e): e is TimelineEvent => e !== null);
 }

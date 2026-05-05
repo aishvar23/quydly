@@ -113,6 +113,8 @@ async function fetchStories({
   supportFloor = 0.65,
   confidenceFloor = 5,
   categoryId,
+  storyId,                        // exact id match — bypasses floor filters
+  minId,                          // id >= minId
   random = true,
 } = {}) {
   const supabase = getClient();
@@ -121,6 +123,7 @@ async function fetchStories({
     .select(
       'id, cluster_id, category_id, primary_entities, primary_geos, primary_places, ' +
       'headline, summary, key_points, confidence_score, coherence_score, ' +
+      'consistency_score, ' +
       'support_score, story_score, source_count, is_verified, published_at, ' +
       'source_documents, ' +
       // P1-8 / P1-9 / P1-10 — surface the data-quality columns the renderer
@@ -128,14 +131,43 @@ async function fetchStories({
       // synthesised before the migration; storyRowToFixture handles that.
       'source_diversity_score, source_diversity_label, ' +
       'verification_status, verification_notes, corrections, ' +
-      'factual_conflicts',
-    )
+      'factual_conflicts, ' +
+      // Bridge phase 1 — synth-side editorial fields v2 had been ignoring.
+      // hook_sentence (P1-2) is the spoken-word hook the synth tuned for
+      // the first 3 seconds. why_it_matters (P1-7) is the stakes line.
+      // editorial_posture (P1-3) is the closed-set classification used to
+      // pick chips ('breaking_developing', 'tally_official', etc.).
+      // primary_entities_enriched (P1-4 + P0-4) is the proper-cased
+      // [{name, type, role, context, wikipedia_*}] list — distinguishes
+      // person/place/org so we don't frame "Iran vs India" when Iran is
+      // a place and US is a place that happens to be missing from
+      // primary_geos. structured_numbers (P1-1) is the dedup'd
+      // money/counts/percentages/casualties payload.
+      'hook_sentence, why_it_matters, editorial_posture, story_type, ' +
+      'primary_entities_enriched, structured_numbers, ' +
+      // P1-5 + P3-4 — synth-extracted timeline events with labels.
+      // The brief pairs the dates here with deduped key_points when
+      // timeline_disposition indicates the LLM extraction was thin
+      // ("fallback") so the renderer still gets a multi-day chronology.
+      'timeline_events, timeline_disposition',
+    );
+
+  // Exact-id targeting bypasses verification + audit-floor filters so the
+  // editor can render any specific story without first promoting it.
+  if (storyId != null) {
+    const { data, error } = await query.eq('id', storyId).limit(1);
+    if (error) throw new Error(`Supabase fetch stories: ${error.message}`);
+    return data || [];
+  }
+
+  query = query
     .eq('is_verified', isVerified)
     .gte('story_score', scoreFloor)
     .gte('confidence_score', confidenceFloor)
     .gte('coherence_score', coherenceFloor)
     .gte('support_score', supportFloor);
   if (categoryId) query = query.eq('category_id', categoryId);
+  if (minId != null) query = query.gte('id', minId);
 
   // Postgres random() ordering is fine at our story-count scale (10s of
   // thousands). For large tables, switch to TABLESAMPLE.
@@ -282,12 +314,21 @@ function storyRowToFixture(row, sourceDocs) {
     key_points: Array.isArray(row.key_points) ? row.key_points : [],
     confidence_score: row.confidence_score ?? 0,
     coherence_score: row.coherence_score ?? 0,
+    // consistency_score is the synth's per-story validator output
+    // (azure-functions/lib/scoring.js), distinct from coherence_score.
+    // Bridge phase 1 reads it for the publishability gate.
+    consistency_score: row.consistency_score ?? 0,
     support_score: row.support_score ?? 0,
     story_score: row.story_score ?? 0,
     source_count: row.source_count ?? (resolvedSourceDocs.length || 0),
     is_verified: Boolean(row.is_verified),
     primary_entities: Array.isArray(row.primary_entities) ? row.primary_entities : [],
     primary_geos: readableGeos(row),
+    // Bridge phase 1 — pass through the rich [{code, name}] shape so
+    // deriveAngle can match place names against the hook_sentence.
+    // The simpler `primary_geos` array of name strings stays as the
+    // back-compat consumer for older module builders.
+    primary_places: Array.isArray(row.primary_places) ? row.primary_places : [],
     published_at: row.published_at || new Date().toISOString(),
     source_documents: resolvedSourceDocs,
     // P1-8: weighted source-diversity score plus its 'single|narrow|diverse'
@@ -310,6 +351,19 @@ function storyRowToFixture(row, sourceDocs) {
     // render "DOJ says $8B; NYT says $10B" or hide the figure until
     // editor reconciles.
     factual_conflicts: Array.isArray(row.factual_conflicts) ? row.factual_conflicts : [],
+    // Bridge phase 1: editorial fields the v2 modules will start reading.
+    hook_sentence:    row.hook_sentence    ?? null,
+    why_it_matters:   row.why_it_matters   ?? null,
+    editorial_posture: row.editorial_posture ?? null,
+    story_type:       row.story_type       ?? null,
+    primary_entities_enriched: Array.isArray(row.primary_entities_enriched)
+      ? row.primary_entities_enriched
+      : [],
+    structured_numbers: row.structured_numbers ?? null,
+    timeline_events: Array.isArray(row.timeline_events) ? row.timeline_events : [],
+    timeline_disposition: typeof row.timeline_disposition === 'string'
+      ? row.timeline_disposition
+      : null,
   };
 }
 

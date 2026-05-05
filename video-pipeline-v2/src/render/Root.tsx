@@ -4,6 +4,7 @@ import { NumberCard } from "./modules/NumberCard";
 import { QuoteCard } from "./modules/QuoteCard";
 import { EvidenceShelf } from "./modules/EvidenceShelf";
 import { EvidenceVideo } from "./compositions/EvidenceVideo";
+import { Thumbnail, ThumbnailProps } from "./compositions/Thumbnail";
 import type { RenderModule, VideoProps } from "./shared/types";
 
 const NUMBER_SLICE_MODULE: RenderModule = {
@@ -148,6 +149,30 @@ const RemotionRoot: React.FC = () => (
       width={1080}
       height={1920}
       defaultProps={{ module: SHELF_SLICE_MODULE, accentColor: ACCENT } satisfies SliceProps}
+    />
+    <Composition
+      id="Thumbnail"
+      component={Thumbnail}
+      durationInFrames={1}
+      fps={30}
+      width={1280}
+      height={720}
+      defaultProps={{
+        accentColor: "#21C7A8",
+        topText: "FED CUTS RATES",
+        bigNumber: "4.25%",
+        bigNumberLabel: "NEW RATE CEILING",
+        changeBadge: "↓ 0.25",
+        mainIcon: "down",
+        impactSlots: [
+          { icon: "house",  label: "MORTGAGE" },
+          { icon: "piggy",  label: "SAVINGS" },
+          { icon: "credit", label: "DEBT" },
+        ],
+        bottomText: "WHAT IT MEANS FOR YOU",
+        brandName: "QUYDLY",
+        publishedDate: "May 1, 2026",
+      } satisfies ThumbnailProps}
     />
   </>
 );

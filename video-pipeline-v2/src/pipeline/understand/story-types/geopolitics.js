@@ -20,6 +20,8 @@ const {
   extractVerbatimQuote,
   runAiScript,
 } = require('../shared/templates');
+const { deriveAngle } = require('../derive-angle');
+const { planScenes } = require('../../brief/plan-scenes');
 
 // World / geopolitics: sanctions, treaties, summits, elections, alliances.
 // Different shape from legal-scandal — no defendant, no charges. Centred on
@@ -60,7 +62,20 @@ function understand(story, audit) {
   const text = collectText(story);
   const lower = text.toLowerCase();
 
-  const countries = (story.primary_geos || []).slice();
+  // Bridge phase 1 — derive the conflict frame from synth columns rather
+  // than the bare primary_geos list. `primary_actors` becomes the source
+  // of truth for "X vs Y" framing; geographic primary_geos stays the map
+  // anchor. Story 170: angle.primary_actors = ["Donald Trump", "United
+  // States"]+["Iran"] (from hook + entities), affected_parties = ["India"];
+  // primary_geos = ["ir", "in"] still drives the map.
+  const angle = deriveAngle(story);
+
+  // Prefer entity-tagged actors over the geographic country list when
+  // available — the old "countries" var was conflating geo coverage
+  // with conflict actors.
+  const countries = angle.primary_actors.length > 0
+    ? angle.primary_actors.slice(0, 4)
+    : (story.primary_geos || []).slice();
   const institutions = uniqueMatches(text, KNOWN_INSTITUTIONS);
   const leader = extractLeader(text);
   const money = extractMoney(text);
@@ -80,6 +95,11 @@ function understand(story, audit) {
       locations: countries,
       products_or_platforms: [],
     },
+    // Bridge phase 1 — angle is the editor-readable frame. Future phases
+    // (video_brief introduction) will read this directly; for now the
+    // legacy `entities.locations` field is also populated from it so
+    // existing module builders keep working without a wholesale rewrite.
+    angle,
     numbers: {
       money: money.map((amount, idx) => ({
         display: amount,
@@ -103,7 +123,10 @@ function understand(story, audit) {
       'named official statement',
       'dated filing',
     ],
-    why_it_matters: buildWhyItMatters({ countries, action, money }),
+    // Bridge phase 1 — synth's why_it_matters (P1-7) wins when present.
+    // Falls back to the local heuristic only when the row is pre-P1-7
+    // or the synth pass yielded null.
+    why_it_matters: angle.why || buildWhyItMatters({ countries, action, money }),
     audit_signals: {
       hook: audit?.hook_sentence || story.headline,
       visual_angle: audit?.visual_angle || 'maps, institutional context, official statements',
@@ -237,30 +260,51 @@ function template(evidencePackage, script) {
   const headlineMoney = money[0]?.display || '';
   const primarySource = deriveSourceCitation(sources);
 
-  const hookHeadline = buildHeadline({ headlineMoney, countries, action: detectedAction });
+  // Bridge phase 3 — story-spine scene plan. The planner replaces the
+  // legacy template ordering (Hook → Numbers → Quote → Map → Timeline
+  // → Evidence) with a 7-scene continuity plan. The geopolitics
+  // template now maps each planned scene onto an existing module,
+  // dropping modules whose editorial role doesn't fit the story spine.
+  const brief = evidencePackage.brief || null;
+  const scenePlan = brief
+    ? planScenes({ story: evidencePackage._story || {}, evidencePackage, brief })
+    : null;
+  const sceneByPurpose = scenePlan
+    ? Object.fromEntries(scenePlan.scenes.map((s) => [s.purpose, s]))
+    : {};
+
+  const hookScene = sceneByPurpose.hook || null;
+  const hookOnscreen = hookScene?.onscreen_text
+    || brief?.hook?.onscreen_text
+    || (typeof evidencePackage.hook_sentence === 'string'
+      && evidencePackage.hook_sentence.trim())
+    || buildHeadline({ headlineMoney, countries, action: detectedAction });
 
   const sequence = [];
 
-  // Hook: the policy posture, not a legal allegation.
+  // Hook: short on-screen text, full hook narration.
+  // Bridge phase 3 — `subhead` is no longer used for editorial
+  // metadata. DEVELOPING shows up only as a small corner chip on
+  // the renderer side (data.developing_corner_chip), not as the
+  // headline subhead. The renderer reads the chip and places it
+  // discreetly; viewer-facing text stays narrative.
   sequence.push({
     role: 'hook',
     componentType: 'HookStrap',
-    overlayText: hookHeadline,
-    narration: segments.hook || '',
-    durationHintSec: 3.6,
-    minDurationSec: 3.2,
-    maxDurationSec: 4.6,
+    overlayText: hookOnscreen,
+    narration: hookScene?.voiceover || segments.hook || '',
+    durationHintSec: 4.0,
+    minDurationSec: 3.6,
+    maxDurationSec: 5.2,
     data: {
-      postureChips: [
-        { text: 'POLICY DECISION', tone: 'accent' },
-      ],
-      kicker: 'WORLD',
-      headline: hookHeadline,
-      subhead: countries.length >= 2
-        ? `${countries[0]} ↔ ${countries[1]}.`
-        : countries.length === 1
-          ? `${countries[0]}.`
-          : 'Multilateral decision.',
+      postureChips: [],
+      kicker: hookScene?.data?.kicker || (countries[0] || 'WORLD'),
+      headline: hookOnscreen,
+      // No subhead — viewer-facing copy is narrative, not metadata.
+      subhead: '',
+      // Small corner chip for developing/unverified — renderer
+      // displays this discreetly, NOT as the main subhead.
+      developing_corner_chip: hookScene?.developing_corner_chip || null,
     },
   });
 
@@ -295,57 +339,196 @@ function template(evidencePackage, script) {
     });
   }
 
-  const verbatim = evidencePackage.verbatim_quote;
-  const issuer = sources[0]?.issuer || null;
-  const quoteSegment = buildQuoteSegment({
-    verbatim, segments, sources, primarySource,
-    roleHint: speakerRoleFromIssuer(issuer),
-  });
-  if (quoteSegment) sequence.push(quoteSegment);
+  // Bridge phase 3 — QuoteCard removed from the default sequence.
+  // The old slot put a verbatim quote in scene 2/3 BEFORE the
+  // viewer knew who the speaker was or why the story matters.
+  // The scene planner now inlines any verbatim quote into the
+  // escalation scene, AFTER the actors are introduced.
 
-  // Geopolitics map shows two-country relations with ↔; build inline so the
-  // overlay/eyebrow can reflect both rather than the helper's "city, country"
-  // default. (The shared helper already covers single-location maps.)
-  const primaryLocation = countries[0];
-  if (primaryLocation) {
-    const secondary = countries[1] || '';
+  // Bridge phase 3 — "What happened" scene. Concrete event card.
+  // NumberCard's card shape works for any headline + claim pair; we
+  // leave the number fields empty so the layout is text-only.
+  const whatScene = sceneByPurpose.what_happened || null;
+  if (whatScene) {
     sequence.push({
-      role: 'map',
-      componentType: 'MapCallout',
-      overlayText: secondary ? `${primaryLocation} ↔ ${secondary}` : primaryLocation,
-      narration: segments.map || '',
-      durationHintSec: 4.6,
+      role: 'what_happened',
+      componentType: 'NumberCard',
+      overlayText: whatScene.onscreen_text,
+      narration: whatScene.voiceover,
+      durationHintSec: whatScene.duration_sec || 5.0,
       minDurationSec: 4.0,
-      maxDurationSec: 6.0,
-      assetClass: 'map',
-      assetNeed: { kind: 'map', geoLocation: primaryLocation },
+      maxDurationSec: 6.5,
       data: {
-        postureChips: [{ text: 'MAP CONTEXT', tone: 'accent' }],
-        eyebrow: 'WHERE',
-        city: primaryLocation,
-        country: secondary,
-        disclaimer: 'Map context. Not event footage.',
-        sourceLabel: 'Source',
-        sourceCitation: primarySource || '',
+        postureChips: [],
+        eyebrow: '',
+        primary: whatScene.onscreen_text,
+        primaryLabel: '',
+        secondary: '', secondaryLabel: '',
+        count: '', label: '',
+        claim: whatScene.data?.detail || whatScene.voiceover,
+        sourceLabel: '', sourceCitation: '',
       },
     });
   }
 
+  // Bridge phase 3 — "Who is involved" scene. Lists actors with their
+  // roles so the viewer learns the players before any quote drops in.
+  const whoScene = sceneByPurpose.who_involved || null;
+  if (whoScene) {
+    const actorLines = (whoScene.data?.actors || [])
+      .slice(0, 4)
+      .map((a) => (a.role ? `${a.name} — ${a.role}` : a.name))
+      .join('\n');
+    sequence.push({
+      role: 'who_involved',
+      componentType: 'NumberCard',
+      overlayText: whoScene.onscreen_text,
+      narration: whoScene.voiceover,
+      durationHintSec: whoScene.duration_sec || 6.0,
+      minDurationSec: 5.0,
+      maxDurationSec: 7.5,
+      data: {
+        postureChips: [],
+        eyebrow: '',
+        primary: whoScene.onscreen_text,
+        primaryLabel: '',
+        secondary: '', secondaryLabel: '',
+        count: '', label: '',
+        claim: actorLines || whoScene.voiceover,
+        sourceLabel: '', sourceCitation: '',
+      },
+    });
+  }
+
+  // Bridge phase 3 — Map scene as the geographic anchor of the
+  // story. Critically, this reads from primary_PLACES (Iran, India)
+  // not from `countries` which after deriveAngle now contains actor
+  // names ("Donald Trump", "Asim Munir"). Without this distinction
+  // the map overlay would render "Donald Trump ↔ Asim Munir" — a
+  // category error fixed here.
+  const placeNames = Array.isArray(evidencePackage._story?.primary_places)
+    ? evidencePackage._story.primary_places.map((p) => p?.name).filter(Boolean)
+    : (Array.isArray(evidencePackage._story?.primary_geos)
+      ? evidencePackage._story.primary_geos
+      : []);
+  const primaryPlace = placeNames[0] || null;
+  if (primaryPlace) {
+    const secondaryPlace = placeNames[1] || '';
+    const mapScene = sceneByPurpose.escalation || null;
+    const mapNarration = mapScene?.voiceover || segments.map || '';
+    sequence.push({
+      role: 'map',
+      componentType: 'MapCallout',
+      overlayText: secondaryPlace ? `${primaryPlace} ↔ ${secondaryPlace}` : primaryPlace,
+      narration: mapNarration,
+      durationHintSec: 4.6,
+      minDurationSec: 4.0,
+      maxDurationSec: 6.0,
+      assetClass: 'map',
+      assetNeed: { kind: 'map', geoLocation: primaryPlace },
+      data: {
+        postureChips: [],
+        eyebrow: '',
+        city: primaryPlace,
+        country: secondaryPlace,
+        disclaimer: '',
+        sourceLabel: '',
+        sourceCitation: '',
+      },
+    });
+  }
+
+  // Bridge phase 2 — TimelineCard reads the brief's meaningful events
+  // (deduped key_points paired with synth dates) instead of article
+  // publication dates that rendered as "Article" placeholders.
+  const briefTimelineEvents = brief?.timeline_events?.length > 0
+    ? brief.timeline_events
+        .filter((e) => e?.label)
+        .map((e) => ({
+          date: e.date || null,
+          label: e.label,
+          source_id: e.source_id || null,
+        }))
+    : (evidencePackage.timeline_events || []);
   const timelineSegment = buildTimelineSegment({
-    events: evidencePackage.timeline_events || [],
+    events: briefTimelineEvents,
     segments,
     primarySource,
   });
-  if (timelineSegment) sequence.push(timelineSegment);
+  if (timelineSegment) {
+    // Bridge phase 3 — connector-aware narration on timeline.
+    const tlScene = sceneByPurpose.timeline || null;
+    if (tlScene?.voiceover) {
+      timelineSegment.narration = tlScene.voiceover;
+    }
+    sequence.push(timelineSegment);
+  }
 
-  const evidenceSegment = buildEvidenceShelfSegment({
-    sources,
-    segments,
-    footer: countries.length >= 2
-      ? `Filings cover ${countries[0]} and ${countries[1]}.`
-      : 'All claims taken from public filings.',
-  });
-  if (evidenceSegment) sequence.push(evidenceSegment);
+  // Bridge phase 3 — replace the citations-heavy ending with two
+  // context scenes: "Why this matters" and "What happens next".
+  // The EvidenceShelf module is dropped from the main sequence;
+  // source attribution moves to a small caption strip in the
+  // closing scene, not its own 5-second slot.
+  const whyScene = sceneByPurpose.why_matters || null;
+  if (whyScene) {
+    sequence.push({
+      role: 'why_matters',
+      componentType: 'NumberCard',
+      overlayText: whyScene.onscreen_text,
+      narration: whyScene.voiceover,
+      durationHintSec: whyScene.duration_sec || 6.0,
+      minDurationSec: 4.5,
+      maxDurationSec: 7.5,
+      data: {
+        postureChips: [],
+        eyebrow: '',
+        primary: whyScene.onscreen_text,
+        primaryLabel: '',
+        secondary: '',
+        secondaryLabel: '',
+        count: '',
+        label: '',
+        claim: whyScene.data?.detail || whyScene.voiceover,
+        sourceLabel: '',
+        sourceCitation: '',
+      },
+    });
+  }
+
+  const nextScene = sceneByPurpose.whats_next || null;
+  if (nextScene) {
+    sequence.push({
+      role: 'whats_next',
+      componentType: 'NumberCard',
+      overlayText: nextScene.onscreen_text,
+      narration: nextScene.voiceover,
+      durationHintSec: nextScene.duration_sec || 5.0,
+      minDurationSec: 4.0,
+      maxDurationSec: 6.5,
+      data: {
+        postureChips: [],
+        eyebrow: '',
+        primary: nextScene.onscreen_text,
+        primaryLabel: '',
+        secondary: '',
+        secondaryLabel: '',
+        count: '',
+        label: '',
+        claim: nextScene.data?.detail || nextScene.voiceover,
+        sourceLabel: nextScene.source_attribution ? 'Sources' : '',
+        sourceCitation: nextScene.source_attribution || '',
+      },
+    });
+  }
+
+  // Bridge phase 3 — EvidenceShelf dropped from default sequence.
+  // Sources moved to a small strip on the "What's next" closing
+  // scene above. `buildEvidenceShelfSegment` is still imported in
+  // case future story types want a citations slate, but the
+  // default geopolitics sequence no longer ends on it.
+  void buildEvidenceShelfSegment;
+  void buildOutroSegment;
+  void buildQuoteSegment;
 
   return sequence;
 }
@@ -419,7 +602,11 @@ function detectAction(lower) {
 
 function buildHeadline({ headlineMoney, countries, action }) {
   if (headlineMoney && action) return `${headlineMoney} ${action}.`;
-  if (countries.length === 2) return `${countries[0]} vs ${countries[1]}.`;
+  // Bridge phase 1 — `countries` is now the angle's primary_actors list
+  // (post-deriveAngle). Two actors → "X ↔ Y" (not "X vs Y") which
+  // signals "conflict between" without the adversarial flavour that
+  // tripped story 170's "Iran vs India" misframe.
+  if (countries.length === 2) return `${countries[0]} ↔ ${countries[1]}.`;
   if (headlineMoney) return `${headlineMoney}.`;
   if (countries.length === 1) return `${countries[0]}.`;
   return 'World policy update.';
@@ -551,6 +738,28 @@ function computeRequiredSegments(ep) {
 function numWord(n) {
   const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
   return n >= 0 && n < words.length ? words[n] : String(n);
+}
+
+// Bridge phase 1 — map synth's editorial_posture (P1-3 closed set) to
+// the short on-screen chip text. Falls back to the legacy
+// "POLICY DECISION" only when the row predates P1-3 or the synth
+// returned a value outside the closed set.
+const POSTURE_CHIP = {
+  indictment_alleged:    'ALLEGED',
+  disclosure_official:   'OFFICIAL DISCLOSURE',
+  tally_official:        'OFFICIAL TALLY',
+  policy_decision:       'POLICY DECISION',
+  disaster_provisional:  'PROVISIONAL',
+  cultural_moment:       'ON THE RECORD',
+  breaking_developing:   'DEVELOPING',
+  analysis_explainer:    'EXPLAINER',
+};
+
+function postureChipFor(editorialPosture) {
+  if (typeof editorialPosture === 'string' && POSTURE_CHIP[editorialPosture]) {
+    return POSTURE_CHIP[editorialPosture];
+  }
+  return 'POLICY DECISION';
 }
 
 module.exports = {

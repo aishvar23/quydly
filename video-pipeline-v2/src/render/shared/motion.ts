@@ -42,9 +42,19 @@ export function useSpringIn(startFrame: number, preset: keyof typeof SPRINGS = "
   });
 }
 
-export function useCountUp(target: number, startFrame: number, durationFrames: number = BEAT.long): number {
+// Counts up to `target` over `durationFrames`, snapping to `decimals` places.
+// Default decimals=0 keeps the historical integer-only behaviour. Pass
+// decimals=2 to count up to e.g. 4.25 without flooring to 4.
+export function useCountUp(
+  target: number,
+  startFrame: number,
+  durationFrames: number = BEAT.long,
+  decimals: number = 0,
+): number {
   const progress = useBeat(startFrame, durationFrames, EASE.out);
-  return Math.round(progress * target);
+  const raw = progress * target;
+  const factor = Math.pow(10, Math.max(0, decimals));
+  return Math.round(raw * factor) / factor;
 }
 
 export function useDrawIn(startFrame: number, durationFrames: number = BEAT.short): number {

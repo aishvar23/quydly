@@ -51,17 +51,26 @@ async function main() {
   const useAI = Boolean(args['use-ai']);
   const isVerified = String(args.verified ?? 'true').toLowerCase() !== 'false';
   const dryRun = Boolean(args['dry-run-fallbacks']);
+  const storyId = args['story-id'] != null ? Number(args['story-id']) : null;
+  const minId   = args['min-id']   != null ? Number(args['min-id'])   : null;
 
   if (!process.env.MAPBOX_AUTO_GEOCODE) {
     console.warn('[batch] MAPBOX_AUTO_GEOCODE not set — off-gazetteer geos will fall back. Recommend: $env:MAPBOX_AUTO_GEOCODE = "true"');
   }
 
-  console.log(`[batch] Fetching up to ${count} stories from Supabase…`);
-  console.log(`        verified=${isVerified}  score_floor=${scoreFloor}  coherence>=${coherenceFloor}  support>=${supportFloor}  category=${categoryId || '(any)'}`);
+  if (storyId != null) {
+    console.log(`[batch] Fetching exact story id=${storyId} (audit-floor filters bypassed)…`);
+  } else {
+    console.log(`[batch] Fetching up to ${count} stories from Supabase…`);
+    console.log(`        verified=${isVerified}  score_floor=${scoreFloor}  coherence>=${coherenceFloor}  support>=${supportFloor}  category=${categoryId || '(any)'}  min_id=${minId ?? '(none)'}`);
+  }
 
   let stories;
   try {
-    stories = await fetchStories({ count, isVerified, scoreFloor, coherenceFloor, supportFloor, categoryId, random: true });
+    stories = await fetchStories({
+      count, isVerified, scoreFloor, coherenceFloor, supportFloor,
+      categoryId, storyId, minId, random: true,
+    });
   } catch (err) {
     console.error(`[batch] Supabase fetch failed: ${err.message}`);
     process.exit(1);

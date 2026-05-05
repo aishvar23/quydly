@@ -8,15 +8,18 @@ import { DossierCard } from "../modules/DossierCard";
 import { MapCallout } from "../modules/MapCallout";
 import { TimelineCard } from "../modules/TimelineCard";
 import { EvidenceShelf } from "../modules/EvidenceShelf";
+import { ImpactCard } from "../modules/ImpactCard";
 import { OutroLockup } from "../modules/OutroLockup";
 import { BrandMark } from "../shared/BrandMark";
 import { SubtitleLayer } from "../shared/SubtitleLayer";
-import { BRAND } from "../shared/brand";
+import { BRAND, SAFE } from "../shared/brand";
 import type { ComponentType, RenderModule, VideoProps } from "../shared/types";
 
 export const EvidenceVideo: React.FC<VideoProps> = ({
   modules,
   subtitles,
+  subtitleBlackouts,
+  publishedDate,
   audioSrc,
   musicSrc,
   accentColor,
@@ -42,9 +45,62 @@ export const EvidenceVideo: React.FC<VideoProps> = ({
         </Sequence>
       );
     })}
-    <SubtitleLayer subtitles={subtitles} />
+    <SubtitleLayer subtitles={subtitles} blackouts={subtitleBlackouts} />
+    {publishedDate ? <PublishedDateChrome date={publishedDate} accentColor={accentColor} /> : null}
     <BrandMark accentColor={accentColor} />
   </AbsoluteFill>
+);
+
+// Persistent top-right chip showing when the original story was published.
+// Always visible across every module so the viewer knows the temporal
+// frame they're watching.
+const PublishedDateChrome: React.FC<{ date: string; accentColor: string }> = ({
+  date, accentColor,
+}) => (
+  <div style={{
+    position: "absolute",
+    top: SAFE.top - 64,
+    right: SAFE.right,
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "8px 14px",
+    borderRadius: 6,
+    background: "rgba(255,255,255,0.06)",
+    border: `1px solid ${accentColor}55`,
+    backdropFilter: "blur(4px)",
+  }}>
+    <div style={{
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      background: accentColor,
+      boxShadow: `0 0 8px ${accentColor}99`,
+    }} />
+    <div style={{
+      fontFamily: BRAND.fontFamily,
+      fontSize: 18,
+      fontWeight: 800,
+      color: BRAND.dim,
+      letterSpacing: 1.6,
+      textTransform: "uppercase",
+    }}>
+      Published
+    </div>
+    <div style={{
+      width: 1,
+      height: 14,
+      background: "rgba(255,255,255,0.18)",
+    }} />
+    <div style={{
+      fontFamily: BRAND.fontFamily,
+      fontSize: 22,
+      fontWeight: 700,
+      color: BRAND.muted,
+    }}>
+      {date}
+    </div>
+  </div>
 );
 
 const COMPONENT_REGISTRY: Partial<
@@ -58,6 +114,7 @@ const COMPONENT_REGISTRY: Partial<
   MapCallout,
   TimelineCard,
   EvidenceShelf,
+  ImpactCard,
   OutroLockup,
 };
 

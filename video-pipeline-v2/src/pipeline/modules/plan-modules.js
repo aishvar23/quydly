@@ -57,6 +57,11 @@ function planModules({ story, evidencePackage, script, voice }) {
       narration: module.narration || '',
       assetClass: module.assetClass || 'graphic',
       assetNeed: module.assetNeed || null,
+      // When true, the subtitle layer is hidden during this module. Used
+      // for QuoteCard / NumberCard / ChargeCard where the on-card text
+      // already carries the meaning at large type and a subtitle bar would
+      // just double-paint.
+      subtitleSuppress: Boolean(module.subtitleSuppress),
       data: module.data || {},
       asset: {
         kind: module.assetClass || 'graphic',
@@ -130,6 +135,12 @@ function findNearestTime(times, index, direction) {
 
 // For each module whose role has an alignment-derived timing, set startSec
 // and durationSec on the template module. Outro pins after last voiced end.
+//
+// Two-step narration aware: when a module's spoken segment is short (e.g.
+// the QuoteCard's voiceover is a 3-second bridge but the verbatim on
+// screen needs 8 seconds to read), the alignment-derived duration would
+// crunch the card. We honour `minDurationSec` post-alignment by extending
+// the module and sliding all later modules forward.
 function applyVoiceTimings(template, script, voice) {
   const segmentTimings = buildSegmentTimings(script, voice);
   if (!Object.keys(segmentTimings).length) return template;
@@ -145,9 +156,10 @@ function applyVoiceTimings(template, script, voice) {
     voice.totalDurationSec || 0,
     ...narrated.map((m) => m.endSec),
   );
-  const outroStart = lastVoiceEnd + 0.45;
+  let outroStart = lastVoiceEnd + 0.45;
 
-  return template.map((module) => {
+  // First pass: apply voice timings + tail.
+  let timed = template.map((module) => {
     if (module.role === 'outro') {
       return {
         ...module,
@@ -166,6 +178,38 @@ function applyVoiceTimings(template, script, voice) {
       durationSec: Math.max(1.2, nextStart - timing.startSec, segmentTail - timing.startSec),
     };
   });
+
+  // Second pass: enforce minDurationSec ONLY on the FINAL narrated module
+  // (the closer). Extending interior modules and sliding later ones forward
+  // is wrong — the TTS audio doesn't shift, so the next segment's
+  // narration plays while the previous module is still on screen.
+  // Each segment's natural audio window is the source of truth for its
+  // module's duration; the AI prompts are responsible for writing
+  // narration that fills the desired visual time.
+  const orderedNarratedModules = timed
+    .map((m, idx) => ({ m, idx }))
+    .filter(({ m }) => segmentTimings[m.role])
+    .sort((a, b) => a.m.startSec - b.m.startSec);
+
+  if (orderedNarratedModules.length > 0) {
+    const last = orderedNarratedModules[orderedNarratedModules.length - 1].m;
+    const minNeeded = last.minDurationSec || 0;
+    if (minNeeded > 0 && last.durationSec < minNeeded) {
+      // Closer can extend safely — there's no later segment to compete
+      // with the audio. Outro pins after this module's new endSec.
+      last.durationSec = minNeeded;
+      outroStart = last.startSec + last.durationSec + 0.45;
+    }
+  }
+
+  // Re-pin outro start after any closer extension.
+  timed = timed.map((module) =>
+    module.role === 'outro'
+      ? { ...module, startSec: outroStart }
+      : module,
+  );
+
+  return timed;
 }
 
 function hasExactTiming(module) {

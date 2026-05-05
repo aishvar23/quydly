@@ -16,6 +16,14 @@ function prepareRenderProps(storyPackage, outputDir) {
   const audioSrc = copyAudio(storyPackage.voice?.audioPath, publicDir, jobKey);
   const musicSrc = copyMusic(storyPackage.script.story_type, publicDir, jobKey);
 
+  // Time ranges where the subtitle layer must hide. Built from the
+  // modules that flagged subtitleSuppress so QuoteCard / NumberCard
+  // / ChargeCard (which carry their meaning at large type already)
+  // don't get a subtitle bar painted over them.
+  const subtitleBlackouts = storyPackage.modules
+    .filter((m) => m.subtitleSuppress)
+    .map((m) => ({ startSec: m.startSec, endSec: m.endSec }));
+
   const props = {
     storyType: storyPackage.script.story_type,
     accentColor: getAccentColor(storyPackage.script.story_type),
@@ -25,6 +33,7 @@ function prepareRenderProps(storyPackage, outputDir) {
     musicSrc,
     brandName: 'QUYDLY',
     jobKey,
+    publishedDate: formatPublishedDate(storyPackage.story?.published_at),
     modules: storyPackage.modules.map((module) => ({
       moduleId: module.moduleId,
       role: module.role,
@@ -38,6 +47,7 @@ function prepareRenderProps(storyPackage, outputDir) {
       asset: copyModuleAsset(module.asset, module.moduleId, publicDir, jobKey),
     })),
     subtitles: storyPackage.subtitles || [],
+    subtitleBlackouts,
     evidenceSources: storyPackage.evidencePackage?.source_documents || [],
     safetyNotes: storyPackage.evidencePackage?.safety_notes || [],
   };
@@ -92,6 +102,22 @@ function copyModuleAsset(asset, moduleId, publicDir, jobKey) {
 
 function safeName(value) {
   return String(value).replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
+}
+
+// Format the story's published_at ISO date as "Mon DD, YYYY" for the
+// always-visible top-right chrome. Returns null when no publish date
+// is on the story.
+function formatPublishedDate(iso) {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  } catch (_) {
+    return null;
+  }
 }
 
 module.exports = { prepareRenderProps };
