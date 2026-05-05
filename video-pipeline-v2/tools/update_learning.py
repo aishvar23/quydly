@@ -40,8 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib.paths import (  # noqa: E402
     STAGE_ARTIFACTS,
+    display_path,
     learning_dir,
-    repo_root,
     story_artifact_path,
     story_dir,
 )
@@ -288,11 +288,14 @@ def main() -> int:
         print(f"[update_learning] write failed: {err}", file=sys.stderr)
         return 4
 
-    # Console report.
+    # Console report. Use display_path so external workspaces passed via
+    # --story-folder (outside the repo) don't crash relative_to() AFTER the
+    # index files have been appended — that would otherwise prompt the
+    # operator to retry and duplicate the rollup.
     print(f"[update_learning] rolled {len(entries)} entries from "
-          f"{learning_path.relative_to(repo_root())}")
+          f"{display_path(learning_path)}")
     print(f"[update_learning] record: "
-          f"{paths['record'].relative_to(repo_root())}")
+          f"{display_path(paths['record'])}")
 
     patch_report = _suggest_patches(learning)
     if patch_report:

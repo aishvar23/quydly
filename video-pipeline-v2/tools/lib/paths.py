@@ -81,6 +81,20 @@ def stage_schema_path(stage_key: str) -> Path | None:
     return schemas_dir() / name
 
 
+def display_path(path: Path) -> str:
+    """Format a path for log output.
+
+    Returns it relative to repo_root() when possible, else the absolute
+    path. Workspaces inside the repo print as short relative paths; external
+    workspaces passed via --story-folder (e.g. /tmp/scratch-story-215) print
+    the full path rather than crashing on Path.relative_to.
+    """
+    try:
+        return str(path.relative_to(repo_root()))
+    except ValueError:
+        return str(path)
+
+
 # --- Per-story paths --------------------------------------------------------
 
 def story_dir(story_id: int | str) -> Path:
