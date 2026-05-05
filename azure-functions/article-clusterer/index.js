@@ -12,7 +12,7 @@
 //   - Duplicate SB messages are safe: story-synthesizer is idempotent on cluster_id.
 
 import { getSupabase, getSbSender } from "../lib/clients.js";
-import { extractEntities, hasHighSignalEntity } from "../lib/nlp.js";
+import { extractEntities, hasHighSignalEntity, hasSpecificHighSignalEntity } from "../lib/nlp.js";
 import { computeClusterScore } from "../lib/scoring.js";
 import { computePrimaryGeos, computeClusterGeoScores } from "../lib/geo.js";
 import FLAGS from "../lib/flags.js";
@@ -20,6 +20,7 @@ import FLAGS from "../lib/flags.js";
 const MIN_ARTICLE_COUNT    = 2;
 const MIN_DOMAIN_COUNT     = 2;
 const MAX_CLUSTER_ENTITIES = 10;
+const MIN_SHARED_ENTITIES  = 3;       // article must share ≥3 entities with cluster to merge
 const SYNTHESIS_COOLDOWN_H = 4;       // re-enqueue only if synthesis_queued_at > 4h ago
 const ELIGIBLE_SCORE       = FLAGS.scoring.cluster.eligible;
 const BATCH_SIZE           = 2000;    // Consumption plan: 10-min max timeout
@@ -44,7 +45,11 @@ function findBestMatch(articleEntities, categoryId, candidates) {
   for (const cluster of candidates) {
     if (cluster.category_id !== categoryId) continue;
     const shared = articleEntities.filter(e => cluster.primary_entities.includes(e));
-    if (shared.length >= 2 && hasHighSignalEntity(shared) && shared.length > bestCount) {
+    if (
+      shared.length >= MIN_SHARED_ENTITIES &&
+      hasSpecificHighSignalEntity(shared) &&
+      shared.length > bestCount
+    ) {
       best      = cluster;
       bestCount = shared.length;
     }

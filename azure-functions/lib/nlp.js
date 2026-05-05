@@ -16,6 +16,20 @@ const HIGH_SIGNAL_SINGLES = new Set([
   'ai', 'ceo', 'cfo',
 ]);
 
+// Multi-word geographic regions broad enough that sharing them between two
+// articles does not imply they cover the same story. Used by the clusterer to
+// reject "high-signal" matches that are actually just region overlap (e.g.
+// "West Asia" shared between an LPG-supply story and a sailor's death).
+const BROAD_ENTITIES = new Set([
+  'west asia', 'east asia', 'south asia', 'southeast asia', 'central asia',
+  'middle east', 'far east', 'near east',
+  'north america', 'latin america', 'central america', 'south america',
+  'sub saharan africa', 'north africa', 'west africa', 'east africa',
+  'eastern europe', 'western europe', 'central europe', 'northern europe',
+  'european union',
+  'gulf war', 'cold war', 'world war',
+]);
+
 const STOP_ENTITIES = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
   'breaking', 'news', 'update', 'report', 'latest', 'exclusive', 'live',
@@ -75,4 +89,13 @@ export function extractEntities(text) {
 
 export function hasHighSignalEntity(entities) {
   return entities.some(e => e.includes(' ') || HIGH_SIGNAL_SINGLES.has(e));
+}
+
+// Stricter variant used by the clusterer when deciding whether two articles
+// belong to the same cluster. Excludes broad regions so that overlap on
+// "west asia" alone is no longer enough to anchor a match.
+export function hasSpecificHighSignalEntity(entities) {
+  return entities.some(
+    e => (e.includes(' ') || HIGH_SIGNAL_SINGLES.has(e)) && !BROAD_ENTITIES.has(e),
+  );
 }
