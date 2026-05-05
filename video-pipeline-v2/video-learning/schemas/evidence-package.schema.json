@@ -1,0 +1,185 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quydly.com/video-learning/schemas/evidence-package.schema.json",
+  "title": "Evidence package (stage 2)",
+  "description": "The cite-able universe the script may draw from, plus the publishability decision. Anything the script later asserts must trace back to a key_fact or numeric_fact here. status='insufficient' ends the flow at stage 2.",
+  "x-pipeline": {
+    "stage": 2,
+    "produced_by": "video-learning/prompts/02-evidence-package.md",
+    "consumed_by": [
+      "stage 3 — the only facts the script may cite; trailing <!-- src: --> comments resolve to ids here",
+      "stage 4 — module evidence_ref values must come from key_facts or numeric_facts source_ids",
+      "stage 5 — C2 verifies <!-- src: --> ids resolve here; C3 enforces single-source attribution; C21 verifies numeric_fact_ref resolves",
+      "stage 7 — quote modules render only for quotes verbatim from this artifact",
+      "stage 8 — failure-class entries trace back to fields here when the failure is sourcing/*"
+    ],
+    "validate_with": "python tools/validate_artifact.py --story-id <id> --stage evidence",
+    "example": "video-learning/schemas/examples/evidence-package.example.json"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["story_id", "status"],
+  "properties": {
+    "story_id": {
+      "description": "Mirrors the workspace folder name.",
+      "type": ["integer", "string"]
+    },
+    "status": {
+      "description": "Publishability gate. 'ok' continues to stage 3. 'insufficient' stops the flow; the runner writes _blockers.md and produces only stage 8.",
+      "type": "string",
+      "enum": ["ok", "insufficient"]
+    },
+    "reason": {
+      "description": "Required when status='insufficient'. One-paragraph explanation of which gate fired and which field on story.row triggered it.",
+      "type": "string"
+    },
+    "key_facts": {
+      "description": "Short declarative facts the script may assert. Each cites at least one source_id. Aim for 5–10 entries.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "source_ids"],
+        "properties": {
+          "text": {
+            "description": "One short declarative — no compound sentences with 'and'.",
+            "type": "string",
+            "minLength": 5
+          },
+          "source_ids": {
+            "description": "Ids from story.row.source_documents[] that carry this fact. At least one.",
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "entity_ids": {
+            "description": "Optional links to ids in story.row.primary_entities_enriched.",
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "numeric_facts": {
+      "description": "Every figure the script may say. Pulled from story.row.structured_numbers first; verified against source documents.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "value", "unit", "as_of", "source_ids"],
+        "properties": {
+          "id": {
+            "description": "Stable short id (e.g. 'fed_rate', 'casualty_total'). Referenced by module-plan numeric_fact_ref.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Exact value from the source. Do not round unless the rounded value is also present as a separate entry with context='rounded for narration'.",
+            "type": ["number", "string"]
+          },
+          "unit": {
+            "description": "Mandatory and explicit ('%', '$', 'basis_points', 'killed_24h').",
+            "type": "string"
+          },
+          "as_of": {
+            "description": "ISO date or session reference. Mandatory.",
+            "type": "string"
+          },
+          "source_ids": {
+            "description": "Sources carrying this exact value. Single-source numbers trigger the stage-5 attribution rule.",
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "context": {
+            "description": "Optional comparator window or qualifier ('single-day move', 'YTD', 'rounded for narration').",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "quotes": {
+      "description": "Verbatim quotes only. Empty array is fine. A paraphrase rendered here as a quote is a sourcing/paraphrase failure (playbook §2).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "speaker", "source_id"],
+        "properties": {
+          "text": {
+            "description": "Verbatim quote text, no paraphrase.",
+            "type": "string",
+            "minLength": 5
+          },
+          "speaker": { "type": "string" },
+          "role": { "type": "string" },
+          "source_id": { "type": "string" }
+        }
+      }
+    },
+    "factual_conflicts": {
+      "description": "Mirror of story.row.factual_conflicts in the schema's shape. Conflicts surface; they are never resolved by picking a side.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["topic", "positions"],
+        "properties": {
+          "topic": {
+            "description": "Short label for the conflict ('casualty count', 'settlement amount').",
+            "type": "string"
+          },
+          "positions": {
+            "description": "At least two positions, each with the claim and its supporting source_ids.",
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["claim", "source_ids"],
+              "properties": {
+                "claim": { "type": "string" },
+                "source_ids": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "source_diversity": {
+      "description": "Mirror of story.row.source_diversity_score and source_diversity_label, or null on pre-migration rows.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["score", "label"],
+          "properties": {
+            "score": {
+              "description": "Numeric diversity score from the synthesizer.",
+              "type": "number"
+            },
+            "label": {
+              "description": "Bucketed label. EvidenceShelf copy varies by bucket.",
+              "type": "string",
+              "enum": ["single", "narrow", "diverse"]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "description": "When status='insufficient', the reason field is mandatory.",
+      "if": { "properties": { "status": { "const": "insufficient" } } },
+      "then": { "required": ["reason"] }
+    },
+    {
+      "description": "When status='ok', the script-feeding fields are mandatory.",
+      "if": { "properties": { "status": { "const": "ok" } } },
+      "then": { "required": ["key_facts", "factual_conflicts"] }
+    }
+  ]
+}

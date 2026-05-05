@@ -1,0 +1,75 @@
+{
+  "story_id": 999,
+  "status": "ok",
+  "key_facts": [
+    {
+      "text": "The FOMC voted to maintain the federal funds target range at 4.25–4.50% on April 30.",
+      "source_ids": ["doc-001", "doc-002"],
+      "entity_ids": ["ent-fomc"]
+    },
+    {
+      "text": "This is the fifth consecutive meeting at which the Committee has held rates steady.",
+      "source_ids": ["doc-001"]
+    },
+    {
+      "text": "The statement removed the prior reference to 'progress toward the Committee's inflation goal'.",
+      "source_ids": ["doc-001"],
+      "entity_ids": ["ent-fomc"]
+    },
+    {
+      "text": "Street consensus prior to the meeting priced a 62% probability of a 25-basis-point cut.",
+      "source_ids": ["doc-003", "doc-004"]
+    },
+    {
+      "text": "Chair Powell signalled the Committee is in 'no hurry' to adjust policy at the press conference.",
+      "source_ids": ["doc-002"],
+      "entity_ids": ["ent-powell"]
+    }
+  ],
+  "numeric_facts": [
+    {
+      "id": "fed_target_top",
+      "value": 4.50,
+      "unit": "%",
+      "as_of": "2026-04-30",
+      "source_ids": ["doc-001"],
+      "context": "top of target range"
+    },
+    {
+      "id": "fed_target_bottom",
+      "value": 4.25,
+      "unit": "%",
+      "as_of": "2026-04-30",
+      "source_ids": ["doc-001"],
+      "context": "bottom of target range"
+    },
+    {
+      "id": "consecutive_holds",
+      "value": 5,
+      "unit": "meetings",
+      "as_of": "2026-04-30",
+      "source_ids": ["doc-001"]
+    },
+    {
+      "id": "cut_priced_pre",
+      "value": 62,
+      "unit": "%",
+      "as_of": "2026-04-29",
+      "source_ids": ["doc-003"],
+      "context": "CME FedWatch implied probability of 25bp cut, evening before"
+    }
+  ],
+  "quotes": [
+    {
+      "text": "We are in no hurry to adjust the stance of policy.",
+      "speaker": "Jerome Powell",
+      "role": "Chair, Federal Reserve",
+      "source_id": "doc-002"
+    }
+  ],
+  "factual_conflicts": [],
+  "source_diversity": {
+    "score": 0.78,
+    "label": "diverse"
+  }
+}

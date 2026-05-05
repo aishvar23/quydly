@@ -1,0 +1,152 @@
+"""Deterministic story_type inference.
+
+Mirrors the "Pick by walking these checks in order. Stop at the first
+match." rule from `video-learning/prompts/01-story-understanding.md`.
+
+This is intentionally rule-based, not LLM-based: the prepare step needs
+a stable answer so the same story always lands in the same template.
+Claude can override at stage 1 if the inference was wrong — this is a
+seed, not a verdict.
+
+Returns one of: legal-scandal, geopolitics, finance, conflict, policy,
+tech, or "unknown".
+
+Schemas this knows about:
+    legal-scandal, geopolitics, finance, tech     — templates exist
+    conflict, policy                              — templates do not exist yet;
+                                                    inference still returns the
+                                                    right answer so the operator
+                                                    knows what to add
+"""
+from __future__ import annotations
+
+from typing import Any
+
+
+# Bodies whose presence in primary_entities signals a legal-scandal story.
+_LEGAL_BODIES = {
+    "doj", "department of justice",
+    "sec", "securities and exchange commission",
+    "ftc", "federal trade commission",
+    "cftc",
+    "usao", "u.s. attorney",
+    "sdny", "edny", "ndca", "dc district court",
+    "european commission",  # antitrust enforcement
+    "european court of justice",
+}
+
+# Tokens whose presence in primary_entities or category signals tech.
+_TECH_TOKENS = {
+    "openai", "anthropic", "google deepmind", "meta ai", "microsoft",
+    "apple", "nvidia", "amd", "intel", "tsmc", "samsung",
+    "cloudflare", "amazon web services", "aws", "azure", "gcp",
+}
+
+# Bodies whose presence signals policy (regulator / legislature / court).
+_POLICY_BODIES = {
+    "fcc", "epa", "fda", "fhfa", "cdc", "nhtsa",
+    "house of representatives", "senate", "congress",
+    "supreme court", "federal judge", "circuit court",
+    "european parliament", "european council",
+}
+
+
+def _lower_strs(values: Any) -> list[str]:
+    """Pull strings from primary_entities, primary_entities_enriched, or
+    raw lists; lowercase for matching. Tolerates missing / malformed
+    fields — the seed should never crash on a synth-side schema dip."""
+    out: list[str] = []
+    if not values:
+        return out
+    for item in values:
+        if isinstance(item, str):
+            out.append(item.lower())
+        elif isinstance(item, dict):
+            name = item.get("name") or item.get("entity") or ""
+            if isinstance(name, str) and name:
+                out.append(name.lower())
+    return out
+
+
+def _entities_contain(row: dict[str, Any], tokens: set[str]) -> bool:
+    """Case-insensitive presence test across primary_entities and
+    primary_entities_enriched."""
+    haystack = (
+        _lower_strs(row.get("primary_entities"))
+        + _lower_strs(row.get("primary_entities_enriched"))
+    )
+    blob = " | ".join(haystack)
+    return any(token in blob for token in tokens)
+
+
+def _has_casualty_signal(row: dict[str, Any]) -> bool:
+    """Casualty stories carry explicit casualty fields or units in
+    structured_numbers. We're conservative — false negatives here are
+    fine because the operator can correct."""
+    posture = (row.get("editorial_posture") or "").lower()
+    if posture == "tally_official":
+        # Combined with a military / casualty signal in key_points.
+        kp = " ".join(row.get("key_points") or []).lower()
+        if any(w in kp for w in ("killed", "wounded", "casualt", "strike", "shelling")):
+            return True
+    nums = row.get("structured_numbers") or {}
+    if isinstance(nums, dict):
+        # structured_numbers is a payload with known sub-keys; check the
+        # casualty-bearing one if present.
+        casualties = nums.get("casualties") or nums.get("killed") or []
+        if casualties:
+            return True
+    return False
+
+
+def infer_story_type(row: dict[str, Any]) -> str:
+    """Walk the rule set. Stop at first match. Return 'unknown' if no
+    rule fires — caller should escalate, not pick a default."""
+    posture = (row.get("editorial_posture") or "").lower()
+    category = (row.get("category_id") or "").lower()
+
+    # 1. Legal-scandal: regulator/prosecutor in entities, charging or
+    #    enforcement-style posture.
+    if _entities_contain(row, _LEGAL_BODIES):
+        kp = " ".join(row.get("key_points") or []).lower()
+        legal_words = ("charged", "indicted", "convicted", "settled",
+                       "pleaded", "fined", "sentenced", "lawsuit", "complaint")
+        if any(w in kp for w in legal_words):
+            return "legal-scandal"
+
+    # 2. Conflict: tally_official + casualty signal, OR breaking_developing
+    #    with casualty signal.
+    if _has_casualty_signal(row):
+        return "conflict"
+
+    # 3. Policy: regulator / legislature / court entity AND posture
+    #    indicates a rule change / ruling.
+    if _entities_contain(row, _POLICY_BODIES):
+        if posture == "policy_move":
+            return "policy"
+        kp = " ".join(row.get("key_points") or []).lower()
+        if any(w in kp for w in ("ruled", "approved", "voted", "rule", "regulation")):
+            return "policy"
+
+    # 4. Tech: tech category OR named tech vendor.
+    if category in {"tech", "business/tech"} or _entities_contain(row, _TECH_TOKENS):
+        return "tech"
+
+    # 5. Finance: market_move posture, OR a number with a financial unit
+    #    in structured_numbers (price / percentage / basis_points).
+    if posture == "market_move":
+        return "finance"
+    nums = row.get("structured_numbers") or {}
+    if isinstance(nums, dict):
+        money = nums.get("money") or []
+        pcts = nums.get("percentages") or []
+        if money or pcts:
+            return "finance"
+
+    # 6. Geopolitics: world category with state-level entities.
+    if category == "world":
+        # If we got here, none of the more specific rules fired. Treat as
+        # geopolitics provisionally.
+        return "geopolitics"
+
+    return "unknown"

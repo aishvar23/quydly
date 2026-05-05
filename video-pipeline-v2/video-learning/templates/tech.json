@@ -1,0 +1,265 @@
+{
+  "type": "tech",
+  "version": "1.0.0",
+  "summary": "Product launches, model releases, security incidents, platform changes, outages, and earnings-driven product news. The story is the product / model / incident itself, not the share-price reaction.",
+  "fits_when": [
+    "category_id is 'tech' or 'business/tech'",
+    "primary_entities includes a software vendor, hardware vendor, model publisher, platform operator, or security researcher",
+    "the news is a product / model / incident; market reaction is secondary"
+  ],
+  "fits_poorly_when": [
+    "the load-bearing claim is the share-price move (use finance)",
+    "the news is a regulator's rule about tech (use policy)",
+    "the news is a state-level export ban or sanctions on tech (use geopolitics)"
+  ],
+
+  "vendor_independence_rules": {
+    "vendor_benchmarks_are_not_independent": "spec figures from a vendor's own launch page must be attributed to the vendor, never rendered as third-party fact",
+    "ga_vs_beta_vs_preview": "always name the release stage; 'GA', 'beta', 'developer preview', 'limited rollout' are different stories",
+    "scope_claims_for_outages": "outage scope figures (% of internet, % of users) require a measurement source — Cloudflare Radar, Downdetector aggregates, the platform's own status page",
+    "model_capability_claims": "benchmark numbers must cite the benchmark name AND who ran it (vendor, third-party lab, paper)"
+  },
+
+  "module_sequence": {
+    "preferred_count": 5,
+    "min_count": 4,
+    "max_count": 6,
+    "required_kinds_in_order": ["hook", "stakes", "evidence", "close"],
+    "preferred_pattern": [
+      { "kind": "hook", "duration_sec_target": 3.0, "describes": "vendor + ship/incident + delta" },
+      { "kind": "stakes", "duration_sec_target": 6.0, "describes": "named developer / customer audience with a count" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the spec or capability change with attribution" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the comparison vs prior version, peer model, or industry baseline" },
+      { "kind": "close", "duration_sec_target": 7.0, "describes": "rollout window, deprecation date, or next milestone" }
+    ],
+    "notes": [
+      "Data modules are common — most tech stories have a benchmark, context window, throughput figure, or pricing point.",
+      "Quote modules from a vendor's launch keynote are valuable when transcribed verbatim in 02_evidence.quotes.",
+      "Map modules are rare; only useful for geographic outage maps or rollout-region stories."
+    ]
+  },
+
+  "visual_classes": {
+    "preferred_in_order": ["data", "mute", "photo"],
+    "asset_hint_policy": {
+      "data": "the workhorse for tech — benchmarks, context windows, throughput, pricing all become data modules",
+      "mute": "use when the spoken claim is the asset (e.g., a strategic decision, a deprecation announcement)",
+      "photo": "permitted when 02_evidence references an official product image from the vendor's press kit; never stock 'person using laptop' imagery",
+      "map": "only for geographic outage maps or regional rollout charts; rare"
+    },
+    "default_when_uncertain": "data"
+  },
+
+  "banned_visual_patterns": [
+    {
+      "pattern": "Stock 'person typing on laptop' / 'glowing AI brain' / 'data streams' imagery",
+      "why": "Generic; reduces credibility; visual-safety identity-implication risk for AI-face stocks",
+      "fix": "Data module with the actual benchmark or spec"
+    },
+    {
+      "pattern": "Vendor logo filling the frame",
+      "why": "Reads as advertising; primary asset should be the spec or the chart",
+      "fix": "Logo permitted as L3 chip; data is the primary asset"
+    },
+    {
+      "pattern": "Animated code / 'Matrix' green-on-black overlays",
+      "why": "Filler; reduces seriousness; dates the video stylistically",
+      "fix": "Mute or data"
+    },
+    {
+      "pattern": "Cropped CEO headshot for keynote announcement",
+      "why": "Personality-coverage when the story is the product",
+      "fix": "Photo only when 02_evidence explicitly references a press-kit keynote photo with the CEO as the named subject; otherwise data or mute"
+    },
+    {
+      "pattern": "Generic 'AI face' imagery for an AI / model story",
+      "why": "Identity-implication blocker; suggests anthropomorphism that the evidence doesn't support",
+      "fix": "Data module with benchmarks or context window numbers"
+    },
+    {
+      "pattern": "Marketing-hero shot of a phone/laptop with the launch keynote backdrop",
+      "why": "Vendor-controlled imagery presented as fact",
+      "fix": "Permitted if attributed via L3 chip ('Apple keynote · Sept 9'); otherwise data or mute"
+    }
+  ],
+
+  "evidence_priorities": {
+    "lead_with": [
+      "the vendor's own announcement / model card / launch page (attributed)",
+      "the post-mortem or status page for outages",
+      "the security advisory / CVE record for vulnerabilities",
+      "the third-party benchmark paper / lab report"
+    ],
+    "second_tier": [
+      "Verge / Ars Technica / Bloomberg reporting that quotes the vendor",
+      "GitHub release notes for open-source projects",
+      "App-store or Play-store listings for app changes"
+    ],
+    "treat_with_caution": [
+      "vendor benchmarks — quote, but always attribute ('per Apple's M5 launch page')",
+      "anonymous engineers / 'people familiar with' on roadmap leaks",
+      "tweets unless from official vendor accounts"
+    ],
+    "must_cite_explicitly": [
+      "every benchmark number (and which benchmark)",
+      "every spec — context window size, parameter count, throughput, price-per-token",
+      "every release stage (GA, beta, preview, internal)",
+      "every CVE / advisory id"
+    ]
+  },
+
+  "hook_guidance": {
+    "patterns": [
+      {
+        "name": "ship-with-delta",
+        "shape": "<vendor> shipped <product/model> on <day>, <delta-vs-prior>.",
+        "example": "OpenAI shipped GPT-5 on Wednesday, raising the API context limit from 128k to 1M tokens."
+      },
+      {
+        "name": "outage-scope",
+        "shape": "<vendor>'s <service> took <scope> offline at <UTC time>; the company restored service in <window>.",
+        "example": "Cloudflare's edge briefly took 23% of the public internet offline at 14:17 UTC; the company restored service in 38 minutes."
+      },
+      {
+        "name": "platform-policy-change",
+        "shape": "<vendor> removed <feature> from <product line> on <day>, ending a <duration> run.",
+        "example": "Apple removed the Lightning port from the entire iPad lineup on Tuesday, ending a 13-year run."
+      },
+      {
+        "name": "security-incident",
+        "shape": "<vendor> disclosed a <CVE class> in <product>; <scope> exposed before <patch-window>.",
+        "example": "Microsoft disclosed an authentication-bypass flaw in Exchange Server; CVE-2025-12345, exposed for 11 days before the patch."
+      },
+      {
+        "name": "model-benchmark",
+        "shape": "<vendor>'s <model> scored <result> on <benchmark>, <delta-vs-prior-or-peer>.",
+        "example": "Anthropic's Claude 4.7 scored 78.3% on SWE-bench Verified, up 12.4 points from 4.6."
+      }
+    ],
+    "first_4_words_must_contain": [
+      "the vendor proper name (Apple, Microsoft, OpenAI, Cloudflare, Anthropic)",
+      "OR a model / product proper name (GPT-5, Claude 4.7, Llama 4)"
+    ],
+    "banned_constructions": [
+      "questions ('Will this AI model change everything?')",
+      "hedges ('could revolutionise', 'may disrupt')",
+      "moralisers ('revolutionary', 'game-changing', 'next-gen', 'mind-blowing')",
+      "vague populations ('everyone', 'the tech world')",
+      "'Big news for tech today...' generic openers"
+    ],
+    "examples": {
+      "good": [
+        "OpenAI shipped GPT-5 on Wednesday, raising the API context limit from 128k to 1M tokens.",
+        "Cloudflare's edge briefly took 23% of the public internet offline at 14:17 UTC.",
+        "Apple removed the Lightning port from the entire iPad lineup on Tuesday."
+      ],
+      "bad": [
+        "Could this be the AI model that changes everything?",
+        "Big news for the tech world today.",
+        "OpenAI just released a revolutionary new model.",
+        "Game-changing AI capabilities have arrived."
+      ]
+    }
+  },
+
+  "subtitle_guidance": {
+    "L1_role": "the spec delta or incident scope",
+    "L1_examples": ["GPT-5 · 128K → 1M", "23% INTERNET OFFLINE", "LIGHTNING REMOVED", "+12.4 pts SWE-BENCH"],
+    "L1_rules": [
+      "model / product name leads",
+      "use → for spec changes",
+      "uppercase the action verb",
+      "max 10 words"
+    ],
+    "L2_role": "release stage / time qualifier",
+    "L2_examples": ["GA · API only · Wednesday", "14:17 UTC · 38 min outage", "Sept 9 keynote · ships Oct 14"],
+    "L2_rules": [
+      "always include release stage (GA, beta, preview)",
+      "always include the time of an incident or rollout date"
+    ],
+    "L3_role": "source attribution",
+    "L3_examples": ["OpenAI launch post", "Cloudflare Radar", "Apple keynote", "SWE-bench leaderboard"],
+    "L3_rules": [
+      "name the source — vendor page, status page, benchmark, advisory",
+      "for vendor-published claims, L3 must say so ('per Apple', 'OpenAI claims')"
+    ],
+    "type_specific_rules": [
+      "Model names use vendor capitalisation (GPT-5, Claude 4.7, Gemini 2.5).",
+      "Benchmark names use the benchmark's canonical capitalisation (SWE-bench, MMLU, HellaSwag).",
+      "Spec deltas use → not 'to' in subtitles ('128K → 1M' not '128K to 1M').",
+      "CVE ids appear in L3 in canonical form (CVE-2025-12345)."
+    ]
+  },
+
+  "module_selection_hints": {
+    "include_data_when": "ANY benchmark, spec, throughput, price, context window, or scope figure — most tech stories",
+    "include_quote_when": "02_evidence.quotes has a verbatim line from the vendor's launch keynote, blog post, or security advisory",
+    "include_map_when": "outage has a regional dimension OR rollout is staged geographically; otherwise skip",
+    "max_evidence_modules": 3,
+    "stakes_module_must_name": "the developer / customer audience with a count ('the 4 million developers on the API', '1.2 billion iPad owners', '23% of internet routes')"
+  },
+
+  "anti_patterns": [
+    {
+      "pattern": "Vendor benchmark rendered as third-party fact",
+      "shape": "Hook says 'the fastest model ever' citing only the vendor's launch page",
+      "why": "Vendor benchmarks aren't independent; this is brand copy in a news frame",
+      "fix": "Attribute: 'per OpenAI's launch page' / 'Anthropic claims' / 'Apple's own benchmarks'"
+    },
+    {
+      "pattern": "Banned moralisers 'revolutionary' / 'game-changing' / 'next-gen'",
+      "shape": "Hook or stakes uses one of these adjectives",
+      "why": "Banned by playbook §1.4 and tech-type rules",
+      "fix": "State the spec delta numerically: '128K → 1M context', '+12.4 pts vs prior'"
+    },
+    {
+      "pattern": "Confusing beta with GA",
+      "shape": "'OpenAI launched GPT-5 today' when only a research preview is available",
+      "why": "Misrepresents availability; downstream credibility hit",
+      "fix": "Always name the release stage in the script and L2 ('research preview · API only · waitlist')"
+    },
+    {
+      "pattern": "Outage scope claim with no measurement source",
+      "shape": "'Took half the internet down' with no Cloudflare Radar / Downdetector / status-page citation",
+      "why": "Single-source / unsourced scope is a sourcing failure",
+      "fix": "Cite the measurement: 'per Cloudflare Radar', 'per Downdetector aggregate spike'"
+    },
+    {
+      "pattern": "'Person using laptop' stock imagery for tech stories",
+      "shape": "Photo asset is generic stock",
+      "why": "Says nothing about the specific story; identity-implication risk",
+      "fix": "Data module with the spec / benchmark"
+    },
+    {
+      "pattern": "Personifying AI models",
+      "shape": "Stakes says 'the model thinks / believes / wants'",
+      "why": "Anthropomorphism the evidence doesn't support",
+      "fix": "State capability: 'the model now handles 1M tokens', 'the model scored 78.3% on SWE-bench'"
+    },
+    {
+      "pattern": "Close that promises future hype",
+      "shape": "'And this is just the beginning of the AI revolution'",
+      "why": "Vague forward speculation; banned",
+      "fix": "Close anchors on a concrete date: 'public rollout begins November 14', 'deprecation deadline March 31', 'next benchmark drop December 5'"
+    },
+    {
+      "pattern": "Citing a tweet as primary source",
+      "shape": "Evidence module attributes to '@vendor on X'",
+      "why": "Tweets are not primary unless they are the official disclosure (rare for outages)",
+      "fix": "Cite the official launch post, status-page entry, or model card; tweets are L3-tier sourcing only when they ARE the disclosure"
+    }
+  ],
+
+  "stage_2_extra_checks": [
+    "verify every benchmark number names the benchmark (which one) AND who ran it (vendor / third-party)",
+    "verify every release-stage claim has a source (vendor page, status page, advisory)",
+    "verify outage-scope claims trace to a measurement source, not just wire reporting"
+  ],
+
+  "stage_5_extra_checks": [
+    "scan 03_script.md for banned moralisers: revolutionary, game-changing, next-gen, mind-blowing, paradigm-shift",
+    "verify every benchmark figure has both the benchmark name and 'per <vendor / lab>' attribution in the script",
+    "verify release stage is named in script (GA, beta, preview, limited rollout) — not just 'launched'",
+    "verify close anchors on a concrete date or milestone"
+  ]
+}

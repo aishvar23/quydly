@@ -1,0 +1,65 @@
+{
+  "story_id": 999,
+  "story_type": "finance",
+  "total_duration_sec": 64.0,
+  "modules": [
+    {
+      "kind": "hook",
+      "text": "The Fed held rates at 4.50% for a fifth consecutive meeting.",
+      "duration_sec": 3.5,
+      "evidence_ref": ["doc-001"],
+      "asset_hint": "data",
+      "numeric_fact_ref": "fed_target_top"
+    },
+    {
+      "kind": "stakes",
+      "text": "For the 30 million U.S. households on adjustable-rate mortgages, today's hold extends a 19-month plateau in monthly payments.",
+      "duration_sec": 7.0,
+      "evidence_ref": ["doc-001", "doc-005"],
+      "asset_hint": "data",
+      "numeric_fact_ref": "consecutive_holds"
+    },
+    {
+      "kind": "evidence",
+      "text": "The vote came against street consensus, which had priced a 62% probability of a 25-basis-point cut the evening before, per CME FedWatch.",
+      "duration_sec": 11.0,
+      "evidence_ref": ["doc-003", "doc-004"],
+      "asset_hint": "data",
+      "numeric_fact_ref": "cut_priced_pre"
+    },
+    {
+      "kind": "evidence",
+      "text": "The post-meeting statement removed the prior reference to progress toward the Committee's inflation goal.",
+      "duration_sec": 11.5,
+      "evidence_ref": ["doc-001"],
+      "asset_hint": "mute",
+      "numeric_fact_ref": null
+    },
+    {
+      "kind": "quote",
+      "text": "We are in no hurry to adjust the stance of policy.",
+      "duration_sec": 7.0,
+      "evidence_ref": ["doc-002"],
+      "asset_hint": "mute",
+      "numeric_fact_ref": null,
+      "speaker": "Jerome Powell",
+      "speaker_role": "Chair, Federal Reserve"
+    },
+    {
+      "kind": "evidence",
+      "text": "Two-year Treasury yields jumped 11 basis points to 4.42% in the hour after the decision.",
+      "duration_sec": 11.0,
+      "evidence_ref": ["doc-006"],
+      "asset_hint": "data",
+      "numeric_fact_ref": null
+    },
+    {
+      "kind": "close",
+      "text": "The next FOMC decision drops June 17; minutes from today's meeting land May 21.",
+      "duration_sec": 13.0,
+      "evidence_ref": [],
+      "asset_hint": "mute",
+      "numeric_fact_ref": null
+    }
+  ]
+}

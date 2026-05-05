@@ -1,0 +1,248 @@
+{
+  "type": "legal-scandal",
+  "version": "1.0.0",
+  "summary": "Indictments, convictions, plea deals, sentencing, regulatory enforcement actions, and corporate misconduct cases. The story is the legal action itself, not the political fallout.",
+  "fits_when": [
+    "primary_entities includes a named defendant, prosecutor's office, court, or enforcement body",
+    "row.factual_conflicts is empty OR conflicts only on penalties (not on whether charges exist)",
+    "editorial_posture is 'breaking_developing' or 'tally_official'",
+    "key_points include a charging/sentencing/settlement event"
+  ],
+  "fits_poorly_when": [
+    "story is about political reaction to a case (use geopolitics or policy)",
+    "story is about market impact of a settlement (use finance)",
+    "case is rumored / unsourced — gates at stage 2 as 'insufficient'"
+  ],
+
+  "legal_precision_rules": {
+    "must_distinguish": ["charged", "indicted", "convicted", "settled", "pleaded guilty", "acquitted", "alleged"],
+    "never_substitute": [
+      { "wrong": "guilty", "right": "convicted (after verdict) | pleaded guilty (after plea)" },
+      { "wrong": "criminal", "right": "indicted on <count> charges" },
+      { "wrong": "found guilty of fraud", "right": "convicted on <n> counts of <statute>" }
+    ],
+    "attribution_required_for": [
+      "any specific count or statute",
+      "any sentencing figure",
+      "any settlement dollar amount",
+      "any quote from filings"
+    ]
+  },
+
+  "module_sequence": {
+    "preferred_count": 5,
+    "min_count": 4,
+    "max_count": 6,
+    "required_kinds_in_order": ["hook", "stakes", "evidence", "close"],
+    "preferred_pattern": [
+      { "kind": "hook", "duration_sec_target": 3.0 },
+      { "kind": "stakes", "duration_sec_target": 6.0, "describes": "what specifically is at stake — a sentence, a fine ceiling, an industry effect" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "what the filing alleges (the count or charge)" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the supporting fact (a number, a date, an action)" },
+      { "kind": "quote", "duration_sec_target": 7.0, "describes": "verbatim from the filing or an official statement", "include_when": "02_evidence.quotes has a verbatim filing/official quote" },
+      { "kind": "close", "duration_sec_target": 7.0, "describes": "next procedural date — sentencing, hearing, response deadline" }
+    ],
+    "notes": [
+      "Quote module is preferred when a filing or DOJ statement is in 02_evidence.quotes — case copy is always stronger than paraphrase.",
+      "Map module is rarely useful for legal-scandal; only include if the case has a clear geographic anchor (cross-border fraud, multi-district indictment)."
+    ]
+  },
+
+  "visual_classes": {
+    "preferred_in_order": ["data", "mute", "map"],
+    "asset_hint_policy": {
+      "data": "use for any module asserting a count, dollar figure, or sentencing range; reference the numeric_fact_id",
+      "mute": "default; use when the spoken claim is the asset",
+      "map": "only when the case spans named jurisdictions (e.g., multi-district indictment); requires labels",
+      "photo": "PROHIBITED for legal-scandal modules — see banned_visual_patterns"
+    },
+    "default_when_uncertain": "mute"
+  },
+
+  "banned_visual_patterns": [
+    {
+      "pattern": "Mugshot or perp-walk imagery of a defendant",
+      "why": "Implies guilt before adjudication and is editorial posturing",
+      "fix": "Use data module with the count list, or mute"
+    },
+    {
+      "pattern": "Dramatic courthouse exterior with red color overlay",
+      "why": "Editorialises by visual association",
+      "fix": "Use a labelled jurisdiction map only if multi-district; otherwise mute"
+    },
+    {
+      "pattern": "Stock photo of a person in handcuffs",
+      "why": "Generic stock implies a specific identity; visual-safety/identity-implication blocker",
+      "fix": "Mute"
+    },
+    {
+      "pattern": "Logo of the defendant company filling the frame",
+      "why": "Reads as brand attack rather than reporting on the case",
+      "fix": "Logo permitted as L3 attribution only; not as primary asset"
+    },
+    {
+      "pattern": "Animated gavel / scales-of-justice icon",
+      "why": "Filler; reduces perceived seriousness",
+      "fix": "Data or mute"
+    }
+  ],
+
+  "evidence_priorities": {
+    "lead_with": [
+      "the charging document or filed complaint",
+      "the official statement from the prosecutor's office",
+      "the court docket entry",
+      "the regulatory press release"
+    ],
+    "second_tier": [
+      "Reuters / AP / FT wire reporting that quotes the filing",
+      "the defendant's own statement or response"
+    ],
+    "treat_with_caution": [
+      "anonymous sources",
+      "competitor commentary",
+      "social media posts unless from the official body's account"
+    ],
+    "must_cite_explicitly": [
+      "every count number ('17 counts of wire fraud')",
+      "every statute ('18 U.S.C. § 1343')",
+      "every sentencing or settlement dollar figure",
+      "every plea status"
+    ]
+  },
+
+  "hook_guidance": {
+    "patterns": [
+      {
+        "name": "indictment",
+        "shape": "<DOJ/SDNY/SEC> charged <defendant> with <count summary> on <date>.",
+        "example": "The SDNY charged Sam Bankman-Fried with seven counts of wire fraud and conspiracy on Tuesday."
+      },
+      {
+        "name": "verdict",
+        "shape": "<defendant> was convicted on <n> of <m> counts in <court> on <date>.",
+        "example": "Elizabeth Holmes was convicted on 4 of 11 counts in San Jose federal court."
+      },
+      {
+        "name": "settlement",
+        "shape": "<company> agreed to pay $<amount> to settle <body>'s <case-type>.",
+        "example": "Meta agreed to pay $1.4 billion to settle Texas's facial-recognition lawsuit."
+      },
+      {
+        "name": "sentencing",
+        "shape": "<defendant> was sentenced to <term> in <court> on <date>.",
+        "example": "Elizabeth Holmes was sentenced to 11 years and 3 months in federal prison."
+      }
+    ],
+    "first_4_words_must_contain": [
+      "the body bringing the action (DOJ, SEC, SDNY, FTC, EU Commission)",
+      "OR the defendant's proper name"
+    ],
+    "banned_constructions": [
+      "questions ('Will the case stick?')",
+      "hedges ('could face years')",
+      "moralisers ('disgraced', 'shamed', 'fallen')",
+      "speculative outcome ('faces life in prison' before sentencing)",
+      "'A scandal at <X> ...' generic openers"
+    ],
+    "examples": {
+      "good": [
+        "The SDNY charged Sam Bankman-Fried with seven counts of wire fraud on Tuesday.",
+        "FTX founder pleaded guilty to two counts in federal court Wednesday.",
+        "The SEC fined Goldman Sachs $400 million for record-keeping failures."
+      ],
+      "bad": [
+        "A shocking scandal has emerged at the heart of the financial industry.",
+        "Could SBF face life in prison?",
+        "The disgraced founder may finally face justice."
+      ]
+    }
+  },
+
+  "subtitle_guidance": {
+    "L1_role": "the count, charge, or settlement number",
+    "L1_examples": ["7 COUNTS — WIRE FRAUD", "$1.4B SETTLEMENT", "GUILTY — 4 OF 11"],
+    "L1_rules": [
+      "use numerals, not words ('7' not 'seven')",
+      "uppercase the offence label",
+      "max 7 words"
+    ],
+    "L2_role": "the body and date qualifier",
+    "L2_examples": ["SDNY · Tuesday", "Texas v. Meta — Aug 2024", "Federal jury · San Jose"],
+    "L2_rules": [
+      "name the court or body explicitly",
+      "include date or session reference"
+    ],
+    "L3_role": "primary source attribution",
+    "L3_examples": ["DOJ filing", "SEC press release", "Court docket 23-cr-00876"],
+    "L3_rules": [
+      "L3 is mandatory for every evidence and quote module in legal-scandal",
+      "if the only source is wire reporting, attribute the wire ('Reuters · DOJ filing')"
+    ],
+    "type_specific_rules": [
+      "Defendant's name appears as L1 only when the news IS the conviction/sentencing of that named individual; otherwise the body bringing the action takes L1.",
+      "Never use a defendant's photo with their name as L1 — use a data module.",
+      "If charges are alleged (not yet adjudicated), L1 must say 'CHARGED' or 'INDICTED', never 'GUILTY'."
+    ]
+  },
+
+  "module_selection_hints": {
+    "include_quote_when": "02_evidence.quotes contains a verbatim line from the filing, the prosecutor's statement, or the defendant's response",
+    "include_map_when": "the case is multi-district / cross-border AND the geographic split is load-bearing to the story",
+    "include_data_when": "the story has a count list, a settlement figure, a sentencing range, OR a comparison to prior cases",
+    "max_evidence_modules": 3,
+    "min_attribution_per_module": "every evidence and quote module must have L3 source attribution; L3 may not be empty",
+    "stakes_module_must_name": "either the maximum penalty (with attribution to statute) OR the affected counterparty (shareholders, customers, regulators)"
+  },
+
+  "anti_patterns": [
+    {
+      "pattern": "Treating an indictment as a conviction",
+      "shape": "Hook says 'guilty' when only charges have been filed",
+      "why": "Defamation risk; legal-precision violation",
+      "fix": "Use 'charged' / 'indicted'; reserve 'guilty' for plea or verdict"
+    },
+    {
+      "pattern": "Generic 'disgraced founder' framing",
+      "shape": "Stakes leans on adjectives instead of facts",
+      "why": "Moralising; banned by playbook §1.4",
+      "fix": "Stakes states the count, the maximum penalty, or the affected counterparty"
+    },
+    {
+      "pattern": "Quoting a paraphrase from a wire as if it were the filing",
+      "shape": "Quote module text is from a Reuters summary, not the filing itself",
+      "why": "sourcing/paraphrase failure",
+      "fix": "Pull the quote text from 02_evidence.quotes only when the filing or official statement is the source"
+    },
+    {
+      "pattern": "Close that speculates on outcome",
+      "shape": "'Holmes could face decades behind bars'",
+      "why": "Speculation rendered as forward look; banned hedge",
+      "fix": "Close anchors on the next procedural date: sentencing hearing, response deadline, appeal window"
+    },
+    {
+      "pattern": "Using a defendant's logo or photo as primary asset",
+      "shape": "Module fills frame with company logo or person's headshot",
+      "why": "Identity-implication and brand-attack risks",
+      "fix": "Logos and identity imagery permitted only as L3-size attribution chips; primary asset is data or mute"
+    },
+    {
+      "pattern": "Treating regulators and prosecutors as interchangeable",
+      "shape": "Script says 'the SEC charged' when it was actually the DOJ",
+      "why": "Civil vs criminal distinction is load-bearing for legal-scandal",
+      "fix": "Match the body to the action: DOJ/USAO for criminal charges; SEC/CFTC/FTC for civil; mention both when both acted"
+    }
+  ],
+
+  "stage_2_extra_checks": [
+    "verify the charging document is in 02_evidence.source_documents (case docket entry, complaint, or official press release)",
+    "every count number must have source_ids pointing to the filing or the press release that lists it",
+    "if the only source for a count is wire reporting, treat as single-source (script must say 'according to <wire>')"
+  ],
+
+  "stage_5_extra_checks": [
+    "scan 03_script.md for the words 'guilty', 'convicted', 'pleaded guilty' — verify each is consistent with the case stage in 01_understanding",
+    "verify no module has asset_hint:'photo' (legal-scandal prohibits)",
+    "verify every L1 in subtitle layer corresponds to a count, charge, or settlement number — not the defendant's name unless the news is their conviction"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "stage": "post-render",
+  "story_id": 999,
+  "blockers": [],
+  "warns": [],
+  "infos": [
+    {
+      "check": "render/asset-honored",
+      "detail": "All 7 modules rendered with asset_status='ok' per manifest.json. No fallbacks or placeholders.",
+      "severity": "info"
+    }
+  ],
+  "subjective_quality": 4,
+  "subjective_quality_reason": "Hook landed at 0.3s (per manifest); stakes module's '30 million households' specificity is the strongest of any finance run to date; close anchored on two concrete dates (June 17 FOMC and May 21 minutes) rather than a vague window.",
+  "module_findings": [
+    { "module_index": 0, "matches_plan": true, "duration_drift_sec": 0.1, "asset_honored": true, "notes": "Hook L1 'FED HOLDS 4.50%' rendered cleanly; data plate behind text held contrast." },
+    { "module_index": 1, "matches_plan": true, "duration_drift_sec": -0.2, "asset_honored": true, "notes": "" },
+    { "module_index": 2, "matches_plan": true, "duration_drift_sec": 0.0, "asset_honored": true, "notes": "" },
+    { "module_index": 3, "matches_plan": true, "duration_drift_sec": 0.4, "asset_honored": true, "notes": "" },
+    { "module_index": 4, "matches_plan": true, "duration_drift_sec": -0.1, "asset_honored": true, "notes": "Quote module overlay shows speaker name and role per playbook §3 L2 spec." },
+    { "module_index": 5, "matches_plan": true, "duration_drift_sec": 0.2, "asset_honored": true, "notes": "" },
+    { "module_index": 6, "matches_plan": true, "duration_drift_sec": -0.3, "asset_honored": true, "notes": "Close L1 shows both dates in numerals (Jun 17 / May 21)." }
+  ],
+  "pacing_findings": [
+    "Hook L1 appeared at 0.3s — within target.",
+    "No mid-word cuts detected; all module boundaries align with TTS word-end timestamps within 80ms."
+  ],
+  "regressions_vs_approved_example": null,
+  "decision": "publish"
+}

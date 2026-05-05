@@ -1,6 +1,12 @@
 # Dependencies
 node_modules/
 
+# Python — tools/ uses Python; ignore caches and per-story workspaces.
+__pycache__/
+*.pyc
+*.pyo
+stories/
+
 # Render outputs — videos, frozen fixtures, render-props, narration audio.
 # Never commit, can be regenerated from source.
 output/

@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quydly.com/video-learning/schemas/render-review.schema.json",
+  "title": "Render review (pre- or post-render)",
+  "description": "Used by both stages 5 (pre-render) and 7 (post-render). The stage field disambiguates. Pre-render gates whether the renderer runs at all; post-render gates whether the output ships and what the story contributes to the learning index.",
+  "x-pipeline": {
+    "stage": "5 (pre-render) and 7 (post-render)",
+    "produced_by": [
+      "video-learning/prompts/05-pre-render-critic.md (stage 5)",
+      "video-learning/prompts/06-post-render-critic.md (stage 7)"
+    ],
+    "consumed_by": [
+      "operator — pre-render decision='render' triggers the renderer; 'iterate' returns to stages 3-4",
+      "operator — post-render decision='publish' ships; 'iterate' returns to stage 3; 'scrap' ends the story",
+      "stage 8 — failure-class entries trace back to blockers[] / warns[] here; subjective_quality copied into 08_learning"
+    ],
+    "validate_with": [
+      "python tools/validate_artifact.py --story-id <id> --stage pre_render",
+      "python tools/validate_artifact.py --story-id <id> --stage post_render"
+    ],
+    "example": [
+      "video-learning/schemas/examples/render-review.pre.example.json",
+      "video-learning/schemas/examples/render-review.post.example.json"
+    ]
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stage", "story_id", "blockers", "warns", "infos", "decision"],
+  "properties": {
+    "stage": {
+      "description": "'pre-render' (stage 5) or 'post-render' (stage 7). Drives which fields are required by the conditional rules below.",
+      "type": "string",
+      "enum": ["pre-render", "post-render"]
+    },
+    "story_id": {
+      "description": "Mirrors the workspace folder name.",
+      "type": ["integer", "string"]
+    },
+    "blockers": {
+      "description": "Findings that must be resolved before the next gate. Pre-render: any blocker forces decision='iterate'. Post-render: any blocker forces decision='iterate' regardless of subjective_quality.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/finding" }
+    },
+    "warns": {
+      "description": "Issues a human should know about but that do not stop the flow. Stage 7 may flag a stage-5 warn that turned out to be a real problem in the render.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/finding" }
+    },
+    "infos": {
+      "description": "Pass-through observations. Used to record that a check ran and was clean, or to note context (e.g. 'no approved example for this type yet').",
+      "type": "array",
+      "items": { "$ref": "#/definitions/finding" }
+    },
+    "decision": {
+      "description": "Pre-render: 'render' iff blockers=[]; else 'iterate'. Post-render: 'publish' iff subjective_quality>=4 and blockers=[]; 'iterate' iff blockers!=[] or quality=3; 'scrap' iff quality<=2.",
+      "type": "string",
+      "enum": ["render", "iterate", "publish", "scrap"]
+    },
+    "approved_example_diff": {
+      "description": "Pre-render only. 1–2 sentences naming axes on which the current plan is weaker than the nearest approved example. null if no example exists for this story_type.",
+      "oneOf": [{ "type": "null" }, { "type": "string" }]
+    },
+    "subjective_quality": {
+      "description": "Post-render only. 1–5 score with one-line justification. 5 beats current best on a named axis; 4 meets bar; 3 publishable with edits; 2 needs another iteration; 1 scrap.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1, "maximum": 5 }
+      ]
+    },
+    "subjective_quality_reason": {
+      "description": "Post-render only. One concrete line. 'Felt good' is not acceptable; name the module index and the axis.",
+      "type": "string"
+    },
+    "module_findings": {
+      "description": "Post-render only. One row per module in 04_module-plan.json, recording whether the rendered output matched the plan.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["module_index", "matches_plan"],
+        "properties": {
+          "module_index": {
+            "description": "0-based index into 04_module-plan.modules[].",
+            "type": "integer",
+            "minimum": 0
+          },
+          "matches_plan": {
+            "description": "True iff rendered text equals plan text.",
+            "type": "boolean"
+          },
+          "duration_drift_sec": {
+            "description": "manifest_duration - plan_duration (signed). |drift|>1.0 is a pacing finding.",
+            "type": "number"
+          },
+          "asset_honored": {
+            "description": "True iff manifest.asset_status='ok' and asset matches plan.asset_hint. False for fallbacks/placeholders.",
+            "type": "boolean"
+          },
+          "notes": {
+            "description": "One-line observation if anything stood out (cut on a word boundary, text overflow visible, etc.).",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "pacing_findings": {
+      "description": "Post-render only. Free-text observations about hook landing, mid-word cuts, key-noun timing.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "regressions_vs_approved_example": {
+      "description": "Post-render only. 1–3 specific named regressions vs the nearest approved example. null if no example exists.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "description": "Pre-render must include the approved-example diff field (null is acceptable when no example exists).",
+      "if": { "properties": { "stage": { "const": "pre-render" } } },
+      "then": { "required": ["approved_example_diff"] }
+    },
+    {
+      "description": "Post-render must include the subjective fields and module/pacing/regression findings.",
+      "if": { "properties": { "stage": { "const": "post-render" } } },
+      "then": {
+        "required": [
+          "subjective_quality",
+          "subjective_quality_reason",
+          "module_findings",
+          "pacing_findings",
+          "regressions_vs_approved_example"
+        ]
+      }
+    }
+  ],
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "required": ["check", "detail"],
+      "properties": {
+        "check": {
+          "description": "Check id, ideally a class from playbook §2 (e.g. 'sourcing/single', 'hook/hedge', 'render/overflow').",
+          "type": "string"
+        },
+        "detail": {
+          "description": "Specific evidence: file:line or field path plus what was wrong.",
+          "type": "string"
+        },
+        "severity": {
+          "description": "Mirrors the array the finding lives in. Optional but recommended.",
+          "type": "string",
+          "enum": ["info", "warn", "blocker"]
+        }
+      }
+    }
+  }
+}

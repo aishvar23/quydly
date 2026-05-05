@@ -1,0 +1,26 @@
+{
+  "stage": "pre-render",
+  "story_id": 999,
+  "blockers": [],
+  "warns": [
+    {
+      "check": "hook/weak-anchor",
+      "detail": "stories/999/03_script.md Hook: first 4 words are 'The Fed held rates' — proper noun present (Fed) but no digit-bearing token in first 4 words. Surfacing as warn per finance template guidance.",
+      "severity": "warn"
+    }
+  ],
+  "infos": [
+    {
+      "check": "sourcing/unsourced",
+      "detail": "All 7 numeric / quoted assertions in 03_script.md have trailing <!-- src: --> comments resolving to ids in 02_evidence.",
+      "severity": "info"
+    },
+    {
+      "check": "module/duration-drift",
+      "detail": "Sum of duration_sec = 64.0; script word count = 178; target = 64.7s; drift = 0.7s (within ±2.0).",
+      "severity": "info"
+    }
+  ],
+  "approved_example_diff": "No approved example exists for finance yet (video-learning/approved-examples/finance/ is empty). Diff skipped; surfacing as info. If this run rates 4+ post-render it is a candidate for example_promotion.",
+  "decision": "render"
+}
