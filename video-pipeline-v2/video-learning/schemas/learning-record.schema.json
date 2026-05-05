@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quydly.com/video-learning/schemas/learning-record.schema.json",
+  "title": "Learning record (stage 8)",
+  "description": "The story's contribution to the system-wide learning index. The only artifact that survives the workspace into system memory. Categories drive routing in tools/update_learning.py; *_proposal entries are flagged for operator review between stories and never auto-applied.",
+  "x-pipeline": {
+    "stage": 8,
+    "produced_by": "video-learning/prompts/07-learning-extractor.md",
+    "consumed_by": [
+      "tools/update_learning.py — appends to LEARNING_RECORD.md, routes 'failure' to known-failure-modes.md, 'pattern' to known-good-patterns.md, prints 'files to patch' report from *_proposal entries",
+      "operator (between stories) — promotes proposals into playbook / prompts / templates / approved-examples",
+      "next story's fresh Claude — reads the resulting known-failure-modes.md and known-good-patterns.md before stages 1, 3, 4, 5"
+    ],
+    "validate_with": "python tools/validate_artifact.py --story-id <id> --stage learning",
+    "example": "video-learning/schemas/examples/learning-record.example.json"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["story_id", "story_type", "outcome", "entries"],
+  "properties": {
+    "story_id": {
+      "description": "Mirrors the workspace folder name.",
+      "type": ["integer", "string"]
+    },
+    "story_type": {
+      "description": "Mirrors 01_understanding.story_type, or '?' if the story was rejected at stage 1 before classification.",
+      "type": "string"
+    },
+    "outcome": {
+      "description": "How the story closed. published: stage-7 decision='publish' and quality>=4. iterated: decision='iterate' (revisions still pending). scrapped: decision='scrap' or stage-5 hit the 3-iteration cap. rejected: stage-2 status='insufficient' (never rendered).",
+      "type": "string",
+      "enum": ["published", "iterated", "scrapped", "rejected"]
+    },
+    "subjective_quality": {
+      "description": "Mirror of stage-7 subjective_quality, or null if the story did not reach stage 7 (e.g. outcome=rejected).",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1, "maximum": 5 }
+      ]
+    },
+    "entries": {
+      "description": "1–6 entries. Each is load-bearing or it does not belong here. Generic entries ('be careful with numbers') are anti-patterns — see prompts/07-learning-extractor.md.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "summary", "evidence", "future_check"],
+        "properties": {
+          "category": {
+            "description": "Drives routing in update_learning.py. Two-strike rule: rule_proposal only on the second occurrence of a class; first occurrence becomes prompt_proposal instead.",
+            "type": "string",
+            "enum": [
+              "failure",
+              "pattern",
+              "rule_proposal",
+              "template_proposal",
+              "prompt_proposal",
+              "example_promotion"
+            ]
+          },
+          "summary": {
+            "description": "One sentence stating what happened. Specific to this story; not a generic principle.",
+            "type": "string",
+            "minLength": 10
+          },
+          "evidence": {
+            "description": "Artifact path and field/line. 'Felt off' is not evidence. 'stories/215/05_pre-render-critique.json:warns[2]' is.",
+            "type": "string",
+            "minLength": 3
+          },
+          "future_check": {
+            "description": "A test that would catch this next time. Name a file, regex, or threshold. 'Be careful' is not a check.",
+            "type": "string",
+            "minLength": 5
+          },
+          "links": {
+            "description": "Existing entries in known-failure-modes.md or known-good-patterns.md to link rather than duplicate.",
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

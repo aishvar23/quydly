@@ -1,0 +1,22 @@
+{
+  "story_id": 999,
+  "story_type": "finance",
+  "core_claim": "The Federal Reserve holds rates at 4.50% for a fifth consecutive meeting, against street consensus of a 25 basis-point cut.",
+  "who": [
+    "Federal Reserve",
+    "Jerome Powell",
+    "Federal Open Market Committee"
+  ],
+  "what": "hold the federal funds target range steady",
+  "when": "2026-04-30",
+  "where": [
+    "Washington, D.C.",
+    "United States"
+  ],
+  "frame": "market_move",
+  "editorial_posture": "policy_move",
+  "unknown_or_disputed": [
+    "Whether dissenting votes were cast — the FOMC statement does not yet break out tally; minutes drop in 3 weeks.",
+    "Whether the December dot plot's median path will shift — only the post-meeting statement is in source_documents."
+  ]
+}

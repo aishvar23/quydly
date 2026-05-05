@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quydly.com/video-learning/schemas/module-plan.schema.json",
+  "title": "Module plan (stage 4)",
+  "description": "The renderer-ready plan. The renderer consumes this directly to produce render.mp4. Each module maps to one visual unit with overlay text, duration, asset hint, and source attribution. text fields must appear verbatim in 03_script.md.",
+  "x-pipeline": {
+    "stage": 4,
+    "produced_by": "video-learning/prompts/04-module-plan.md",
+    "consumed_by": [
+      "stage 5 — C12–C18 enforce ordering, duration drift, citation, asset rules, text-verbatim and overflow checks",
+      "stage 6 (renderer) — module list drives the actual video render; manifest.json mirrors the plan",
+      "stage 7 — module_findings[] compares manifest entries to plan entries (text match, asset_honored, duration_drift_sec)"
+    ],
+    "validate_with": "python tools/validate_artifact.py --story-id <id> --stage module_plan",
+    "example": "video-learning/schemas/examples/module-plan.example.json"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["story_id", "story_type", "total_duration_sec", "modules"],
+  "properties": {
+    "story_id": {
+      "description": "Mirrors the workspace folder name.",
+      "type": ["integer", "string"]
+    },
+    "story_type": {
+      "description": "Must equal 01_understanding.story_type. Stage 5 C20 verifies this.",
+      "type": "string"
+    },
+    "total_duration_sec": {
+      "description": "Sum of modules[].duration_sec. Must equal (script_word_count / 165) * 60 within ±2.0s.",
+      "type": "number",
+      "minimum": 30,
+      "maximum": 120
+    },
+    "modules": {
+      "description": "Ordered module list. First must be kind=hook; last must be kind=close. Quote/map modules may interleave between evidence beats. 3 evidence beats is the sweet spot for 60–75s scripts.",
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "text", "duration_sec", "evidence_ref"],
+        "properties": {
+          "kind": {
+            "description": "Module type. Determines per-kind duration range and text caps (playbook §3).",
+            "type": "string",
+            "enum": ["hook", "stakes", "evidence", "quote", "map", "close"]
+          },
+          "text": {
+            "description": "Spoken / overlay text. Must be a verbatim substring of 03_script.md (paraphrase is a stage-5 blocker). Subject to per-kind word/character caps in playbook §3.",
+            "type": "string",
+            "minLength": 5
+          },
+          "duration_sec": {
+            "description": "Per-kind ranges: hook 2.5–4.0, stakes 4.0–8.0, evidence 6.0–14.0, quote 5.0–10.0, map 4.0–8.0, close 5.0–10.0.",
+            "type": "number",
+            "minimum": 1.0,
+            "maximum": 20.0
+          },
+          "evidence_ref": {
+            "description": "Source ids backing the module's claim. Required (length>=1) for evidence/stakes/quote modules. May be empty for hook/close when only pointing at a date.",
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "asset_hint": {
+            "description": "Renderer asset class. Default conservatively (mute). 'photo' requires an image source in 02_evidence (stage-5 C16). Conflict-type stories may not use 'photo' on evidence modules (stage-5 C17).",
+            "type": "string",
+            "enum": ["map", "data", "photo", "mute"]
+          },
+          "numeric_fact_ref": {
+            "description": "Required when the module's text asserts a number. Must resolve to a 02_evidence.numeric_facts[].id (stage-5 C21).",
+            "oneOf": [
+              { "type": "null" },
+              { "type": "string" }
+            ]
+          },
+          "speaker": {
+            "description": "For quote modules: the speaker name. Renderer overlays in L1 area; do not duplicate in text.",
+            "type": "string"
+          },
+          "speaker_role": {
+            "description": "For quote modules: the speaker's title or affiliation.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

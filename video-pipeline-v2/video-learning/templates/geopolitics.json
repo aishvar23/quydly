@@ -1,0 +1,237 @@
+{
+  "type": "geopolitics",
+  "version": "1.0.0",
+  "summary": "State actors, alliances, sanctions, treaties, military posturing, diplomatic moves, and inter-state disputes. The story is the geopolitical action itself, not the market or domestic-policy fallout.",
+  "fits_when": [
+    "category_id is 'world'",
+    "primary_entities includes a state, head of state, foreign ministry, defence ministry, alliance body (NATO, EU, ASEAN, G7), or treaty mechanism",
+    "editorial_posture is 'breaking_developing', 'policy_move', or 'analysis'",
+    "primary_geos has at least one country code"
+  ],
+  "fits_poorly_when": [
+    "primary_entities is mostly companies or markets (use finance)",
+    "story is principally about an active military engagement with casualty figures (use conflict)",
+    "story is about a domestic regulatory rule change (use policy)"
+  ],
+
+  "module_sequence": {
+    "preferred_count": 5,
+    "min_count": 4,
+    "max_count": 6,
+    "required_kinds_in_order": ["hook", "stakes", "evidence", "close"],
+    "preferred_pattern": [
+      { "kind": "hook", "duration_sec_target": 3.0 },
+      { "kind": "stakes", "duration_sec_target": 6.0, "describes": "named affected population, alliance, or trade lane" },
+      { "kind": "map", "duration_sec_target": 5.0, "describes": "labelled map of the named theatre", "include_when": "primary_geos has 2+ countries OR a named region" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the move itself — what the state actor did" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the counterparty response or the trigger" },
+      { "kind": "close", "duration_sec_target": 7.0, "describes": "the next scheduled summit, vote, or deadline" }
+    ],
+    "notes": [
+      "Map module is preferred for geopolitics — it grounds the story in space. Skip only if the story is single-country domestic foreign-policy speech.",
+      "Quote modules work when 02_evidence has a verbatim line from a head of state or foreign minister; rare from synth — usually gets paraphrased."
+    ]
+  },
+
+  "visual_classes": {
+    "preferred_in_order": ["map", "data", "mute"],
+    "asset_hint_policy": {
+      "map": "the workhorse for geopolitics — must be labelled with country / region names",
+      "data": "use for trade volumes, troop counts, sanctions tonnage, GDP comparisons",
+      "mute": "default when neither map nor data fits",
+      "photo": "permitted only when 02_evidence references a specific image source (e.g., a treaty signing photo from a named press pool); never stock"
+    },
+    "default_when_uncertain": "map"
+  },
+
+  "banned_visual_patterns": [
+    {
+      "pattern": "Flag fills the frame as primary asset",
+      "why": "Reads as nationalism rather than reporting; strips analytical distance",
+      "fix": "Flag permitted as L3 chip only; primary asset is map or data"
+    },
+    {
+      "pattern": "Generic globe spinning",
+      "why": "Filler; says nothing about the specific theatre",
+      "fix": "Labelled regional map with named places"
+    },
+    {
+      "pattern": "Stock military imagery (fighter jets, troops marching) for a non-conflict story",
+      "why": "Implies escalation that the evidence doesn't support",
+      "fix": "Map or data; reserve military imagery for stories with explicit military action"
+    },
+    {
+      "pattern": "Map with no labels",
+      "why": "Caught at stage 7 as render/unlabelled-map",
+      "fix": "Renderer must apply Mapbox labels at the relevant zoom level"
+    },
+    {
+      "pattern": "Color overlay (red/green) implying conflict alignment",
+      "why": "Editorial posturing through palette",
+      "fix": "Neutral palette; reserve red for explicit casualty / decline figures"
+    }
+  ],
+
+  "evidence_priorities": {
+    "lead_with": [
+      "the official statement from the foreign ministry / head of state office",
+      "the treaty / agreement text or readout",
+      "the press release of the multilateral body (NATO, UN, EU)",
+      "the formal diplomatic note or sanctions list"
+    ],
+    "second_tier": [
+      "Reuters / AFP / AP wire reporting that quotes the official statement",
+      "FT / WSJ / Economist analysis (only when the news is the analysis itself)"
+    ],
+    "treat_with_caution": [
+      "anonymous officials briefings",
+      "social media posts unless from verified official accounts",
+      "competitor state's framing — quote it, but balance with the issuing state's own statement"
+    ],
+    "must_cite_explicitly": [
+      "every named treaty or agreement",
+      "every sanctions tonnage / dollar value",
+      "every troop or aircraft figure",
+      "every named diplomatic actor and their title at time of the event"
+    ]
+  },
+
+  "hook_guidance": {
+    "patterns": [
+      {
+        "name": "move-actor-place",
+        "shape": "<actor> <verb> <object> in <place> on <day>.",
+        "example": "Tokyo grounded all flights to Sapporo on Tuesday after the magnitude-6.4 earthquake."
+      },
+      {
+        "name": "treaty-tally",
+        "shape": "<n> <body> members signed <agreement> on <day> in <city>.",
+        "example": "Twelve NATO members signed the joint air-defence pact yesterday in Brussels."
+      },
+      {
+        "name": "reversal",
+        "shape": "<actor> lifted/imposed <action> on <country> for the first time since <date>.",
+        "example": "The U.S. lifted the export ban on advanced chips to South Korea for the first time since 2022."
+      },
+      {
+        "name": "named-readout",
+        "shape": "<head of state> told <counterparty> that <position> in <call/meeting>.",
+        "example": "President Xi told Chancellor Merz that China rejects 'unilateral tariff measures' in their Tuesday call."
+      }
+    ],
+    "first_4_words_must_contain": [
+      "a state, capital, or alliance body name (Tokyo, Beijing, NATO, EU)",
+      "OR a head-of-state / foreign-minister proper name"
+    ],
+    "banned_constructions": [
+      "questions ('Will sanctions hold?')",
+      "hedges ('could escalate', 'may threaten')",
+      "moralisers ('aggressive', 'provocative', 'belligerent')",
+      "vague body names ('the international community')",
+      "'In a major development...' generic openers"
+    ],
+    "examples": {
+      "good": [
+        "Tokyo grounded all flights to Sapporo on Tuesday after the magnitude-6.4 earthquake.",
+        "Twelve NATO members signed the joint air-defence pact yesterday in Brussels.",
+        "The EU froze €1.4 billion in Russian central bank reserves on Wednesday."
+      ],
+      "bad": [
+        "Tensions are rising across the Taiwan Strait this week.",
+        "Could the new sanctions actually work?",
+        "In a provocative move, Beijing has..."
+      ]
+    }
+  },
+
+  "subtitle_guidance": {
+    "L1_role": "the move — actor + verb",
+    "L1_examples": ["TOKYO GROUNDS FLIGHTS", "EU FREEZES €1.4B", "12 NATO MEMBERS SIGN PACT"],
+    "L1_rules": [
+      "uppercase actor + verb",
+      "include the magnitude when the verb has a number",
+      "max 7 words"
+    ],
+    "L2_role": "place + time qualifier",
+    "L2_examples": ["Sapporo route · Tuesday", "Brussels · Aug 12", "Russian central bank reserves"],
+    "L2_rules": [
+      "always include the place when the action has one",
+      "always include the time when the action is recent"
+    ],
+    "L3_role": "issuing body / source",
+    "L3_examples": ["MOFA Japan", "NATO press release", "European Commission"],
+    "L3_rules": [
+      "L3 names the issuing body, not the wire",
+      "if only wire reporting available, format as 'Reuters · MOFA briefing'"
+    ],
+    "type_specific_rules": [
+      "Country names use English exonyms in L1 (Japan not Nippon); endonyms only when more recognisable in target audience.",
+      "Treaty names abbreviated only after first mention in script; subtitle L1 may use abbreviation directly (NATO, ASEAN, NAFTA).",
+      "Numbers of countries / signatories rendered as numerals ('12' not 'twelve')."
+    ]
+  },
+
+  "module_selection_hints": {
+    "include_map_when": "primary_geos has 2+ countries OR the story names a specific region (Sahel, South China Sea, Donbas, Western Balkans)",
+    "include_quote_when": "02_evidence.quotes has a verbatim line from a head of state, foreign minister, or alliance secretary-general",
+    "include_data_when": "the story has trade volumes, sanctioned dollar amounts, troop counts, or comparative GDP figures",
+    "max_evidence_modules": 3,
+    "stakes_module_must_name": "the affected population (with a number), the threatened trade lane, OR the next scheduled multilateral event"
+  },
+
+  "anti_patterns": [
+    {
+      "pattern": "Treating 'officials say' as the actor",
+      "shape": "Hook attributes a move to anonymous officials",
+      "why": "No accountability; downstream loses traceability",
+      "fix": "Name the agency or person; if only anonymous sources exist, surface in 01_understanding.unknown_or_disputed"
+    },
+    {
+      "pattern": "Speculative escalation framing",
+      "shape": "'Could trigger a wider conflict'",
+      "why": "Hedge violation; speculation rendered as forward outlook",
+      "fix": "Close anchors on a scheduled summit, vote, or response deadline — not on speculative consequence"
+    },
+    {
+      "pattern": "Map without labels",
+      "shape": "Map asset rendered with no place names overlaid",
+      "why": "Reduces map to decoration; render/missing-asset-style failure",
+      "fix": "Renderer must apply labels at the relevant zoom level; if no place is named-enough, use data module instead"
+    },
+    {
+      "pattern": "Bilateral commercial dispute classified as geopolitics",
+      "shape": "A USTR investigation into one company's tariffs framed as a 'US vs <country>' geopolitical event",
+      "why": "Type mismatch; downstream template is wrong",
+      "fix": "Reclassify as policy or finance unless state-level instruments are involved"
+    },
+    {
+      "pattern": "Flag-as-primary-asset",
+      "shape": "Module fills frame with a flag",
+      "why": "Reads as nationalism, not reporting",
+      "fix": "Flag permitted only as L3 chip"
+    },
+    {
+      "pattern": "Banned moralisers in stakes",
+      "shape": "'Aggressive', 'provocative', 'belligerent'",
+      "why": "Editorial framing; banned by playbook §1.4",
+      "fix": "Stakes states what was done and to whom; the audience can judge"
+    },
+    {
+      "pattern": "Close pointing at vague timeline",
+      "shape": "'Tensions will likely continue in the coming weeks'",
+      "why": "Vague forward look; banned",
+      "fix": "Close anchors on a specific scheduled event: 'The G7 foreign ministers meet October 4 in Hiroshima'"
+    }
+  ],
+
+  "stage_2_extra_checks": [
+    "verify primary_places resolves at least one specific city or region; vague continental references ('Asia', 'Africa') flag the story for additional sourcing",
+    "if a sanctions / trade figure is cited, the source must be the issuing body (Treasury OFAC, EU OJ) or wire that quotes it"
+  ],
+
+  "stage_5_extra_checks": [
+    "scan hook + stakes for banned moralisers: aggressive, provocative, belligerent, hostile",
+    "verify map module has a label-bearing place name in 01_understanding.where",
+    "verify close points at a scheduled date or named event, not 'in coming weeks'"
+  ]
+}

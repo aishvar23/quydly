@@ -1,0 +1,268 @@
+{
+  "type": "finance",
+  "version": "1.0.0",
+  "summary": "Markets, earnings, central banks, M&A deals, commodities, and credit events. The story is the move with its number, not the political framing of it.",
+  "fits_when": [
+    "primary_entities includes a public company, central bank, currency, sovereign issuer, or major index",
+    "key_points OR structured_numbers contains a price / rate / yield / volume / earnings figure with a unit",
+    "the load-bearing claim is a number with a unit (price, %, basis points, share count)"
+  ],
+  "fits_poorly_when": [
+    "story is principally about a regulator's *new rule* rather than a market reaction (use policy)",
+    "story is principally about a state-level sanctions or treaty action with market secondary effects (use geopolitics)",
+    "story is a tech product launch where price is incidental (use tech)"
+  ],
+
+  "numbers_discipline": {
+    "comparator_window_required": "every percentage move must include the comparator window (single-day, since-IPO, year-to-date, prior-meeting)",
+    "precision_rules": [
+      "use the figure exactly as in 02_evidence.numeric_facts",
+      "round only when the rounded value is also in numeric_facts (with context: 'rounded for narration')",
+      "always include the unit ($, %, bps, M shares)"
+    ],
+    "as_of_required": "every quoted figure must have an as_of date or session reference (e.g., 'at the close Tuesday', 'after the FOMC decision')",
+    "conflicts_must_surface": "if sources disagree on a figure (DOJ filing $10B vs NYT $8B), both numbers appear with attribution — never resolve silently"
+  },
+
+  "module_sequence": {
+    "preferred_count": 5,
+    "min_count": 4,
+    "max_count": 6,
+    "required_kinds_in_order": ["hook", "stakes", "evidence", "close"],
+    "preferred_pattern": [
+      { "kind": "hook", "duration_sec_target": 3.0, "describes": "the headline number with comparator window" },
+      { "kind": "stakes", "duration_sec_target": 6.0, "describes": "the affected counterparty (households, suppliers, holders, savers) with a count" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the cause — the announcement, decision, or release that drove the move" },
+      { "kind": "evidence", "duration_sec_target": 10.0, "describes": "the comparison — prior level, prior period, peer group, or benchmark" },
+      { "kind": "close", "duration_sec_target": 7.0, "describes": "the next data print, earnings date, or central-bank decision" }
+    ],
+    "notes": [
+      "Data module is the workhorse — most evidence beats reference a numeric_fact_id.",
+      "Quote modules from CFOs / central bank chairs are valuable when 02_evidence.quotes carries verbatim transcript text.",
+      "Map modules are rare for finance; only useful for commodity flow stories or sovereign-debt geographies."
+    ]
+  },
+
+  "visual_classes": {
+    "preferred_in_order": ["data", "mute", "map"],
+    "asset_hint_policy": {
+      "data": "the default for finance — every numeric beat is a data module with numeric_fact_ref set",
+      "mute": "use when the spoken narration is the asset (e.g., a CEO's statement that doesn't lend itself to a chart)",
+      "map": "rare; only for commodity flow stories (oil routes, grain exports) or sovereign-debt geography",
+      "photo": "permitted only when 02_evidence references a specific image source (e.g., a press conference still from a named pool); never stock trading-floor footage"
+    },
+    "default_when_uncertain": "data"
+  },
+
+  "banned_visual_patterns": [
+    {
+      "pattern": "Stock trading-floor B-roll",
+      "why": "Generic; says nothing about the specific story; visual filler",
+      "fix": "Data module with the actual numeric_fact"
+    },
+    {
+      "pattern": "Bull / bear icons or animated arrows that decorate without informing",
+      "why": "Filler; reduces seriousness",
+      "fix": "Numerical chart referencing the numeric_fact_ref"
+    },
+    {
+      "pattern": "Skyline of Wall Street / City of London / generic financial district",
+      "why": "Editorial association with no specific tie to the story",
+      "fix": "Mute; let the spoken narration carry"
+    },
+    {
+      "pattern": "Stock photo of a CEO not named in the story",
+      "why": "Identity-implication blocker (visual-safety violation)",
+      "fix": "Mute or data; only use a CEO image when (a) they are the named subject AND (b) 02_evidence references a specific photo source"
+    },
+    {
+      "pattern": "Currency-symbol confetti / stylised money imagery",
+      "why": "Decorative; reduces analytical credibility",
+      "fix": "Data module showing the actual figure"
+    },
+    {
+      "pattern": "Red-or-green saturated background overlay tied to direction",
+      "why": "Editorialises through palette; small color cue is fine, full overlay is not",
+      "fix": "Reserve red strictly for the magnitude label of a decline (e.g., '−8.4%')"
+    }
+  ],
+
+  "evidence_priorities": {
+    "lead_with": [
+      "the SEC filing (10-Q, 10-K, 8-K) or equivalent home-jurisdiction filing",
+      "the central bank statement or release",
+      "the exchange-published settlement or volume data",
+      "the official press release from the issuer"
+    ],
+    "second_tier": [
+      "Bloomberg / Reuters / FT reporting that quotes the filing or release",
+      "WSJ / Economist analysis when the news IS the analysis"
+    ],
+    "treat_with_caution": [
+      "sell-side analyst notes (use the source, not the desk's framing)",
+      "anonymous bankers / 'people familiar with the matter'",
+      "social media posts from non-verified accounts"
+    ],
+    "must_cite_explicitly": [
+      "every percentage with its comparator window",
+      "every dollar / euro / yen figure with its date",
+      "every basis-point move with the prior level",
+      "every named index or rate with its issuer"
+    ]
+  },
+
+  "hook_guidance": {
+    "patterns": [
+      {
+        "name": "single-day-move",
+        "shape": "<ticker/name> closed <up/down> <pct> on <day> — its largest single-day move since <prior-period>.",
+        "example": "Nvidia closed up 8.4% on Tuesday — its largest single-day move since March."
+      },
+      {
+        "name": "central-bank-decision",
+        "shape": "The <body> held/cut/raised rates at <level> for a <ordinal> consecutive meeting.",
+        "example": "The Fed held rates at 4.50% for a fifth consecutive meeting."
+      },
+      {
+        "name": "crossover",
+        "shape": "<benchmark> crossed <level> for the first time since <date>.",
+        "example": "Brent crossed $90 a barrel for the first time since November 2023."
+      },
+      {
+        "name": "earnings-beat-miss",
+        "shape": "<company> reported <metric> of <value>, <above/below> the street consensus of <consensus>.",
+        "example": "Apple reported services revenue of $26.1 billion, above the street consensus of $25.4 billion."
+      },
+      {
+        "name": "deal-close",
+        "shape": "<acquirer> agreed to buy <target> for $<value> on <day>.",
+        "example": "Capital One agreed to buy Discover for $35.3 billion in stock on Monday."
+      }
+    ],
+    "first_4_words_must_contain": [
+      "a public company / central bank / currency / index proper name",
+      "OR a unit-bearing number ('$35 billion', '8.4%')"
+    ],
+    "banned_constructions": [
+      "questions ('Will the Fed cut?')",
+      "hedges ('could break out', 'may rally')",
+      "moralisers ('record-shattering', 'crushing')",
+      "vague populations ('investors', 'markets')",
+      "'In a wild day for markets...' generic openers"
+    ],
+    "examples": {
+      "good": [
+        "Nvidia closed up 8.4% on Tuesday — its largest single-day move since March.",
+        "The Fed held rates at 4.50% for a fifth consecutive meeting.",
+        "Brent crossed $90 a barrel for the first time since November 2023.",
+        "Capital One agreed to buy Discover for $35.3 billion in stock on Monday."
+      ],
+      "bad": [
+        "Could the Fed surprise the market this week?",
+        "In a wild day for tech stocks, Nvidia surged.",
+        "Markets are reacting to record-shattering earnings."
+      ]
+    }
+  },
+
+  "subtitle_guidance": {
+    "L1_role": "the headline number with sign and unit",
+    "L1_examples": ["NVDA +8.4%", "FED HOLDS 4.50%", "BRENT $90 +", "AAPL SVC $26.1B"],
+    "L1_rules": [
+      "ticker or short proper name leads",
+      "sign + magnitude + unit",
+      "use numerals not words",
+      "max 7 words"
+    ],
+    "L2_role": "the comparator window or qualifier",
+    "L2_examples": ["Tuesday close · largest since Mar", "5th consecutive meeting", "first crossing since Nov 2023"],
+    "L2_rules": [
+      "always include the comparator window for a percentage move",
+      "always include the as-of for a level"
+    ],
+    "L3_role": "source attribution",
+    "L3_examples": ["NYSE close", "FOMC statement", "Apple 10-Q", "ICE Brent"],
+    "L3_rules": [
+      "name the data source explicitly (exchange, filing, central bank)",
+      "if quoting a wire, format as 'Reuters · FOMC statement'"
+    ],
+    "type_specific_rules": [
+      "Tickers in L1 use uppercase exchange notation (NVDA, AAPL, MSFT).",
+      "Currency symbols precede the number ($90, €1.4B, ¥150).",
+      "Percentages render with the sign always ('+8.4%' not '8.4%' for upward moves).",
+      "Basis points render as 'bps' not 'basis points' in subtitles (full word in spoken script)."
+    ]
+  },
+
+  "module_selection_hints": {
+    "include_data_when": "ANY numeric beat — which is most of finance; aim for 2-3 data modules per video",
+    "include_quote_when": "02_evidence.quotes has a verbatim line from a CEO, CFO, or central-bank chair",
+    "include_map_when": "the story is about commodity flow geography or a sovereign-debt event tied to specific countries — rare",
+    "max_evidence_modules": 3,
+    "stakes_module_must_name": "the affected counterparty (households on adjustable-rate mortgages, suppliers, equity holders, savers) with a count or comparator"
+  },
+
+  "anti_patterns": [
+    {
+      "pattern": "Percentage move without comparator window",
+      "shape": "'Nvidia is up 8% today.'",
+      "why": "No frame of reference; the comparator is what makes the move newsworthy",
+      "fix": "Add 'today's session' / 'since the open' / 'its largest single-day move since <month>'"
+    },
+    {
+      "pattern": "'Record high' without verification against factual_conflicts",
+      "shape": "'A new all-time record'",
+      "why": "Records are often disputed by definition; check factual_conflicts and prior series",
+      "fix": "If 02_evidence.factual_conflicts touches the record claim, surface both views; otherwise attribute to the issuer's claim"
+    },
+    {
+      "pattern": "Treating a price move as a story",
+      "shape": "Hook is just 'Stock X moved Y%'",
+      "why": "Markets move every day; the story is the cause or the consequence",
+      "fix": "Hook leads with the cause (announcement, ruling, data print) or the consequence (margin call, sector contagion); the move is the L1, not the whole story"
+    },
+    {
+      "pattern": "'Investors will be watching' stakes",
+      "shape": "Stakes points at 'investors' as the affected population",
+      "why": "Banned generic population; investors aren't a stakes-bearing population in a 60s explainer",
+      "fix": "Name the real counterparty: '30 million ARM-mortgage households', 'Boeing's 12,000 suppliers', 'sovereign holders of Russian debt'"
+    },
+    {
+      "pattern": "Sell-side analyst note quoted as primary source",
+      "shape": "'Goldman analysts say...'",
+      "why": "Analyst notes are commentary on the source; quote the source itself",
+      "fix": "Cite the SEC filing / central-bank statement / earnings release; an analyst note is L3-tier sourcing at best"
+    },
+    {
+      "pattern": "Generic trading-floor B-roll",
+      "shape": "Photo asset of NYSE / LSE trading floor",
+      "why": "Says nothing specific; visual filler",
+      "fix": "Data module with the numeric_fact"
+    },
+    {
+      "pattern": "Close that hedges harder than the rest of the script",
+      "shape": "'Markets will be watching closely'",
+      "why": "Banned vague forward look; weakest part of finance scripts",
+      "fix": "Close anchors on the next print: 'CPI lands Wednesday at 8:30 ET', 'Apple reports November 7', 'FOMC decision December 12'"
+    },
+    {
+      "pattern": "Confusing tickers and parent companies",
+      "shape": "Saying 'Google reported' when the ticker is GOOGL/Alphabet",
+      "why": "Imprecision; matters for filings and ticker subtitles",
+      "fix": "Match the entity to the issuing filing; if Alphabet filed, the issuer is Alphabet"
+    }
+  ],
+
+  "stage_2_extra_checks": [
+    "every numeric_fact must have unit and as_of (already schema-enforced; verify substantively)",
+    "if a percentage move is in numeric_facts, the comparator window must be in 'context' (e.g., 'single-day move', 'YTD')",
+    "if the story has an earnings beat/miss, the consensus number must also be in numeric_facts as a separate entry"
+  ],
+
+  "stage_5_extra_checks": [
+    "scan 03_script.md for any percentage figure not followed by a comparator phrase ('today', 'this week', 'YTD', 'since <date>', 'consecutive')",
+    "verify every numeric beat in the script has a corresponding numeric_fact_ref on its module",
+    "verify stakes module names a counterparty other than 'investors' or 'markets'",
+    "verify close anchors on a date or scheduled event"
+  ]
+}

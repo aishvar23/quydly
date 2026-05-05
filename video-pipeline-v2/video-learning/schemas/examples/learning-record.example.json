@@ -1,0 +1,36 @@
+{
+  "story_id": 999,
+  "story_type": "finance",
+  "outcome": "published",
+  "subjective_quality": 4,
+  "entries": [
+    {
+      "category": "pattern",
+      "summary": "Stakes module that names the affected population with a number ('30 million U.S. households on adjustable-rate mortgages') tested stronger in post-render than abstract stakes have in prior runs.",
+      "evidence": "stories/999/04_module-plan.json:modules[1].text; stories/999/07_post-render-critique.json:subjective_quality_reason",
+      "future_check": "In stage 3, the Stakes paragraph for finance stories must contain (a) at least one digit-bearing token AND (b) a noun naming a specific population. Add this as a stage_5 extra check in video-learning/templates/finance.json.",
+      "links": []
+    },
+    {
+      "category": "pattern",
+      "summary": "Close anchored on two concrete dates (next FOMC + minutes release) outperformed single-date closes in post-render review.",
+      "evidence": "stories/999/04_module-plan.json:modules[6].text",
+      "future_check": "For finance stories where both an FOMC decision date AND minutes-release date are knowable, the close should reference both. Add a hint to the close module skeleton.",
+      "links": []
+    },
+    {
+      "category": "prompt_proposal",
+      "summary": "Stage-5 check C8 ('hook/weak-anchor') flagged a warn even though the hook was strong on a different axis (digit-bearing token in the verb phrase, just not the first 4 words). The check is too narrow.",
+      "evidence": "stories/999/05_pre-render-critique.json:warns[0]",
+      "future_check": "Loosen C8 in video-learning/prompts/05-pre-render-critic.md to accept (proper noun in first 4 words) OR (digit-bearing token within first 7 words). Re-test against this story.",
+      "links": []
+    },
+    {
+      "category": "example_promotion",
+      "summary": "First finance story to ship at quality 4. Beats the type's currently-empty example slot on stakes specificity and close anchoring.",
+      "evidence": "stories/999/07_post-render-critique.json:subjective_quality=4; subjective_quality_reason names the axes",
+      "future_check": "Operator should copy 03_script.md, 04_module-plan.json, 06_render-output/render.mp4, 07_post-render-critique.json into video-learning/approved-examples/finance/999/ and update the INDEX.",
+      "links": []
+    }
+  ]
+}

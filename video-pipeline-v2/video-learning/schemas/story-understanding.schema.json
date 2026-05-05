@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quydly.com/video-learning/schemas/story-understanding.schema.json",
+  "title": "Story understanding (stage 1)",
+  "description": "The structured read of story.json — the first artifact a Claude session produces. Every downstream stage inherits this read; misclassification here propagates to template selection, asset choice, and quality-bar enforcement.",
+  "x-pipeline": {
+    "stage": 1,
+    "produced_by": "video-learning/prompts/01-story-understanding.md",
+    "consumed_by": [
+      "stage 2 — story_type drives which template's stage_2_extra_checks fire; who/where seed entity matching",
+      "stage 3 — core_claim + frame shape the script's load-bearing sentence",
+      "stage 4 — story_type drives the asset-hint policy; where decides whether a map module is justified",
+      "stage 5 — C20 verifies story_type matches between this artifact and the module plan"
+    ],
+    "validate_with": "python tools/validate_artifact.py --story-id <id> --stage understanding",
+    "example": "video-learning/schemas/examples/story-understanding.example.json"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "story_id",
+    "story_type",
+    "core_claim",
+    "who",
+    "what",
+    "when",
+    "where",
+    "frame",
+    "unknown_or_disputed"
+  ],
+  "properties": {
+    "story_id": {
+      "description": "Mirrors the workspace folder name (stories/<story_id>/).",
+      "type": ["integer", "string"]
+    },
+    "story_type": {
+      "description": "Picked by walking the rule list in the prompt; never improvised. Drives template selection at every later stage.",
+      "type": "string",
+      "enum": ["legal-scandal", "geopolitics", "finance", "conflict", "policy", "tech"]
+    },
+    "core_claim": {
+      "description": "One declarative present-tense sentence. No hedge words. Built from who+what+when+where with the most load-bearing facts.",
+      "type": "string",
+      "minLength": 10
+    },
+    "who": {
+      "description": "Proper-cased actors. Pulled from primary_entities_enriched verbatim. 'Officials' / 'sources' are not valid entries.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    },
+    "what": {
+      "description": "A verb phrase, not a sentence. The action.",
+      "type": "string",
+      "minLength": 3
+    },
+    "when": {
+      "description": "Absolute date or date range. Convert relative dates against story.row.published_at.",
+      "type": "string",
+      "minLength": 4
+    },
+    "where": {
+      "description": "Place names from primary_places. Empty array is allowed but must be reflected in unknown_or_disputed.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 2 }
+    },
+    "frame": {
+      "description": "Editorial framing. Should mirror story.row.editorial_posture when it maps clearly.",
+      "type": "string",
+      "enum": ["breaking", "tally_official", "analysis", "policy_move", "market_move"]
+    },
+    "editorial_posture": {
+      "description": "Mirror of story.row.editorial_posture if present, else null. Used by templates and stage-5 checks.",
+      "type": ["string", "null"]
+    },
+    "unknown_or_disputed": {
+      "description": "Items the source row explicitly does not settle. Pulled from factual_conflicts first, plus anything else stage 1 noticed (unclear timeline, missing actor identity, ambiguous causation).",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "description": "Optional free-text notes for downstream stages. Kept short.",
+      "type": "string"
+    }
+  }
+}
