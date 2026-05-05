@@ -100,27 +100,40 @@ async function runPipeline(options = {}) {
     // Bridge phase 2 — produce the editorial video_brief from story +
     // evidence + publishability. The brief carries the 7-scene story
     // arc, ≤7-word onscreen text, meaningful timeline labels, and
-    // compressed source receipts. Modules read from it instead of
-    // assembling their own data from the evidence package.
-    const videoBrief = generateVideoBrief({ story, evidencePackage, publishability });
-    writeJson(outputDir, 'video-brief.json', videoBrief);
-    const briefValidation = validateVideoBrief(videoBrief);
-    writeJson(outputDir, 'video-brief-validation.json', briefValidation);
-    log(
-      'VIDEO_BRIEF',
-      `${videoBrief.scenes.length} scenes; ` +
-      `developing_badge=${videoBrief.developing_badge ?? 'none'}; ` +
-      `validation ok=${briefValidation.ok} errors=${briefValidation.errors.length} warnings=${briefValidation.warnings.length}`,
-    );
-    if (!briefValidation.ok) {
-      for (const err of briefValidation.errors.slice(0, 5)) {
-        log('VIDEO_BRIEF_ERROR', err);
+    // compressed source receipts.
+    //
+    // Gated to geopolitics_world only. The current generator hardcodes
+    // Hormuz/oil-route framing (per the original Codex spec) — running
+    // it for finance / legal / culture stories writes a fabricated
+    // brief that does not match the story's facts. The brief is only
+    // consumed by the geopolitics template anyway; other lanes ignore
+    // evidencePackage.brief. When other lanes get their own brief
+    // generators, gate them by their own story_type here.
+    let videoBrief = null;
+    let briefValidation = null;
+    if (understanding.story_type === 'geopolitics_world') {
+      videoBrief = generateVideoBrief({ story, evidencePackage, publishability });
+      writeJson(outputDir, 'video-brief.json', videoBrief);
+      briefValidation = validateVideoBrief(videoBrief);
+      writeJson(outputDir, 'video-brief-validation.json', briefValidation);
+      log(
+        'VIDEO_BRIEF',
+        `${videoBrief.scenes.length} scenes; ` +
+        `developing_badge=${videoBrief.developing_badge ?? 'none'}; ` +
+        `validation ok=${briefValidation.ok} errors=${briefValidation.errors.length} warnings=${briefValidation.warnings.length}`,
+      );
+      if (!briefValidation.ok) {
+        for (const err of briefValidation.errors.slice(0, 5)) {
+          log('VIDEO_BRIEF_ERROR', err);
+        }
       }
+      // Attach the brief to the evidence package so the geopolitics
+      // template's readers can pull short hook text / meaningful
+      // timeline labels / compressed receipts from it.
+      evidencePackage.brief = videoBrief;
+    } else {
+      log('VIDEO_BRIEF', `skipped (story_type=${understanding.story_type}; brief generator is geopolitics-only)`);
     }
-    // Attach the brief to the evidence package so the per-story-type
-    // template() readers can pull short hook text / meaningful timeline
-    // labels / compressed receipts from it.
-    evidencePackage.brief = videoBrief;
 
     // Bridge phase 4 — Storyboard + RenderValidation.
     //
