@@ -46,7 +46,7 @@ async function generateScript(evidencePackage, audit, options = {}) {
 }
 
 const KNOWN_SEGMENT_ROLES = new Set([
-  'hook', 'dossier', 'numbers', 'quote', 'map', 'charges', 'timeline', 'evidence_shelf',
+  'hook', 'dossier', 'numbers', 'quote', 'map', 'charges', 'timeline', 'evidence_shelf', 'impact',
 ]);
 
 function validate(script) {
@@ -74,6 +74,13 @@ function validate(script) {
       throw new Error(`Segment "${seg.role}" has empty or non-string text`);
     }
   }
+
+  // Audio/visual sync guard: rebuild full_script from segments in canonical
+  // order. Claude sometimes shuffles full_script vs segments, which makes
+  // plan-modules' voice alignment start later modules at earlier audio
+  // positions — viewer hears segment N while seeing segment N+1's visuals.
+  // Canonicalising guarantees A/V sync regardless of model behaviour.
+  script.full_script = script.segments.map((s) => String(s.text).trim()).join(' ');
 
   const wordCount = script.full_script.split(/\s+/).filter(Boolean).length;
   if (wordCount < 12 || wordCount > 220) {

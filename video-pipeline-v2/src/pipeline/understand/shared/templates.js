@@ -37,7 +37,25 @@ function extractTimelineEvents(sourceDocs, story) {
       events.push({ label: doc.date, detail: doc.type ? cap(doc.type) : 'Filing' });
     }
   }
-  return events;
+  // Collapse same-date entries here so the rest of the pipeline (AI
+  // prompts deciding whether to write a timeline segment, deterministic
+  // template predicates) sees the actual count of unique beats — not
+  // the inflated count of every source-doc + published_at landing on
+  // the same day. Without this, AI writes an orphan timeline narration
+  // that nothing on screen can absorb, causing audio/visual desync.
+  const seen = new Map();
+  for (const event of events) {
+    const key = String(event.label).trim().toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, { ...event });
+    } else {
+      const existing = seen.get(key);
+      if (event.detail && event.detail !== existing.detail) {
+        existing.detail = `${existing.detail}; ${event.detail}`;
+      }
+    }
+  }
+  return Array.from(seen.values());
 }
 
 function deriveSourceCitation(sources) {
@@ -56,50 +74,66 @@ function deriveSourceCitation(sources) {
 // `roleHint` is a fallback role string used when the verbatim has no
 // quote_role of its own (e.g. geopolitics infers "EU foreign policy
 // service" from the issuer when the fixture didn't supply one).
-function buildQuoteSegment({ verbatim, segments, sources, primarySource, roleHint = '' }) {
+function buildQuoteSegment({ verbatim, segments, sources, primarySource, roleHint = '', icon = '' }) {
   if (!verbatim) return null;
   const issuer = sources?.[0]?.issuer || null;
   const issuerDate = sources?.[0]?.date || null;
   const quoteSourceType = verbatim.sourceType ? cap(verbatim.sourceType) : 'Source';
-  const postureLabel = verbatim.sourceType
-    ? `FROM THE ${verbatim.sourceType.toUpperCase()}`
-    : 'FROM THE SOURCE';
   const attribution = verbatim.date
     ? `${quoteSourceType}, ${verbatim.date}`
     : (sources?.[0]?.type
       ? `${cap(sources[0].type)}${issuerDate ? `, ${issuerDate}` : ''}`
       : '');
+  // The verbatim quote runs in 60pt type on the QuoteCard. The spoken
+  // narration is a SHORT bridge ("Prosecutors put it bluntly:"). The
+  // module needs both: `narration` is what TTS reads (short), `data.quote`
+  // is the full verbatim shown on screen.
+  // The on-card duration must also be long enough for the viewer to read
+  // the verbatim — bump min/max upwards so a 35-word quote can breathe.
+  const verbatimLen = String(verbatim.text || '').split(/\s+/).filter(Boolean).length;
+  const readingPad = Math.min(8, Math.max(3, Math.ceil(verbatimLen / 4)));
   return {
     role: 'quote',
     componentType: 'QuoteCard',
     overlayText: 'On the record',
     narration: segments.quote || '',
-    durationHintSec: 5.4,
-    minDurationSec: 4.4,
-    maxDurationSec: 7.2,
+    durationHintSec: 4.0 + readingPad,
+    minDurationSec: 4.0 + Math.min(4, readingPad),
+    maxDurationSec: 4.0 + readingPad + 2,
+    // Subtitles stay on; the spoken bridge is now ~3 sentences and the
+    // viewer benefits from reading-along while the verbatim types out.
     data: {
-      postureChips: [{ text: postureLabel, tone: 'accent' }],
-      eyebrow: 'ON THE RECORD',
+      postureChips: [],
+      eyebrow: '',
       quote: verbatim.text,
       speaker: verbatim.speaker || issuer || '',
       role: verbatim.role || roleHint || '',
       attribution,
-      sourceLabel: 'Source',
+      sourceLabel: primarySource ? 'Source' : '',
       sourceCitation: primarySource || '',
+      // Optional icon glyph rendered above the quote. Story types
+      // pick a key from the FinanceIcons library ('scales', 'capitol',
+      // 'bank', etc.). Render falls back to 'scales' when omitted.
+      icon: icon || '',
     },
   };
 }
 
 // Returns the MapCallout module entry, or null if no primary location.
-// Caller customises postureLabel + disclaimer per story-type posture
-// (e.g. legal_scandal: "LOCATION CONTEXT" / "Not operation footage").
+//
+// Bridge phase 3 — editorial-metadata strings stripped from the
+// viewer-facing data: `disclaimer` ("Map context. Not event footage.")
+// removed entirely; eyebrow defaults to '' instead of "WHERE";
+// postureLabel optional and only set when caller passes a real chip.
+// The renderer will display the place + narration; internal notes
+// belong in editor tooling, not on screen.
 function buildMapSegment({
   locations,
   segments,
   primarySource,
-  postureLabel = 'MAP CONTEXT',
-  eyebrow = 'WHERE',
-  disclaimer = 'Map context. Not event footage.',
+  postureLabel = null,
+  eyebrow = '',
+  disclaimer = '',
 }) {
   const primary = (locations || [])[0];
   if (!primary) return null;
@@ -115,7 +149,7 @@ function buildMapSegment({
     assetClass: 'map',
     assetNeed: { kind: 'map', geoLocation: primary },
     data: {
-      postureChips: [{ text: postureLabel, tone: 'accent' }],
+      postureChips: postureLabel ? [{ text: postureLabel, tone: 'accent' }] : [],
       eyebrow,
       city: primary,
       country,
@@ -127,21 +161,39 @@ function buildMapSegment({
 }
 
 // Returns the TimelineCard module entry, or null if fewer than 2 events.
+//
+// Bridge phase 2 — `events` may now be brief-shaped {date, label,
+// source_id} where date is null when fallback derivation produced a
+// dateless meaningful label. Always show label as the detail; date
+// becomes "Recent" when null so the renderer doesn't print "null".
 function buildTimelineSegment({ events, segments, primarySource }) {
   if (!events || events.length < 2) return null;
   return {
     role: 'timeline',
     componentType: 'TimelineCard',
-    overlayText: `${events.length} dates on the record`,
+    // Bridge phase 3 — overlay/eyebrow/postureChip stripped of
+    // editorial labels. Show "How it unfolded" as a viewer-facing
+    // prompt rather than "events tracked" / "CHRONOLOGY" /
+    // "TIMELINE" all of which are internal vocabulary.
+    overlayText: 'How it unfolded',
     narration: segments.timeline || '',
     durationHintSec: 5.0,
     minDurationSec: 4.0,
     maxDurationSec: 7.0,
     data: {
-      postureChips: [{ text: 'CHRONOLOGY', tone: 'accent' }],
-      eyebrow: 'TIMELINE',
-      title: 'What happened, when',
-      events,
+      postureChips: [],
+      eyebrow: '',
+      title: 'How it unfolded',
+      events: events.map((e) => ({
+        date: e?.date || null,
+        label: e?.label || 'Event',
+        // Old shape: detail came from doc title. New shape: label IS
+        // the detail, since brief labels are already short event
+        // descriptions ("Indian vessels attacked", "Strait closed").
+        detail: e?.detail || e?.label || '',
+        source_id: e?.source_id || null,
+        icon: e?.icon || undefined,
+      })),
       sourceLabel: 'Source',
       sourceCitation: primarySource || '',
     },
@@ -149,29 +201,49 @@ function buildTimelineSegment({ events, segments, primarySource }) {
 }
 
 // Returns the EvidenceShelf module entry, or null if no sources.
-// `footer` is type-specific copy ("All claims taken from public filings.",
-// "Vote shares from the election commission.", etc.).
-function buildEvidenceShelfSegment({ sources, segments, footer }) {
+// `footer` is type-specific copy.
+//
+// Bridge phase 2 — when the caller provides `receipts` (brief-shaped
+// {source, claim, url}), the EvidenceShelf surfaces source + claim
+// instead of a full article headline. Falls back to the old
+// title-based shape when receipts is null.
+function buildEvidenceShelfSegment({ sources, segments, footer, receipts }) {
   if (!sources || sources.length === 0) return null;
+  const hasReceipts = Array.isArray(receipts) && receipts.length > 0;
   return {
     role: 'evidence_shelf',
     componentType: 'EvidenceShelf',
-    overlayText: 'Receipts',
+    // Bridge phase 3 — viewer-facing overlay drops the editor
+    // vocabulary ("sources tracked", "Receipts", "RECEIPTS",
+    // "ATTRIBUTED EVIDENCE", "What we cited"). The closing
+    // attribution is now in the "What happens next" scene's
+    // source_attribution strip; the EvidenceShelf module
+    // continues to render the source list, but with neutral copy.
+    overlayText: '',
     narration: segments.evidence_shelf || '',
     durationHintSec: 5.4,
     minDurationSec: 4.4,
     maxDurationSec: 6.6,
     data: {
-      postureChips: [{ text: 'ATTRIBUTED EVIDENCE', tone: 'accent' }],
-      eyebrow: 'RECEIPTS',
-      title: 'What we cited',
-      sources: sources.map((doc) => ({
-        type: doc.type ? cap(doc.type) : 'Source',
-        title: doc.title || '',
-        issuer: doc.issuer || '',
-        date: doc.date || '',
-        url: doc.url || '',
-      })),
+      postureChips: [],
+      eyebrow: '',
+      title: '',
+      sources: hasReceipts
+        ? receipts.map((r) => ({
+            type: 'Source',
+            // Brief receipts: source name + one short claim.
+            title: r.claim || '',
+            issuer: r.source || '',
+            date: '',
+            url: r.url || '',
+          }))
+        : sources.map((doc) => ({
+            type: doc.type ? cap(doc.type) : 'Source',
+            title: doc.title || '',
+            issuer: doc.issuer || '',
+            date: doc.date || '',
+            url: doc.url || '',
+          })),
       footer: footer || 'All claims taken from public filings.',
     },
   };

@@ -14,12 +14,34 @@ function normalizeStory(raw) {
     key_points: Array.isArray(raw.key_points) ? raw.key_points.filter(Boolean) : [],
     confidence_score: numberOr(raw.confidence_score, 0),
     coherence_score: nullableNumber(raw.coherence_score),
+    consistency_score: nullableNumber(raw.consistency_score),
     support_score: nullableNumber(raw.support_score),
     story_score: numberOr(raw.story_score, 0),
     source_count: numberOr(raw.source_count, 0),
     is_verified: Boolean(raw.is_verified),
     primary_entities: Array.isArray(raw.primary_entities) ? raw.primary_entities : [],
     primary_geos: Array.isArray(raw.primary_geos) ? raw.primary_geos : [],
+    // Bridge phase 1 — pass through primary_places (the rich
+    // {code, name} shape) AND the synth-side editorial fields that
+    // the normalizer was previously dropping. deriveAngle + the
+    // publishability gate read these.
+    primary_places: Array.isArray(raw.primary_places) ? raw.primary_places : [],
+    hook_sentence: typeof raw.hook_sentence === 'string' ? raw.hook_sentence : null,
+    why_it_matters: typeof raw.why_it_matters === 'string' ? raw.why_it_matters : null,
+    editorial_posture: typeof raw.editorial_posture === 'string' ? raw.editorial_posture : null,
+    story_type: typeof raw.story_type === 'string' ? raw.story_type : null,
+    primary_entities_enriched: Array.isArray(raw.primary_entities_enriched)
+      ? raw.primary_entities_enriched
+      : [],
+    structured_numbers: raw.structured_numbers && typeof raw.structured_numbers === 'object'
+      ? raw.structured_numbers
+      : null,
+    timeline_events: Array.isArray(raw.timeline_events) ? raw.timeline_events : [],
+    timeline_disposition: typeof raw.timeline_disposition === 'string'
+      ? raw.timeline_disposition
+      : null,
+    verification_status: typeof raw.verification_status === 'string' ? raw.verification_status : null,
+    factual_conflicts: Array.isArray(raw.factual_conflicts) ? raw.factual_conflicts : [],
     published_at: raw.published_at || null,
     source_documents: Array.isArray(raw.source_documents) ? raw.source_documents : [],
   };

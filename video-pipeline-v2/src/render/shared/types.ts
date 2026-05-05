@@ -12,6 +12,7 @@ export type ComponentType =
   | "QuoteCard"
   | "ComparisonCard"
   | "EvidenceShelf"
+  | "ImpactCard"
   | "VideoClipCard";
 
 export type AssetKind =
@@ -67,6 +68,11 @@ export type EvidenceSource = {
   date?: string;
 };
 
+export type SubtitleBlackoutRange = {
+  startSec: number;
+  endSec: number;
+};
+
 export type VideoProps = {
   storyType: string;
   accentColor: string;
@@ -78,6 +84,8 @@ export type VideoProps = {
   jobKey: string;
   modules: RenderModule[];
   subtitles: SubtitleCue[];
+  subtitleBlackouts?: SubtitleBlackoutRange[];
+  publishedDate?: string | null;
   evidenceSources?: EvidenceSource[];
   safetyNotes?: string[];
 };

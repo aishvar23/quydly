@@ -27,6 +27,7 @@ async function main() {
       useAI: Boolean(args['use-ai']),
       allowFallbacks: Boolean(args['allow-fallbacks']),
       dryRunFallbacks: Boolean(args['dry-run-fallbacks']),
+      youtube: Boolean(args.youtube),
       voiceId: typeof args.voice === 'string' ? args.voice : null,
     });
 
@@ -95,8 +96,11 @@ Options:
   --skip-audit           Skip the candidate audit (debug only)
   --skip-render          Run all stages, write artifacts, but skip the MP4 render
   --use-ai               Generate script via Claude (falls back to deterministic on error)
+  --youtube              After render, also produce a YouTube publish package:
+                           youtube/title.txt, description.md, sources.md,
+                           thumbnail.png (1280x720), thumbnail-props.json
   --voice <id>           Override ElevenLabs voice ID for this run.
-                         Defaults: ELEVENLABS_VOICE_ID env, then "Adam" (pNInz6obpgDQGcFmaJgB).
+                         Defaults: ELEVENLABS_VOICE_ID env, then "Sarah" (EXAVITQu4vr4xnSDxMaL).
                          Try Brian (nPczCjzI2devNBz1zQrb) for warmer news-anchor read.
                          Voice settings (stability/style/etc.) live in env:
                          ELEVENLABS_STABILITY=0.45  ELEVENLABS_STYLE=0.40

@@ -61,6 +61,7 @@ export const NumberCard: React.FC<{ module: RenderModule; accentColor: string }>
   const postureChips   = readPostureChips(module.data);
 
   const profitNumeric = parseNumber(profitDisplay);
+  const profitDecimals = decimalsOf(profitDisplay);
   const countNumeric  = Math.max(0, parseNumber(countDisplay));
 
   return (
@@ -84,7 +85,12 @@ export const NumberCard: React.FC<{ module: RenderModule; accentColor: string }>
       {stakeDisplay ? <StakeBlock display={stakeDisplay} label={stakeLabel} /> : null}
       {stakeDisplay && profitDisplay ? <ArrowGlyph accentColor={accentColor} /> : null}
       {profitDisplay ? (
-        <ProfitBlock displayPrefix={prefixOf(profitDisplay)} target={profitNumeric} />
+        <ProfitBlock
+          displayPrefix={prefixOf(profitDisplay)}
+          displaySuffix={suffixOf(profitDisplay)}
+          target={profitNumeric}
+          decimals={profitDecimals}
+        />
       ) : null}
       {profitDisplay ? (
         <ProfitLabelRow label={profitLabel} multiplier={multiplier} accentColor={accentColor} />
@@ -162,9 +168,14 @@ const ArrowGlyph: React.FC<{ accentColor: string }> = ({ accentColor }) => {
   );
 };
 
-const ProfitBlock: React.FC<{ displayPrefix: string; target: number }> = ({ displayPrefix, target }) => {
+const ProfitBlock: React.FC<{
+  displayPrefix: string;
+  displaySuffix: string;
+  target: number;
+  decimals: number;
+}> = ({ displayPrefix, displaySuffix, target, decimals }) => {
   const { translateY, opacity } = useRiseIn(T.profitRise, 44, "crisp");
-  const value = useCountUp(target, T.profitCount, BEAT.long + BEAT.flash);
+  const value = useCountUp(target, T.profitCount, BEAT.long + BEAT.flash, decimals);
   const breath = useBreath(T.breathStart, 78, 0.014);
   return (
     <div style={{
@@ -180,7 +191,7 @@ const ProfitBlock: React.FC<{ displayPrefix: string; target: number }> = ({ disp
         color: BRAND.text, lineHeight: 0.94, letterSpacing: -3,
         ...TABULAR,
       }}>
-        {displayPrefix}{formatThousands(value)}
+        {displayPrefix}{formatNumber(value, decimals)}{displaySuffix}
       </div>
     </div>
   );
@@ -355,6 +366,23 @@ function prefixOf(display: string): string {
   return match ? match[0] : "";
 }
 
-function formatThousands(n: number): string {
-  return n.toLocaleString("en-US");
+// Trailing units like "%", " bps", "M", "B".
+function suffixOf(display: string): string {
+  const match = String(display).match(/[^0-9.]+$/);
+  return match ? match[0] : "";
+}
+
+// Decimal places implied by the source display string. "4.25%" → 2,
+// "$8 billion" → 0. Used to drive the count-up precision so we don't
+// floor 4.25 to 4.
+function decimalsOf(display: string): number {
+  const match = String(display).match(/\.(\d+)/);
+  return match ? Math.min(3, match[1].length) : 0;
+}
+
+function formatNumber(n: number, decimals: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 }
