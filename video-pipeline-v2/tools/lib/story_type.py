@@ -104,7 +104,10 @@ _SPORTS_TOKENS = {
     "world cup", "copa america", "afcon",
     "nba", "nfl", "nhl", "mlb", "ncaa",
     "super bowl", "world series", "stanley cup",
-    "ipl", "icc", "test match", "t20",
+    # Cricket: 'icc' is intentionally omitted because it collides with
+    # International Criminal Court (a frequent geopolitics actor). The
+    # cricket-specific tokens below cover the common patterns.
+    "ipl", "test match", "t20",
     "wimbledon", "roland garros", "us open tennis", "australian open",
     "grand slam", "atp tour", "wta",
     "olympics", "olympic games", "paralympics",
