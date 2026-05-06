@@ -27,9 +27,9 @@
       "type": "string"
     },
     "outcome": {
-      "description": "How the story closed. published: stage-7 decision='publish' and quality>=4. iterated: decision='iterate' (revisions still pending). scrapped: decision='scrap' or stage-5 hit the 3-iteration cap. rejected: stage-2 status='insufficient' (never rendered).",
+      "description": "How the story closed. published: stage-7 decision='publish' and quality>=4. iterated: decision='iterate' (revisions still pending). scrapped: decision='scrap' or stage-5 hit the 3-iteration cap. rejected: stage-2 status='insufficient' (never rendered). skipped: operator declined render after stage 5 cleared (no stage-7 scrap, no 3-iteration cap).",
       "type": "string",
-      "enum": ["published", "iterated", "scrapped", "rejected"]
+      "enum": ["published", "iterated", "scrapped", "rejected", "skipped"]
     },
     "subjective_quality": {
       "description": "Mirror of stage-7 subjective_quality, or null if the story did not reach stage 7 (e.g. outcome=rejected).",

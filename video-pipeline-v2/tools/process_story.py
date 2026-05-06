@@ -28,6 +28,8 @@ Exit codes:
     1 — Supabase or filesystem setup error
     2 — story not found in Supabase
     3 — required files missing in --check mode
+    5 — service-journalism rejection (retail-deals / affiliate-aggregation
+        pattern flagged by lib.story_type; no workspace was created)
 """
 from __future__ import annotations
 
@@ -164,6 +166,11 @@ def main() -> int:
             print(f"[process] story_type could not be inferred. Re-run "
                   f"with --story-type <type>.", file=sys.stderr)
             return 1
+
+        if summary["story_type"] == "service-journalism":
+            print(f"[process] story refused: {summary['template_note']}",
+                  file=sys.stderr)
+            return 5
 
         print(f"[process] setup ok — story_type={summary['story_type']}")
 

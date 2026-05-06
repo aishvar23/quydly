@@ -43,6 +43,37 @@ A JSON object with these fields. Field-by-field rules below.
 ### `story_type`
 Pick by walking these checks in order. Stop at the first match.
 
+0. **Service-journalism early-reject.** Conditions: `editorial_posture
+   === 'disclosure_official'` AND `quality_flags` contains
+   `NUMERIC_TRIVIA_RISK` AND `quiz_candidate === false`.
+   - **Canonical path (you should rarely see this).** The
+     `tools/lib/story_type.py` seed already returns
+     `"service-journalism"` when these conditions hold;
+     `tools/prepare_story_context.py` then auto-seeds the rejection
+     workspace (writes `story.json`, `_meta.json` with
+     `outcome: "rejected"` + `story_type: "service-journalism"`,
+     `_blockers.md`, and a synthesized `08_learning.json` with one
+     `failure` entry), and `tools/process_story.py` exits with code 5
+     before any Claude session opens. The operator runs
+     `python tools/update_learning.py --story-id <id>` and the
+     rejection lands in `LEARNING_RECORD.md`.
+   - **Fallback path (operator overrode the seed with `--story-type`).**
+     If you are reading this prompt with a workspace whose `story.json`
+     row matches the conditions above, do **all** of:
+     1. Write `stories/<id>/_blockers.md` explaining the rejection
+        (cite the synth signals you observed).
+     2. Skip `01_understanding.json`.
+     3. Write a minimal `02_evidence.json` with `status: "insufficient"`
+        and `reason: "service-journalism (stage-1 step 0): retail-deals
+        / affiliate-aggregation pattern matched"`. This satisfies
+        `update_learning.py`'s rejected-outcome required set.
+     4. Skip stages 3–7.
+     5. Write `08_learning.json` with `story_type: "service-journalism"`,
+        `outcome: "rejected"`, and one `failure` entry naming
+        `sourcing/synth-flag-ignored` with the row fields as evidence.
+     6. Tell the operator to run `update_learning.py`.
+     The runner will roll the rejection into the index. Do not produce
+     stages 3–7 under any condition for this row.
 1. `editorial_posture === 'tally_official'` and casualties / military
    action mentioned → **conflict**.
 2. `editorial_posture === 'policy_move'` or primary actor is a regulator

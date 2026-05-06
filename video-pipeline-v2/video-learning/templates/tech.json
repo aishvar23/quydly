@@ -10,7 +10,8 @@
   "fits_poorly_when": [
     "the load-bearing claim is the share-price move (use finance)",
     "the news is a regulator's rule about tech (use policy)",
-    "the news is a state-level export ban or sanctions on tech (use geopolitics)"
+    "the news is a state-level export ban or sanctions on tech (use geopolitics)",
+    "the news is retail-discount aggregation or affiliate-marketing roundups (sources carry FTC affiliate-link disclaimers; primary signal is dollar-off-list, not a vendor decision) — reject upstream of stage 1 via prompts/01-story-understanding.md step 0"
   ],
 
   "vendor_independence_rules": {

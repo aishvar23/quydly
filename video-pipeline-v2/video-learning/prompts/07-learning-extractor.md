@@ -55,9 +55,19 @@ Pick the outcome from these signals:
 | `iterated`   | Stage 7 `decision: "iterate"` (revisions required, not yet done).                         |
 | `scrapped`   | Stage 7 `decision: "scrap"` OR stage 5 hit the 3-iteration cap with blockers remaining.   |
 | `rejected`   | Stage 2 `status: "insufficient"` (story never reached render).                            |
+| `skipped`    | Operator declined render after stage 5 cleared (no stage-7 scrap, no 3-iteration cap).    |
 
 Always set `subjective_quality` to the stage-7 score, or `null` if the
-story did not reach stage 7.
+story did not reach stage 7. (Both `rejected` and `skipped` stories
+have `subjective_quality: null` — the score is post-render only.)
+
+Both `rejected` and `skipped` stories must still produce
+`08_learning.json` and run `update_learning.py`. The `update_learning`
+tool requires `07_post-render-critique.json` for `published` /
+`iterated` / `scrapped`; for `rejected` it requires only stages 1–2
+plus learning; for `skipped` it requires stages 1–5 plus learning. Do
+not fabricate a synthetic post-render artifact for a render that did
+not run.
 
 ## Entry rules — what makes a good entry
 
@@ -115,6 +125,16 @@ Every entry has *all four* of:
   This goes into the entry's `evidence`.
 - Often an entry in this case is a `template_proposal` for the synth's
   upstream extractors — note as such if it would matter.
+
+### Outcome: `skipped` (operator declined after stage 5)
+- 1 `failure` entry naming the synth signal or quality gap that should
+  have rejected the story upstream of stage 5 (so a future fresh Claude
+  catches it before producing 03–05).
+- 1 `prompt_proposal` *or* `template_proposal` if the missing rejection
+  points at a specific check that should be added. The two-strike rule
+  still applies for `rule_proposal`.
+- The `_blockers.md` skip record is the canonical narrative; entries
+  here cite it but do not duplicate it.
 
 ## Two-strike rule (for `rule_proposal`)
 

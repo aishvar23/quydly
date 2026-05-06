@@ -9,7 +9,13 @@ Claude can override at stage 1 if the inference was wrong — this is a
 seed, not a verdict.
 
 Returns one of: legal-scandal, geopolitics, finance, conflict, policy,
-tech, or "unknown".
+tech, service-journalism, or "unknown".
+
+The `service-journalism` sentinel is a rejection signal — it means the
+story matches the retail-deals / affiliate-aggregation pattern flagged
+by the synth (editorial_posture='disclosure_official' + quality_flags
++ quiz_candidate=false). Callers should refuse workspace creation when
+this is returned; see `tools/process_story.py` exit code 5.
 
 Schemas this knows about:
     legal-scandal, geopolitics, finance, tech     — templates exist
@@ -17,6 +23,8 @@ Schemas this knows about:
                                                     inference still returns the
                                                     right answer so the operator
                                                     knows what to add
+    service-journalism                            — rejection sentinel; no
+                                                    template; caller must stop
 """
 from __future__ import annotations
 
@@ -104,6 +112,22 @@ def infer_story_type(row: dict[str, Any]) -> str:
     rule fires — caller should escalate, not pick a default."""
     posture = (row.get("editorial_posture") or "").lower()
     category = (row.get("category_id") or "").lower()
+
+    # 0. Service-journalism early-reject (mirrors prompts/01-story-
+    #    understanding.md step 0). When the synth has tagged the story
+    #    as a vendor / retailer disclosure AND flagged it as numeric-
+    #    trivia AND declined it for the quiz, refuse before workspace
+    #    creation. Caller is `tools/process_story.py`; exit code 5.
+    quality_flags = row.get("quality_flags") or []
+    if not isinstance(quality_flags, list):
+        quality_flags = []
+    quiz_candidate = row.get("quiz_candidate")
+    if (
+        posture == "disclosure_official"
+        and "NUMERIC_TRIVIA_RISK" in quality_flags
+        and quiz_candidate is False
+    ):
+        return "service-journalism"
 
     # 1. Legal-scandal: regulator/prosecutor in entities, charging or
     #    enforcement-style posture.
