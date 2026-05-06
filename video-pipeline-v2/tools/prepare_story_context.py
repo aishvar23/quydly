@@ -28,6 +28,8 @@ Exit codes:
     2 — story id not found
     3 — unexpected error
     4 — could not infer a story_type and --story-type was not provided
+    5 — service-journalism rejection (retail-deals / affiliate-aggregation
+        pattern detected by lib.story_type; no workspace was created)
 """
 from __future__ import annotations
 
@@ -100,24 +102,50 @@ def prepare_context(
     explicit_type: str | None = None,
     force: bool = False,
 ) -> dict:
-    """Create the workspace and return a summary dict for the caller."""
-    # 1–3 — fetch + write story.json
+    """Create the workspace and return a summary dict for the caller.
+
+    Returns early with a `story_type='service-journalism'` summary
+    (no workspace, no story.json) when lib.story_type.infer_story_type
+    flags the row as a retail-deals / affiliate-aggregation rejection.
+    Caller should not proceed; tools/process_story.py exits with
+    code 5.
+    """
+    # 1 — fetch
     payload = fetch_story(story_id)
     row = payload["row"]
 
-    workspace = story_dir(story_id)
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    source_path = story_artifact_path(story_id, "source")
-    wrote_source = _write_json(source_path, payload, force)
-
-    # 4 — story_type
+    # 2 — story_type (decide first; service-journalism short-circuits
+    #     before any filesystem writes so rejected stories do not
+    #     leave a workspace behind).
     if explicit_type:
         story_type = explicit_type
         type_provenance = "explicit (--story-type)"
     else:
         story_type = infer_story_type(row)
         type_provenance = "inferred (lib/story_type.py)"
+
+    if story_type == "service-journalism" and not explicit_type:
+        return {
+            "workspace":       str(story_dir(story_id).relative_to(repo_root())),
+            "story_type":      "service-journalism",
+            "story_type_note": type_provenance,
+            "template_note":   (
+                "rejected: service-journalism "
+                "(editorial_posture=disclosure_official + "
+                "NUMERIC_TRIVIA_RISK + quiz_candidate=false). "
+                "See video-learning/prompts/01-story-understanding.md "
+                "step 0."
+            ),
+            "template_copied": False,
+            "wrote_source":    False,
+        }
+
+    # 3 — workspace + write story.json (only if we did not reject above)
+    workspace = story_dir(story_id)
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    source_path = story_artifact_path(story_id, "source")
+    wrote_source = _write_json(source_path, payload, force)
 
     # 5 — template copy
     template_src, template_note = _resolve_template(story_type)
@@ -214,6 +242,10 @@ def main() -> int:
               f"--story-type <type>. {summary['template_note']}",
               file=sys.stderr)
         return 4
+
+    if summary["story_type"] == "service-journalism":
+        print(f"[prepare] {summary['template_note']}", file=sys.stderr)
+        return 5
 
     print(f"[prepare] workspace: {summary['workspace']}")
     print(f"[prepare] story_type: {summary['story_type']} ({summary['story_type_note']})")

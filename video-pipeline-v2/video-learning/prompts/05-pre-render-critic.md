@@ -161,10 +161,20 @@ For every check below, you produce *either* a finding (with `severity`)
   `02_evidence.numeric_facts[].id`.**
   - Failure → `blockers[]` with `check: "integrity/dangling-fact-ref"`.
 
+- **C22 — synth-flag conflict.** Read `story.json:row` directly. If any
+  of the following hold, the render must not happen:
+  - `quiz_candidate === false`
+  - `quality_flags` contains both `MIXED_STORY` and `NUMERIC_TRIVIA_RISK`
+  - `consistency_score < 0.30`
+  - Failure → `blockers[]` with `check: "integrity/synth-flag-conflict"`.
+  - Defence-in-depth mirror of stage-2 gates 5–7. Redundant by design:
+    if stage 2 ran on a stale prompt and missed the synth signal, this
+    check fires anyway.
+
 ## Severity rules (read carefully)
 
 - **`blocker`**: the render must not happen. The check appears in the
-  failure taxonomy (playbook §2) as a class. C1–C7, C9–C18, C20–C21 are
+  failure taxonomy (playbook §2) as a class. C1–C7, C9–C18, C20–C22 are
   blocker-eligible.
 - **`warn`**: the render can happen, but a human should know.
   C8 (weak hook anchor) and C19 (skipped diff) are warns.

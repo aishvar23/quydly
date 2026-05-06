@@ -3,8 +3,11 @@
 
 What it does:
     1. Validates that the story workspace has the artifacts it should
-       have given its outcome (insufficient → only stages 1–2; otherwise
-       all stages through 08_learning.json).
+       have given its outcome:
+         - rejected (stage 2 insufficient) → only stages 1–2 + learning
+         - skipped (operator declined render after stage 5)
+           → stages 1–5 + learning, no post-render expected
+         - all other outcomes → full chain through 08_learning.json
     2. Reads 08_learning.json.
     3. Appends a per-story section to LEARNING_RECORD.md.
     4. Routes `failure` entries into known-failure-modes.md.
@@ -124,6 +127,14 @@ def _validate_workspace(workspace: Path) -> tuple[str, list[str]]:
     if outcome == "rejected":
         # Stage-2 rejection: only seed + understanding + evidence + learning.
         required = ["source", "template", "meta", "understanding", "evidence", "learning"]
+    elif outcome == "skipped":
+        # Operator declined render after stage 5 cleared. The full pre-render
+        # chain exists; post_render does not (and faking one would be a lie).
+        required = [
+            "source", "template", "meta",
+            "understanding", "evidence", "script", "module_plan",
+            "pre_render", "learning",
+        ]
     else:
         required = [
             "source", "template", "meta",

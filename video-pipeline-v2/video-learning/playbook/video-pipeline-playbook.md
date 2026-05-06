@@ -1,7 +1,7 @@
 # Video pipeline playbook
 
-Version: 1.0.0
-Last updated: 2026-05-05
+Version: 1.1.0
+Last updated: 2026-05-06
 
 The standing rules every story is held to. A fresh Claude reads this once
 at the start of each story, then follows the rules. Edits to this file
@@ -40,6 +40,25 @@ These hold for *every* video, regardless of story type.
   → render is blocked unless the operator overrides explicitly.
 - Stage 5 with non-empty `blockers` → render is blocked. Iterate.
 
+The full gate list lives in `prompts/02-evidence-package.md` §
+Publishability decision; the standing rules captured here:
+
+- **Source independence.** Sources that share a domain root, a sister-
+  site network (`tools/lib/source_networks.py`), or a single byline on
+  ≥75% of articles count as one perspective. The pipeline rejects
+  stories whose source set collapses to a single perspective.
+- **Trust the synth's quality signals.** When the upstream synthesizer
+  has tagged a row with `quiz_candidate=false` AND
+  `editorial_posture='disclosure_official'`, *or* with both
+  `MIXED_STORY` and `NUMERIC_TRIVIA_RISK` in `quality_flags`, *or* with
+  `consistency_score < 0.30`, the video pipeline does not overrule the
+  synth — it stops at stage 2. Service-journalism / retail-deal /
+  affiliate-aggregation patterns get rejected at stage 1 step 0 before
+  workspace creation; see `tools/lib/story_type.py`.
+- **Defence in depth.** Stage 5 mirrors the synth-flag gates as C22
+  (`prompts/05-pre-render-critic.md`) so a stale stage-2 prompt does
+  not let weak stories through to render.
+
 ### Voice
 - No moralising adjectives (`brutal`, `tragic`, `shocking`, `heroic`,
   `devastating`). Banned in script and on-screen text.
@@ -59,6 +78,8 @@ one of these classes. The class determines which check tightens.
 | `sourcing/unsourced`   | Script asserts a number or quote with no `<!-- src: --->` comment.   | Stage 5: regex on `03_script.md` for digits and quotes; fail any without trailing src comment.                   |
 | `sourcing/single`      | Casualty / dollar / vote tally cited from one source only.           | Stage 5: any `numeric_fact` with `source_ids.length === 1` must have explicit "according to <body>" in script.   |
 | `sourcing/paraphrase`  | Paraphrased line rendered as `kind: "quote"` module.                 | Stage 5: every quote module's `text` must equal a string in `02_evidence.quotes[].text`.                         |
+| `sourcing/network-overlap` | All sources collapse to a single editorial network or share a single byline on ≥75% of articles. | Stage 2 gate-2a (same-author concentration) + gate-2b (single editorial network via `tools/lib/source_networks.py`). |
+| `sourcing/synth-flag-ignored` | Pipeline produced a video for a row the synth had already flagged (quality_flags, quiz_candidate=false, low consistency_score). | Stage 2 gates 5 / 6 / 7; stage 5 C22 mirrors them as defence in depth. Stage 1 step 0 rejects service-journalism rows before workspace creation. |
 | `hook/question`        | Hook starts with a question or contains `?`.                         | Stage 5: scan Hook section for `?`. Fail.                                                                        |
 | `hook/hedge`           | Hook contains banned hedge word.                                     | Stage 5: word-list scan on Hook + Stakes sections.                                                               |
 | `hook/generic-opener`  | "In a major development", "Breaking:", "Big news".                   | Stage 5: prefix scan on hook text against banned-prefix list.                                                    |
@@ -345,3 +366,4 @@ The operator reviews proposals before they affect future stories:
 | Version | Date       | Change                                     |
 | ------- | ---------- | ------------------------------------------ |
 | 1.0.0   | 2026-05-05 | Initial playbook covering §1–§8.           |
+| 1.1.0   | 2026-05-06 | Promotion sweep after story 215 (skipped — retail-deals aggregation). §1.3 expanded with three standing rules (source independence, trust-the-synth, defence-in-depth); §2 adds `sourcing/network-overlap` and `sourcing/synth-flag-ignored` failure classes. Prompt edits: stage 1 adds step-0 service-journalism early-reject; stage 2 adds gates 2a, 2b, 5, 6, 7; stage 5 adds C22 synth-flag-conflict; stage 8 adds `skipped` outcome row. Template: tech.json `fits_poorly_when` excludes affiliate-aggregation. Tools: new `lib/source_networks.py`; `lib/story_type.py` returns `service-journalism` sentinel; `prepare_story_context.py` short-circuits before workspace creation; `process_story.py` adds exit code 5; `update_learning.py` and `learning-record.schema.json` already accept `outcome: "skipped"` (landed during story 215). |

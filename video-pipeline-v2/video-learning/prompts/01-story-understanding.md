@@ -43,6 +43,16 @@ A JSON object with these fields. Field-by-field rules below.
 ### `story_type`
 Pick by walking these checks in order. Stop at the first match.
 
+0. **Service-journalism early-reject.** If `editorial_posture ===
+   'disclosure_official'` AND `quality_flags` contains
+   `NUMERIC_TRIVIA_RISK` AND `quiz_candidate === false` → write
+   `_blockers.md` with "service-journalism rejection: retail-deal /
+   affiliate-aggregation pattern" and stop. Do **not** produce
+   `01_understanding.json`. The runner stops the flow; stage 8 still
+   runs with `outcome: "rejected"`. (See playbook §1.3 gate-5.) The
+   `tools/lib/story_type.py` seed mirrors this — when the seed returns
+   `"service-journalism"`, `tools/process_story.py` exits with code 5
+   before workspace creation.
 1. `editorial_posture === 'tally_official'` and casualties / military
    action mentioned → **conflict**.
 2. `editorial_posture === 'policy_move'` or primary actor is a regulator

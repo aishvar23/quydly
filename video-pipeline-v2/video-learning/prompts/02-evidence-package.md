@@ -118,11 +118,32 @@ Set `status: "insufficient"` and write `reason` if **any** of:
 2. All `source_documents[].issuer` collapse to a single domain root
    (e.g. `nytimes.com`, `nyt.com`, `nytimes.co.uk`). Single outlet =
    single perspective.
+2a. **Same-author concentration.** ≥75% of `source_documents[]` share
+    a single `author` value. Different bylines on different stories at
+    the same outlet count as one perspective if one byline writes most
+    of them.
+2b. **Single editorial network.** All `source_documents[].issuer` resolve
+    to one entry in the sister-site list at `tools/lib/source_networks.py`
+    (9to5google / 9to5mac / 9to5toys / electrek; vox.com / theverge.com;
+    vice.com / motherboard.vice.com; conde-nast titles). Sister sites
+    inside a network share editorial leadership; treat as single outlet.
 3. `verification_status === 'draft'` AND
    `source_diversity_score < 0.40`. (Synth-side audit flagged it.)
 4. Story makes a casualty claim and only one source carries the number,
    AND no official body (UN, ICRC, government ministry) is among the
    sources.
+5. **Synth flagged + disclosure posture.** `story.row.quiz_candidate ===
+   false` AND `story.row.editorial_posture === 'disclosure_official'`.
+   The upstream synth already declined the story for the quiz product
+   *and* tagged the editorial posture as a vendor / retailer disclosure.
+   Videoing what the quiz declined is overruling the synth's own filter.
+6. **Combined synth quality flags.** `story.row.quality_flags` contains
+   *both* `MIXED_STORY` *and* `NUMERIC_TRIVIA_RISK`. Either one alone is
+   a soft signal; together they describe a story that is unfocused *and*
+   trivia-leaning — structurally weak for a 60–90s video.
+7. **Consistency floor.** `story.row.consistency_score < 0.30`. The
+   synth's own measure of cross-source agreement; below the floor the
+   sources are not telling the same story.
 
 When `status: "insufficient"`:
 - Fill `key_facts`, `factual_conflicts`, `status`, `reason`.
