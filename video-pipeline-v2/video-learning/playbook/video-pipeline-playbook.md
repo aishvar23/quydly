@@ -53,8 +53,12 @@ Publishability decision; the standing rules captured here:
   `MIXED_STORY` and `NUMERIC_TRIVIA_RISK` in `quality_flags`, *or* with
   `consistency_score < 0.30`, the video pipeline does not overrule the
   synth — it stops at stage 2. Service-journalism / retail-deal /
-  affiliate-aggregation patterns get rejected at stage 1 step 0 before
-  workspace creation; see `tools/lib/story_type.py`.
+  affiliate-aggregation patterns get rejected at stage 1 step 0; the
+  tools (`tools/lib/story_type.py` + `tools/prepare_story_context.py`)
+  auto-seed a minimal rejection workspace (`story.json`, `_meta.json`
+  with `outcome: "rejected"`, `_blockers.md`, `08_learning.json`) so
+  the rejection is captured in the learning index even though no
+  Claude session opens.
 - **Defence in depth.** Stage 5 mirrors the synth-flag gates as C22
   (`prompts/05-pre-render-critic.md`) so a stale stage-2 prompt does
   not let weak stories through to render.

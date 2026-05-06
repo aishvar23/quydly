@@ -96,6 +96,150 @@ def _resolve_template(story_type: str) -> tuple[Path | None, str]:
     return None, f"unexpected story_type '{story_type}'"
 
 
+def _seed_service_journalism_rejection(
+    story_id: int,
+    payload: dict,
+    type_provenance: str,
+) -> str:
+    """Seed a minimal rejection workspace for service-journalism rows.
+
+    Writes story.json, _meta.json, _blockers.md, and a synthesized
+    08_learning.json with one `failure` entry. Skips template.json and
+    stages 1–7 because there is no story_type / template that fits.
+    The artifacts satisfy update_learning.py's relaxed required set for
+    `_meta.json.story_type == 'service-journalism'`, so the rejection
+    is captured in the learning index even though the pipeline never
+    ran stages 1–7.
+
+    Returns a one-line note describing the rejection (used by the
+    caller for stdout reporting and for the `template_note` field of
+    the returned summary dict).
+    """
+    row = payload["row"]
+    workspace = story_dir(story_id)
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    rejection_note = (
+        "rejected: service-journalism "
+        "(editorial_posture=disclosure_official + "
+        "NUMERIC_TRIVIA_RISK + quiz_candidate=false). "
+        "See video-learning/prompts/01-story-understanding.md step 0."
+    )
+
+    # 1 — story.json (always, full payload — entries reference its fields).
+    _write_json(story_artifact_path(story_id, "source"), payload, force=True)
+
+    # 2 — _meta.json with rejection metadata. update_learning.py reads
+    #     story_type from here to pick the relaxed artifact set.
+    now = datetime.now(timezone.utc).isoformat()
+    meta = {
+        "story_id": story_id,
+        "created_at": now,
+        "last_prepared_at": now,
+        "story_type": "service-journalism",
+        "story_type_provenance": type_provenance,
+        "template_version": None,
+        "template_note": rejection_note,
+        "paths": {
+            "workspace": str(workspace.relative_to(repo_root())),
+            "prompts":   str(prompts_dir().relative_to(repo_root())),
+            "playbook":  str(playbook_dir().relative_to(repo_root())),
+            "templates": str(templates_dir().relative_to(repo_root())),
+        },
+        "schema_version": "1.0.0",
+        "outcome": "rejected",
+        "rejection_class": "service-journalism",
+        "rejection_reason": rejection_note,
+        "rejected_at": now,
+    }
+    story_artifact_path(story_id, "meta").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
+    )
+
+    # 3 — _blockers.md narrative.
+    quality_flags = row.get("quality_flags") or []
+    quiz_candidate = row.get("quiz_candidate")
+    consistency_score = row.get("consistency_score")
+    posture = row.get("editorial_posture")
+    blockers_md = (
+        f"# Story {story_id} — service-journalism rejection\n\n"
+        f"**Outcome:** `rejected` (auto-seeded by `tools/prepare_story_context.py`)\n"
+        f"**Class:** `service-journalism`\n"
+        f"**Date:** {now[:10]}\n\n"
+        f"## Why\n\n"
+        f"`tools/lib/story_type.py` step 0 matched the retail-deals / "
+        f"affiliate-aggregation pattern. The synth's own signals on this row:\n\n"
+        f"- `editorial_posture`: `{posture!r}`\n"
+        f"- `quality_flags`: `{quality_flags!r}`\n"
+        f"- `quiz_candidate`: `{quiz_candidate!r}`\n"
+        f"- `consistency_score`: `{consistency_score!r}`\n\n"
+        f"All three step-0 conditions held: `editorial_posture == "
+        f"'disclosure_official'` AND `quality_flags` contains "
+        f"`NUMERIC_TRIVIA_RISK` AND `quiz_candidate is False`.\n\n"
+        f"## What ran\n\n"
+        f"- `tools/prepare_story_context.py` wrote `story.json`, "
+        f"`_meta.json`, `_blockers.md`, and `08_learning.json`.\n"
+        f"- `tools/process_story.py` exited with code 5 — no Claude session.\n\n"
+        f"## What runs next\n\n"
+        f"```\n"
+        f"python tools/update_learning.py --story-id {story_id}\n"
+        f"```\n\n"
+        f"The rollup uses the relaxed artifact set "
+        f"`[source, meta, learning]` for `story_type=='service-journalism'`.\n"
+    )
+    (workspace / "_blockers.md").write_text(blockers_md, encoding="utf-8")
+
+    # 4 — 08_learning.json synthesized with one failure entry. Schema-
+    #     validated by `validate_artifact.py --stage learning` if the
+    #     operator wants to confirm.
+    learning = {
+        "story_id": story_id,
+        "story_type": "service-journalism",
+        "outcome": "rejected",
+        "subjective_quality": None,
+        "entries": [
+            {
+                "category": "failure",
+                "summary": (
+                    "Service-journalism / retail-deals row rejected at "
+                    "stage 1 step 0. The synth had already flagged it "
+                    "(disclosure_official posture + NUMERIC_TRIVIA_RISK "
+                    "+ quiz_candidate=false); the pipeline now refuses "
+                    "to render rather than producing a video the synth "
+                    "itself declined."
+                ),
+                "evidence": (
+                    "stories/{sid}/story.json:row.editorial_posture, "
+                    "row.quality_flags, row.quiz_candidate; "
+                    "tools/lib/story_type.py:infer_story_type step 0; "
+                    "video-learning/prompts/01-story-understanding.md "
+                    "step 0; video-learning/prompts/02-evidence-package.md "
+                    "gate-5"
+                ).format(sid=story_id),
+                "future_check": (
+                    "Already enforced. tools/lib/story_type.py step 0 "
+                    "returns the 'service-journalism' sentinel when "
+                    "all three synth conditions hold; "
+                    "prepare_story_context.py auto-seeds the rejection "
+                    "workspace; update_learning.py rolls the failure "
+                    "entry into known-failure-modes.md. If a future "
+                    "row of this shape slips through, the gap is in "
+                    "the seed conditions — file a prompt_proposal "
+                    "naming the missing condition."
+                ),
+                "links": [
+                    "[2026-05-06 story 215] Stage 2 cleared a story "
+                    "that the synthesizer itself had already flagged "
+                    "as weak"
+                ],
+            }
+        ],
+    }
+    _write_json(story_artifact_path(story_id, "learning"), learning, force=True)
+
+    return rejection_note
+
+
 def prepare_context(
     story_id: int,
     *,
@@ -104,19 +248,18 @@ def prepare_context(
 ) -> dict:
     """Create the workspace and return a summary dict for the caller.
 
-    Returns early with a `story_type='service-journalism'` summary
-    (no workspace, no story.json) when lib.story_type.infer_story_type
-    flags the row as a retail-deals / affiliate-aggregation rejection.
-    Caller should not proceed; tools/process_story.py exits with
-    code 5.
+    For service-journalism rows (lib.story_type returns the sentinel),
+    seeds a minimal rejection workspace via
+    `_seed_service_journalism_rejection` so the rollup can capture the
+    rejection. Caller should still treat this as a rejection;
+    tools/process_story.py exits with code 5.
     """
     # 1 — fetch
     payload = fetch_story(story_id)
     row = payload["row"]
 
-    # 2 — story_type (decide first; service-journalism short-circuits
-    #     before any filesystem writes so rejected stories do not
-    #     leave a workspace behind).
+    # 2 — story_type (decide first; service-journalism takes the
+    #     rejection path before any normal-flow workspace setup).
     if explicit_type:
         story_type = explicit_type
         type_provenance = "explicit (--story-type)"
@@ -125,19 +268,16 @@ def prepare_context(
         type_provenance = "inferred (lib/story_type.py)"
 
     if story_type == "service-journalism" and not explicit_type:
+        rejection_note = _seed_service_journalism_rejection(
+            story_id, payload, type_provenance
+        )
         return {
             "workspace":       str(story_dir(story_id).relative_to(repo_root())),
             "story_type":      "service-journalism",
             "story_type_note": type_provenance,
-            "template_note":   (
-                "rejected: service-journalism "
-                "(editorial_posture=disclosure_official + "
-                "NUMERIC_TRIVIA_RISK + quiz_candidate=false). "
-                "See video-learning/prompts/01-story-understanding.md "
-                "step 0."
-            ),
+            "template_note":   rejection_note,
             "template_copied": False,
-            "wrote_source":    False,
+            "wrote_source":    True,
         }
 
     # 3 — workspace + write story.json (only if we did not reject above)

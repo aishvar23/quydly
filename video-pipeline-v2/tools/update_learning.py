@@ -5,6 +5,9 @@ What it does:
     1. Validates that the story workspace has the artifacts it should
        have given its outcome:
          - rejected (stage 2 insufficient) → only stages 1–2 + learning
+         - rejected + story_type=service-journalism (auto-seeded by
+           prepare_story_context.py) → only source + meta + learning;
+           no template, understanding, or evidence is expected
          - skipped (operator declined render after stage 5)
            → stages 1–5 + learning, no post-render expected
          - all other outcomes → full chain through 08_learning.json
@@ -124,8 +127,15 @@ def _validate_workspace(workspace: Path) -> tuple[str, list[str]]:
         raise ValueError(f"08_learning.json is malformed: {err}") from err
 
     outcome = learning.get("outcome", "?")
-    if outcome == "rejected":
-        # Stage-2 rejection: only seed + understanding + evidence + learning.
+    learning_story_type = learning.get("story_type", "?")
+    if outcome == "rejected" and learning_story_type == "service-journalism":
+        # Step-0 / upstream rejection: prepare_story_context.py seeds
+        # only source + meta + learning (+ _blockers.md, not in
+        # STAGE_ARTIFACTS). No template / stage-1 / stage-2 artifacts
+        # exist because no type / template fits the row.
+        required = ["source", "meta", "learning"]
+    elif outcome == "rejected":
+        # Stage-2 rejection: seed + stage-1 + stage-2 + learning.
         required = ["source", "template", "meta", "understanding", "evidence", "learning"]
     elif outcome == "skipped":
         # Operator declined render after stage 5 cleared. The full pre-render
