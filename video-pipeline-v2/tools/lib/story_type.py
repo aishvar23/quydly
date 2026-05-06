@@ -93,6 +93,29 @@ _PUBLIC_COMPANY_SUFFIX_TOKENS = (
 )
 
 
+# Sports tokens. Story 226 (Arsenal CL final) had category_id='world' and
+# fell through to rule 6, masquerading as geopolitics. There is no sports
+# template, so the right behaviour is to return 'unknown' and let the
+# operator decide (scrap or override). Boundary-aware to avoid acronym
+# false positives (e.g. " f1 " matching "f1" but not "if1" or "f1a").
+_SPORTS_TOKENS = {
+    "champions league", "europa league", "uefa", "fifa",
+    "premier league", "la liga", "bundesliga", "serie a", "ligue 1",
+    "world cup", "copa america", "afcon",
+    "nba", "nfl", "nhl", "mlb", "ncaa",
+    "super bowl", "world series", "stanley cup",
+    # Cricket: 'icc' is intentionally omitted because it collides with
+    # International Criminal Court (a frequent geopolitics actor). The
+    # cricket-specific tokens below cover the common patterns.
+    "ipl", "test match", "t20",
+    "wimbledon", "roland garros", "us open tennis", "australian open",
+    "grand slam", "atp tour", "wta",
+    "olympics", "olympic games", "paralympics",
+    "formula 1", "formula one", "grand prix",
+    "ufc",
+}
+
+
 # Word-boundary regex for finance entities. Built once at import time.
 # `_FINANCE_ENTITIES` is lowercased; entries are escaped and sorted
 # longest-first so multi-word phrases ("federal reserve") match before
@@ -104,6 +127,33 @@ _FINANCE_ENTITY_PATTERN = re.compile(
     + "|".join(re.escape(e) for e in sorted(_FINANCE_ENTITIES, key=len, reverse=True))
     + r")(?:\W|$)"
 )
+
+
+# Same boundary semantics as the finance pattern.
+_SPORTS_TOKEN_PATTERN = re.compile(
+    r"(?:^|\W)(?:"
+    + "|".join(re.escape(t) for t in sorted(_SPORTS_TOKENS, key=len, reverse=True))
+    + r")(?:\W|$)"
+)
+
+
+def _has_sports_signal(row: dict[str, Any]) -> bool:
+    """Scan headline, key_points, and entities for a sports league /
+    competition / governing-body token. Used by rule 6 to refuse the
+    geopolitics fallback when the story is actually sports."""
+    parts: list[str] = []
+    headline = row.get("headline")
+    if isinstance(headline, str):
+        parts.append(headline.lower())
+    for kp in row.get("key_points") or []:
+        if isinstance(kp, str):
+            parts.append(kp.lower())
+    parts.extend(_lower_strs(row.get("primary_entities")))
+    parts.extend(_lower_strs(row.get("primary_entities_enriched")))
+    if not parts:
+        return False
+    blob = " | ".join(parts)
+    return bool(_SPORTS_TOKEN_PATTERN.search(blob))
 
 
 def _lower_strs(values: Any) -> list[str]:
@@ -245,6 +295,13 @@ def infer_story_type(row: dict[str, Any]) -> str:
 
     # 6. Geopolitics: world category with state-level entities.
     if category == "world":
+        # Sports stories often arrive with category_id='world' (the synth
+        # has no sports bucket). There is no sports template, so masquerading
+        # as geopolitics would route through state-actor hooks and banned
+        # visuals that don't fit. Return 'unknown' instead — caller will
+        # exit and prompt the operator. (Story 226: Arsenal CL final.)
+        if _has_sports_signal(row):
+            return "unknown"
         # If we got here, none of the more specific rules fired. Treat as
         # geopolitics provisionally.
         return "geopolitics"
