@@ -28,6 +28,7 @@ Schemas this knows about:
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -79,14 +80,29 @@ _FINANCE_ENTITIES = {
     "nyse", "nasdaq", "lse", "london stock exchange",
 }
 
-# Substrings indicating a corporate issuer when present in an entity
-# string (lowercased). Conservative — chosen so common geopolitics / state-
-# actor entities ("United States", "Iran", "Donald Trump") never match.
+# Substrings that indicate a corporate issuer when they appear at the
+# *end* of a primary_entities entry (lowercased, with leading space).
+# Endswith semantics — not raw substring — so "International Atomic
+# Energy Agency" does not match " ag" the way Volkswagen AG does.
+# Trailing periods on the entity are stripped before the check.
 _PUBLIC_COMPANY_SUFFIX_TOKENS = (
-    " inc", " inc.", " corp", " corp.", " corporation",
-    " ltd", " ltd.", " limited",
-    " plc", " ag", " s.a.", " n.v.",
+    " inc", " corp", " corporation",
+    " ltd", " limited",
+    " plc", " ag", " s.a", " n.v",
     " holdings", " & co",
+)
+
+
+# Word-boundary regex for finance entities. Built once at import time.
+# `_FINANCE_ENTITIES` is lowercased; entries are escaped and sorted
+# longest-first so multi-word phrases ("federal reserve") match before
+# shorter ones ("the fed"). The `(?:^|\W)` / `(?:\W|$)` anchors prevent
+# acronym tokens like "bis" matching inside "bishop" or "boe" matching
+# inside "boeing".
+_FINANCE_ENTITY_PATTERN = re.compile(
+    r"(?:^|\W)(?:"
+    + "|".join(re.escape(e) for e in sorted(_FINANCE_ENTITIES, key=len, reverse=True))
+    + r")(?:\W|$)"
 )
 
 
@@ -121,15 +137,25 @@ def _entities_contain(row: dict[str, Any], tokens: set[str]) -> bool:
 def _has_finance_entity(row: dict[str, Any]) -> bool:
     """Approximate the prompt's 'public company or central bank in
     primary_entities' gate. Returns True when an entity matches the
-    central-bank/major-issuer list OR carries a corporate suffix."""
+    central-bank / major-issuer list as a whole word or phrase, OR
+    when an entity ends with a corporate suffix.
+
+    Boundary-aware: avoids false positives like 'International Atomic
+    Energy Agency' matching ' ag' (caught by Codex review on PR #88)."""
     haystack = (
         _lower_strs(row.get("primary_entities"))
         + _lower_strs(row.get("primary_entities_enriched"))
     )
+    if not haystack:
+        return False
     blob = " | ".join(haystack)
-    if any(token in blob for token in _FINANCE_ENTITIES):
+    if _FINANCE_ENTITY_PATTERN.search(blob):
         return True
-    return any(suffix in blob for suffix in _PUBLIC_COMPANY_SUFFIX_TOKENS)
+    for entity in haystack:
+        stripped = entity.rstrip(" .,;)")
+        if any(stripped.endswith(suffix) for suffix in _PUBLIC_COMPANY_SUFFIX_TOKENS):
+            return True
+    return False
 
 
 def _has_casualty_signal(row: dict[str, Any]) -> bool:
