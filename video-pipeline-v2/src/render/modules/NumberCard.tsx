@@ -58,7 +58,12 @@ export const NumberCard: React.FC<{ module: RenderModule; accentColor: string }>
   const claim          = pickText(module.data, "claim",          "");
   const sourceLabel    = pickText(module.data, "sourceLabel",    "Source");
   const sourceCitation = pickText(module.data, "sourceCitation", "");
-  const postureChips   = readPostureChips(module.data);
+  // Posture chips and the wager-dot row are editorial / Quydly-quiz residue
+  // from the original product surface. Off by default in news renders;
+  // editors can opt back in via showPostureChips / showWagerDots for QC.
+  const showPostureChips = module.data.showPostureChips === true;
+  const showWagerDots    = module.data.showWagerDots === true;
+  const postureChips   = showPostureChips ? readPostureChips(module.data) : [];
 
   const profitNumeric = parseNumber(profitDisplay);
   const profitDecimals = decimalsOf(profitDisplay);
@@ -101,6 +106,7 @@ export const NumberCard: React.FC<{ module: RenderModule; accentColor: string }>
           display={countDisplay}
           label={countLabel}
           accentColor={accentColor}
+          showDots={showWagerDots}
         />
       ) : null}
       {claim ? <ClaimStatement text={claim} accentColor={accentColor} /> : null}
@@ -268,9 +274,12 @@ const WagerStrip: React.FC<{
   display: string;
   label: string;
   accentColor: string;
-}> = ({ total, display, label, accentColor }) => {
+  showDots: boolean;
+}> = ({ total, display, label, accentColor, showDots }) => {
   const labelOpacity = useFadeIn(T.wagerLabel, BEAT.short);
-  const dots = Array.from({ length: total }, (_, i) => i);
+  // Dot row is Quydly-quiz residue; off in news renders. The big number +
+  // unit label still render — that's the news-appropriate signal.
+  const dots = showDots ? Array.from({ length: total }, (_, i) => i) : [];
   return (
     <div style={{
       position: "absolute",
@@ -287,7 +296,7 @@ const WagerStrip: React.FC<{
         ))}
         {display ? (
           <div style={{
-            marginLeft: 16,
+            marginLeft: showDots ? 16 : 0,
             fontFamily: FONT, fontSize: 56, fontWeight: 950,
             color: accentColor, opacity: labelOpacity, ...TABULAR,
           }}>

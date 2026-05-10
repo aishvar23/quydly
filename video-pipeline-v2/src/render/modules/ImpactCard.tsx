@@ -39,7 +39,8 @@ export const ImpactCard: React.FC<{ module: RenderModule; accentColor: string }>
   const eyebrowText  = pickText(module.data, "eyebrow", "");
   const title        = pickText(module.data, "title",   "");
   const closer       = pickText(module.data, "closer",  "");
-  const postureChips = readPostureChips(module.data);
+  // Posture chips are editorial QC chrome; off by default in viewer renders.
+  const postureChips = module.data.showPostureChips === true ? readPostureChips(module.data) : [];
   const items        = readItems(module.data, "items");
 
   return (

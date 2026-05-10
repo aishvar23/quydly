@@ -46,7 +46,8 @@ export const EvidenceShelf: React.FC<{ module: RenderModule; accentColor: string
   const title        = pickText(module.data, "title",        "");
   const footer       = pickText(module.data, "footer",       "");
   const sources      = readSources(module.data, "sources");
-  const postureChips = readPostureChips(module.data);
+  // Posture chips are editorial QC chrome; off by default in viewer renders.
+  const postureChips = module.data.showPostureChips === true ? readPostureChips(module.data) : [];
 
   return (
     <ModuleSurface accentColor={accentColor}>

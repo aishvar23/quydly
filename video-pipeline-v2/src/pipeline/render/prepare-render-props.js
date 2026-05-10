@@ -34,6 +34,8 @@ function prepareRenderProps(storyPackage, outputDir) {
     brandName: 'QUYDLY',
     jobKey,
     publishedDate: formatPublishedDate(storyPackage.story?.published_at),
+    // Persistent geo chrome — null when the story has no resolvable country.
+    primaryCountry: storyPackage.story?.primary_country || null,
     modules: storyPackage.modules.map((module) => ({
       moduleId: module.moduleId,
       role: module.role,

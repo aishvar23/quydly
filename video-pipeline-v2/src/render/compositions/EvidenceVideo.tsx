@@ -13,13 +13,14 @@ import { OutroLockup } from "../modules/OutroLockup";
 import { BrandMark } from "../shared/BrandMark";
 import { SubtitleLayer } from "../shared/SubtitleLayer";
 import { BRAND, SAFE } from "../shared/brand";
-import type { ComponentType, RenderModule, VideoProps } from "../shared/types";
+import type { ComponentType, PrimaryCountry, RenderModule, VideoProps } from "../shared/types";
 
 export const EvidenceVideo: React.FC<VideoProps> = ({
   modules,
   subtitles,
   subtitleBlackouts,
   publishedDate,
+  primaryCountry,
   audioSrc,
   musicSrc,
   accentColor,
@@ -46,9 +47,53 @@ export const EvidenceVideo: React.FC<VideoProps> = ({
       );
     })}
     <SubtitleLayer subtitles={subtitles} blackouts={subtitleBlackouts} />
+    {primaryCountry ? <CountryChrome country={primaryCountry} accentColor={accentColor} /> : null}
     {publishedDate ? <PublishedDateChrome date={publishedDate} accentColor={accentColor} /> : null}
     <BrandMark accentColor={accentColor} />
   </AbsoluteFill>
+);
+
+// Persistent top-left chip showing the story's primary country. Mirrors the
+// PublishedDateChrome pattern (always-on chrome) so the viewer knows where
+// they are within the first frame, not after parsing the headline.
+const CountryChrome: React.FC<{ country: PrimaryCountry; accentColor: string }> = ({
+  country, accentColor,
+}) => (
+  <div style={{
+    position: "absolute",
+    top: SAFE.top - 64,
+    left: SAFE.left,
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "8px 14px",
+    borderRadius: 6,
+    background: "rgba(255,255,255,0.06)",
+    border: `1px solid ${accentColor}55`,
+    backdropFilter: "blur(4px)",
+  }}>
+    <div style={{
+      fontSize: 26,
+      lineHeight: 1,
+    }}>
+      {country.flag_emoji}
+    </div>
+    <div style={{
+      width: 1,
+      height: 14,
+      background: "rgba(255,255,255,0.18)",
+    }} />
+    <div style={{
+      fontFamily: BRAND.fontFamily,
+      fontSize: 22,
+      fontWeight: 800,
+      color: BRAND.muted,
+      letterSpacing: 1.6,
+      textTransform: "uppercase",
+    }}>
+      {country.name} News
+    </div>
+  </div>
 );
 
 // Persistent top-right chip showing when the original story was published.

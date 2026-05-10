@@ -46,7 +46,8 @@ export const QuoteCard: React.FC<{ module: RenderModule; accentColor: string }> 
   const sourceCitation = pickText(module.data, "sourceCitation", "");
   const iconKeyRaw   = pickText(module.data, "icon",          "");
   const iconKey: FinanceIconKey = (iconKeyRaw || "scales") as FinanceIconKey;
-  const postureChips = readPostureChips(module.data);
+  // Posture chips are editorial QC chrome; off by default in viewer renders.
+  const postureChips = module.data.showPostureChips === true ? readPostureChips(module.data) : [];
 
   return (
     <ModuleSurface accentColor={accentColor}>
