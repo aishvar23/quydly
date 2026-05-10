@@ -264,6 +264,13 @@ function lastNameToken(name) {
   return tokens[tokens.length - 1].toLowerCase();
 }
 
+// Returns the best available portrait URL for an enriched entity, preferring
+// the Wikipedia thumbnail but also accepting curator-supplied override URLs
+// set by stampOverride() (portrait_thumbnail_url / portrait_image_url).
+function portraitUrl(e) {
+  return e?.wikipedia_thumbnail_url || e?.portrait_thumbnail_url || e?.portrait_image_url || null;
+}
+
 function resolveModuleAsset(mod, ctx) {
   const moduleText = String(mod.text || '').toLowerCase();
   const role = mod.kind || 'evidence';
@@ -274,23 +281,25 @@ function resolveModuleAsset(mod, ctx) {
     return { src: null, kind: null, sourcedFrom: 'map-pipeline' };
   }
 
-  // Priority 1 — person photo.
+  // Priority 1 — person photo. Accepts both Wikipedia thumbnails and
+  // curator-supplied portrait overrides (portrait_thumbnail_url /
+  // portrait_image_url set by stampOverride()).
   const enriched = Array.isArray(ctx.enriched) ? ctx.enriched : [];
   const resolvedPersons = enriched.filter(
-    (e) => e?.type === 'person' && e?.wiki_resolved === true && typeof e?.wikipedia_thumbnail_url === 'string' && e.wikipedia_thumbnail_url,
+    (e) => e?.type === 'person' && e?.wiki_resolved === true && portraitUrl(e),
   );
   for (const e of resolvedPersons) {
     const fullLower = String(e.name).toLowerCase();
     const lastTok   = lastNameToken(e.name);
     if (moduleText.includes(fullLower) || (lastTok && moduleText.includes(lastTok))) {
-      return { src: e.wikipedia_thumbnail_url, kind: 'photo', sourcedFrom: `wikipedia:${e.name}` };
+      return { src: portraitUrl(e), kind: 'photo', sourcedFrom: `wikipedia:${e.name}` };
     }
   }
   // Hook + stakes — accept first resolved person even without text match,
   // because they are the on-screen anchor for the whole video.
   if ((role === 'hook' || role === 'stakes') && resolvedPersons.length > 0) {
     const e = resolvedPersons[0];
-    return { src: e.wikipedia_thumbnail_url, kind: 'photo', sourcedFrom: `wikipedia:${e.name}` };
+    return { src: portraitUrl(e), kind: 'photo', sourcedFrom: `wikipedia:${e.name}` };
   }
 
   // Priority 2 — country flag.

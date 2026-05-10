@@ -195,7 +195,10 @@ export function computeVideoEligibility(input) {
   const conceptsForVisual = Array.isArray(input?.visual_concepts) ? input.visual_concepts : null;
 
   if (enrichedForVisual !== null && geosForVisual !== null && conceptsForVisual !== null) {
-    const hasResolvedPortrait = enrichedForVisual.some((e) => e?.wiki_resolved === true);
+    const hasResolvedPortrait = enrichedForVisual.some(
+      (e) => e?.wiki_resolved === true &&
+        (e?.wikipedia_thumbnail_url || e?.portrait_thumbnail_url || e?.portrait_image_url),
+    );
     const hasGeoFlag          = geosForVisual.some((g) => typeof g === "string" && g.trim());
     const hasConceptStock     = conceptsForVisual.filter((c) => typeof c === "string" && c.trim()).length >= 2;
     if (!hasResolvedPortrait && !hasGeoFlag && !hasConceptStock) {

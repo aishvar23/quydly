@@ -267,11 +267,51 @@ test("eligibility: no resolved portraits + no geos + <2 concepts → visual_star
   assert.equal(out.reason, "visual_starvation");
 });
 
-test("eligibility: one wiki_resolved portrait satisfies the visual gate", () => {
+test("eligibility: one wiki_resolved portrait WITH thumbnail URL satisfies the visual gate", () => {
   // Person photo via Wikipedia is priority 1 of the rule of thumb.
   const out = computeVideoEligibility(eligibleInput({
     primary_entities:          ["Vijay"],
+    primary_entities_enriched: [{ name: "Vijay", type: "person", wiki_resolved: true, wikipedia_thumbnail_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/v.jpg" }],
+    story_type:                "geopolitics_world",
+    primary_geos:              [],
+    visual_concepts:           [],
+  }));
+  assert.equal(out.eligible, true);
+});
+
+test("eligibility: wiki_resolved=true WITHOUT any portrait URL does NOT satisfy the gate", () => {
+  // Gate 8 checks that a usable image URL is present, not just that
+  // wiki_resolved is truthy. An entity resolved with no URL cannot be
+  // displayed by the renderer and should not count as visually safe.
+  const out = computeVideoEligibility(eligibleInput({
+    primary_entities:          ["Vijay"],
     primary_entities_enriched: [{ name: "Vijay", type: "person", wiki_resolved: true }],
+    story_type:                "geopolitics_world",
+    primary_geos:              [],
+    visual_concepts:           [],
+  }));
+  assert.equal(out.eligible, false);
+  assert.equal(out.reason, "visual_starvation");
+});
+
+test("eligibility: portrait_thumbnail_url override satisfies the visual gate", () => {
+  // stampOverride() sets portrait_thumbnail_url; gate must accept it as
+  // a usable portrait source alongside wikipedia_thumbnail_url.
+  const out = computeVideoEligibility(eligibleInput({
+    primary_entities:          ["Vijay"],
+    primary_entities_enriched: [{ name: "Vijay", type: "person", wiki_resolved: true, portrait_thumbnail_url: "https://press.example.com/vijay-thumb.jpg" }],
+    story_type:                "geopolitics_world",
+    primary_geos:              [],
+    visual_concepts:           [],
+  }));
+  assert.equal(out.eligible, true);
+});
+
+test("eligibility: portrait_image_url override satisfies the visual gate", () => {
+  // stampOverride() also sets portrait_image_url; gate must accept it.
+  const out = computeVideoEligibility(eligibleInput({
+    primary_entities:          ["Vijay"],
+    primary_entities_enriched: [{ name: "Vijay", type: "person", wiki_resolved: true, portrait_image_url: "https://press.example.com/vijay-full.jpg" }],
     story_type:                "geopolitics_world",
     primary_geos:              [],
     visual_concepts:           [],
