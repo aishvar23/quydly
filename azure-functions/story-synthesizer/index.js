@@ -343,6 +343,14 @@ export function buildSourceDocuments(articles, verbatimQuotes = []) {
     date:           a.published_at ?? null,
     authority:      Number(a.authority_score ?? 0),
     source_country: a.source_country ?? null,
+    // 2026-05-09: persist the byline so source-diversity can detect
+    // same-author concentration across articles, and so the v2 video
+    // pipeline's stage-2 gate-2a (≥75% of source_documents share one
+    // author) can actually fire — previously the field was fetched but
+    // dropped here, leaving the gate unable to read it from the row.
+    // Story 215 (4 articles, 3 by Justin Kahn across 9to5 sister sites)
+    // is the documented incident.
+    author:         a.author ?? null,
     // P4-1: explicit null = "this synth verified no quote on this doc".
     // Set unconditionally; loop below overwrites with strings when a
     // quote attaches.
@@ -1083,8 +1091,16 @@ export async function run(context, message) {
     // multi-domain story as low-diversity the moment a single new wire
     // pickup updates it. computeSourceDiversity reads `.domain`, source
     // documents carry the same value under `.issuer`, hence the shape map.
+    // 2026-05-09: also pass author + source_country so the diversity calc
+    // can detect same-author concentration and single-country source sets.
+    // `author` is undefined on rows synthesised before commit 3; the calc
+    // treats undefined as "no author" so older rows stay backward-compatible.
     const mergedDiversity = computeSourceDiversity(
-      mergedSourceDocs.map(d => ({ domain: d.issuer })),
+      mergedSourceDocs.map(d => ({
+        domain:         d.issuer,
+        author:         d.author ?? null,
+        source_country: d.source_country ?? null,
+      })),
     );
     context.log(JSON.stringify({
       event:           "source_diversity_recomputed_on_merge",
@@ -1102,13 +1118,22 @@ export async function run(context, message) {
     // may flip from "single_source_coverage" to eligible. Inputs other
     // than diversity (confidence, posture, headline/summary) come from
     // this synthesis pass since the row's text fields are being overwritten.
+    // 2026-05-09: pass primary_entities + enriched + story_type + geos +
+    // source_documents so gates 6 (no_enriched_entities) and 7
+    // (single_country_outside_theatre) can fire on the merge path.
     const mergedEligibility = computeVideoEligibility({
-      confidence_score:  narrative.confidence_score,
-      editorial_posture: enrichment.editorial_posture,
-      headline:          narrative.headline,
-      summary:           narrative.summary,
-      diversity:         mergedDiversity,
-      article_count:     mergedSourceDocs.length,
+      confidence_score:          narrative.confidence_score,
+      editorial_posture:         enrichment.editorial_posture,
+      headline:                  narrative.headline,
+      summary:                   narrative.summary,
+      diversity:                 mergedDiversity,
+      article_count:             mergedSourceDocs.length,
+      story_type:                enrichment.story_type,
+      primary_entities:          cleanedEntities,
+      primary_entities_enriched: enrichedEntities,
+      primary_geos:              storyPrimaryGeos,
+      source_documents:          mergedSourceDocs,
+      visual_concepts:           enrichment.visual_concepts,
     });
     context.log(JSON.stringify({
       event:       "video_eligibility_computed",
@@ -1184,13 +1209,20 @@ export async function run(context, message) {
     // P2-3: eligibility for a fresh row uses the inserting cluster's
     // articles + the synthesizer's diversity score (no merge to consider
     // since this is the first synthesis).
+    // 2026-05-09: see merge path above for the rationale on the new fields.
     const insertEligibility = computeVideoEligibility({
-      confidence_score:  narrative.confidence_score,
-      editorial_posture: enrichment.editorial_posture,
-      headline:          narrative.headline,
-      summary:           narrative.summary,
+      confidence_score:          narrative.confidence_score,
+      editorial_posture:         enrichment.editorial_posture,
+      headline:                  narrative.headline,
+      summary:                   narrative.summary,
       diversity,
-      article_count:     articles.length,
+      article_count:             articles.length,
+      story_type:                enrichment.story_type,
+      primary_entities:          cleanedEntities,
+      primary_entities_enriched: enrichedEntities,
+      primary_geos:              storyPrimaryGeos,
+      source_documents:          incomingSourceDocs,
+      visual_concepts:           enrichment.visual_concepts,
     });
     context.log(JSON.stringify({
       event:       "video_eligibility_computed",

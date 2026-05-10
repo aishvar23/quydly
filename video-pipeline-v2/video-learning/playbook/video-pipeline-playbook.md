@@ -1,7 +1,7 @@
 # Video pipeline playbook
 
-Version: 1.1.0
-Last updated: 2026-05-06
+Version: 1.2.0
+Last updated: 2026-05-09
 
 The standing rules every story is held to. A fresh Claude reads this once
 at the start of each story, then follows the rules. Edits to this file
@@ -70,6 +70,45 @@ Publishability decision; the standing rules captured here:
   `appears`, `what if`).
 - No questions in the hook.
 
+### Visual asset rule of thumb (HARD RULE)
+
+Every rendered module MUST display a real image. Placeholders, generic
+gradients, and text-only frames are render failures regardless of script
+quality. A module's image is sourced in this priority order:
+
+1. **Person photo** — Wikipedia pageimage of any
+   `primary_entities_enriched[].name` (type=`person`) that appears in the
+   module text. Editor-curated overrides (`entity_portrait_overrides`) win
+   over Wikipedia when present.
+2. **Country flag / labelled map** — when the module text names a
+   country/region present in `primary_geos`, render the flag (or for
+   `kind: "map"`, a labelled-region map of the named theatres).
+3. **Iconic concept image** — bank, parliament, dollar/money, vehicle,
+   oil rig, military, police, law/court, sports — drawn from
+   `02_evidence.visual_concepts[]` or derived from `story_type` + module
+   text keywords. Curated stock library (committed to the repo), not
+   generated.
+4. **NumberCard with a real bound numeric** — only for `kind: "stakes"`
+   or a data-class evidence module with a `numeric_fact_ref` whose value
+   is a JS number (not a date string). The number IS the visual; the
+   plate is the asset.
+
+If none of (1–4) apply for a module, **the plan is wrong**. Go back to
+stage 4 and either re-shape the module so one of the rules applies, or
+drop the module entirely. A module that cannot be filled by this ladder
+is not allowed to render.
+
+Stage 7 (post-render critic): any manifest with `asset_status:
+"placeholder"` on >0 modules is a render failure. Decision is `iterate`
+or `awaiting-bridge` — never `published`.
+
+The synth side enforces a matching gate: rows whose
+`primary_entities_enriched` is empty (and `story_type` is not
+`finance_markets`), or whose `primary_geos` is empty AND
+`visual_concepts.length < 2`, are flagged `video_eligible=false` with
+reason `no_enriched_entities` or `visual_starvation`. The video pipeline
+should never see a row that cannot satisfy the rule.
+
 ---
 
 ## 2. Failure taxonomy
@@ -96,6 +135,7 @@ one of these classes. The class determines which check tightens.
 | `render/overflow`      | On-screen text exceeded the safe area / clipped.                     | Post-render check: each module's `text` length ≤ per-kind cap (see §3).                                          |
 | `render/mistimed-cut`  | Cut happens mid-word or before key noun is read.                     | Post-render: compare `manifest.json` cut times against TTS word boundaries.                                      |
 | `render/missing-asset` | Module rendered with placeholder where `asset_hint` failed.          | Post-render: scan manifest for `asset_status: "fallback"`; treat as warn or blocker per kind.                    |
+| `render/visual-starvation` | Manifest ships with 100% placeholder modules — row had no person photos / flags / concept stock to draw on. | §1 Visual asset rule of thumb. Synth gate `video_eligible=false reason='visual_starvation'` upstream; stage 7 logs `architecture/visual-starvation` blocker if it slips through. |
 | `learning/vague`       | `08_learning.json` entry has no testable `future_check`.             | `update_learning.py` rejects entries where `future_check.length < 5`.                                            |
 | `learning/no-rollup`   | Entry never gets surfaced in `LEARNING_RECORD.md`.                   | `update_learning.py` is non-optional; runner reminds operator at stage 8 close.                                  |
 
@@ -371,3 +411,4 @@ The operator reviews proposals before they affect future stories:
 | ------- | ---------- | ------------------------------------------ |
 | 1.0.0   | 2026-05-05 | Initial playbook covering §1–§8.           |
 | 1.1.0   | 2026-05-06 | Promotion sweep after story 215 (skipped — retail-deals aggregation). §1.3 expanded with three standing rules (source independence, trust-the-synth, defence-in-depth); §2 adds `sourcing/network-overlap` and `sourcing/synth-flag-ignored` failure classes. Prompt edits: stage 1 adds step-0 service-journalism early-reject; stage 2 adds gates 2a, 2b, 5, 6, 7; stage 5 adds C22 synth-flag-conflict; stage 8 adds `skipped` outcome row. Template: tech.json `fits_poorly_when` excludes affiliate-aggregation. Tools: new `lib/source_networks.py`; `lib/story_type.py` returns `service-journalism` sentinel; `prepare_story_context.py` short-circuits before workspace creation; `process_story.py` adds exit code 5; `update_learning.py` and `learning-record.schema.json` already accept `outcome: "skipped"` (landed during story 215). |
+| 1.2.0   | 2026-05-09 | Operator-driven response to the cumulative 18-story `100% asset_status='placeholder'` pattern (stories 181/183/187/195/197/199/206/213/216/222). §1 adds the **Visual asset rule of thumb (HARD RULE)** — every module must display a real image (person photo, country flag, iconic concept stock, or numeric data plate); the four-step priority ladder is now the contract. §2 adds `render/visual-starvation` failure class. Synth side: `azure-functions/lib/sourceDiversity.js` collapses sister-site networks (9to5/vox/vice/conde-nast) and caps the diversity label at `narrow` on ≥75% same-author concentration; `azure-functions/lib/videoEligibility.js` adds gates `no_enriched_entities`, `single_country_outside_theatre`, and `visual_starvation`; `buildSourceDocuments` now persists `author` so video-side gate-2a can fire. Optional render-side asset-fetch ladder lands in `scripts/render-from-plan.js`. |

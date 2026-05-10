@@ -205,6 +205,130 @@ function mapAssetClass(hint) {
   }
 }
 
+// ─── asset resolver (visual asset rule of thumb — playbook §1) ───────────────
+// Walks the four-step priority ladder for one module:
+//   1. Person photo — Wikipedia pageimage from primary_entities_enriched[].
+//      Must be type='person', wiki_resolved=true, and the entity name (or its
+//      last token) must appear in the module text. Hook+stakes also accept
+//      the first resolved person regardless of text match (the on-screen
+//      anchor for the whole video).
+//   2. Country flag — flagcdn.com URL keyed on a primary_geos code whose
+//      country name appears in the module text. Skipped on kind='map' which
+//      has its own MapCallout pipeline.
+//   3. Concept stock — small curated registry keyed on lowercase keywords
+//      from 02_evidence.visual_concepts[] or the module text itself. Returns
+//      a Wikimedia Commons thumbnail URL.
+//   4. NumberCard — handled by chooseComponent + numeric_fact_ref upstream;
+//      not part of this resolver.
+//
+// Returns { src, kind, sourcedFrom } where src is a URL string (or null
+// when the ladder exhausts) and sourcedFrom is a short tag for the manifest
+// notes ("wikipedia:Vijay" / "flag:in" / "concept:parliament").
+//
+// Stub: concept stock uses a tiny inline registry pinned to stable Wikimedia
+// Commons thumbnails. Operator should swap to locally-hosted assets before
+// scaling story volume — Commons URLs are stable but discovery is manual.
+const CONCEPT_STOCK = Object.freeze({
+  parliament: { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Sansad_Bhavan-3.jpg/640px-Sansad_Bhavan-3.jpg',                                       alt: 'Parliament building' },
+  legislature: { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Sansad_Bhavan-3.jpg/640px-Sansad_Bhavan-3.jpg',                                      alt: 'Legislative chamber' },
+  capitol:     { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/US_Capitol_west_side.JPG/640px-US_Capitol_west_side.JPG',                            alt: 'US Capitol' },
+  court:       { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8b/Oliver_Ellsworth_Courthouse.jpg/640px-Oliver_Ellsworth_Courthouse.jpg',              alt: 'Courthouse' },
+  courthouse:  { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8b/Oliver_Ellsworth_Courthouse.jpg/640px-Oliver_Ellsworth_Courthouse.jpg',              alt: 'Courthouse' },
+  law:         { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Lady_Justice_at_the_Old_Bailey.jpg/640px-Lady_Justice_at_the_Old_Bailey.jpg',        alt: 'Lady Justice' },
+  justice:     { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Lady_Justice_at_the_Old_Bailey.jpg/640px-Lady_Justice_at_the_Old_Bailey.jpg',        alt: 'Lady Justice' },
+  police:      { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0a/NYPD-traffic-by-David-Shankbone.jpg/640px-NYPD-traffic-by-David-Shankbone.jpg',      alt: 'Police' },
+  army:        { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/US_soldiers_marching.jpg/640px-US_soldiers_marching.jpg',                            alt: 'Soldiers marching' },
+  military:    { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/US_soldiers_marching.jpg/640px-US_soldiers_marching.jpg',                            alt: 'Military' },
+  bank:        { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/Federal_Reserve_Building_in_Washington_DC.jpg/640px-Federal_Reserve_Building_in_Washington_DC.jpg', alt: 'Federal Reserve' },
+  money:       { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/USCurrency_Federal_Reserve.jpg/640px-USCurrency_Federal_Reserve.jpg',                alt: 'US currency' },
+  dollar:      { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/USCurrency_Federal_Reserve.jpg/640px-USCurrency_Federal_Reserve.jpg',                alt: 'US currency' },
+  oil:         { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Oil_platform_in_the_North_SeaPros.jpg/640px-Oil_platform_in_the_North_SeaPros.jpg',  alt: 'Oil platform' },
+  vehicle:     { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Train_at_Sealdah_station.jpg/640px-Train_at_Sealdah_station.jpg',                    alt: 'Train at platform' },
+  train:       { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Train_at_Sealdah_station.jpg/640px-Train_at_Sealdah_station.jpg',                    alt: 'Train at platform' },
+  railway:     { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Train_at_Sealdah_station.jpg/640px-Train_at_Sealdah_station.jpg',                    alt: 'Railway' },
+  sports:      { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Wankhede_Stadium_panoramic_view.jpg/640px-Wankhede_Stadium_panoramic_view.jpg',      alt: 'Cricket stadium' },
+  stadium:     { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Wankhede_Stadium_panoramic_view.jpg/640px-Wankhede_Stadium_panoramic_view.jpg',      alt: 'Stadium' },
+  diplomacy:   { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Diplomatic_meeting.jpg/640px-Diplomatic_meeting.jpg',                                alt: 'Diplomatic meeting' },
+  embassy:     { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Diplomatic_meeting.jpg/640px-Diplomatic_meeting.jpg',                                alt: 'Embassy' },
+});
+
+function flagUrlFromCode(code) {
+  if (!code || typeof code !== 'string' || !/^[a-z]{2}$/i.test(code)) return null;
+  return `https://flagcdn.com/w320/${code.toLowerCase()}.png`;
+}
+
+function lastNameToken(name) {
+  if (!name || typeof name !== 'string') return null;
+  const tokens = name.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  return tokens[tokens.length - 1].toLowerCase();
+}
+
+function resolveModuleAsset(mod, ctx) {
+  const moduleText = String(mod.text || '').toLowerCase();
+  const role = mod.kind || 'evidence';
+
+  // Map modules have their own pipeline (MapCallout via chooseComponent);
+  // the resolver does not interfere.
+  if (mod.kind === 'map') {
+    return { src: null, kind: null, sourcedFrom: 'map-pipeline' };
+  }
+
+  // Priority 1 — person photo.
+  const enriched = Array.isArray(ctx.enriched) ? ctx.enriched : [];
+  const resolvedPersons = enriched.filter(
+    (e) => e?.type === 'person' && e?.wiki_resolved === true && typeof e?.wikipedia_thumbnail_url === 'string' && e.wikipedia_thumbnail_url,
+  );
+  for (const e of resolvedPersons) {
+    const fullLower = String(e.name).toLowerCase();
+    const lastTok   = lastNameToken(e.name);
+    if (moduleText.includes(fullLower) || (lastTok && moduleText.includes(lastTok))) {
+      return { src: e.wikipedia_thumbnail_url, kind: 'photo', sourcedFrom: `wikipedia:${e.name}` };
+    }
+  }
+  // Hook + stakes — accept first resolved person even without text match,
+  // because they are the on-screen anchor for the whole video.
+  if ((role === 'hook' || role === 'stakes') && resolvedPersons.length > 0) {
+    const e = resolvedPersons[0];
+    return { src: e.wikipedia_thumbnail_url, kind: 'photo', sourcedFrom: `wikipedia:${e.name}` };
+  }
+
+  // Priority 2 — country flag.
+  const geos = Array.isArray(ctx.geos) ? ctx.geos : [];
+  for (const code of geos) {
+    const c = String(code || '').toLowerCase();
+    const countryName = COUNTRY_CODE_TO_NAME[c];
+    if (!countryName) continue;
+    if (moduleText.includes(countryName.toLowerCase())) {
+      const url = flagUrlFromCode(c);
+      if (url) return { src: url, kind: 'flag', sourcedFrom: `flag:${c}` };
+    }
+  }
+  // Hook + stakes — accept the primary country flag without text match (same
+  // anchor logic as person fallback).
+  if ((role === 'hook' || role === 'stakes') && geos.length > 0) {
+    const c = String(geos[0] || '').toLowerCase();
+    const url = flagUrlFromCode(c);
+    if (url) return { src: url, kind: 'flag', sourcedFrom: `flag:${c}` };
+  }
+
+  // Priority 3 — concept stock. Match against synth-supplied visual_concepts
+  // first (editorial-strongest signal), then against the module text itself
+  // as a heuristic fallback.
+  const concepts = Array.isArray(ctx.visualConcepts) ? ctx.visualConcepts : [];
+  const haystack = [...concepts.map((c) => String(c || '').toLowerCase()), moduleText].join(' ');
+  for (const [keyword, asset] of Object.entries(CONCEPT_STOCK)) {
+    if (haystack.includes(keyword)) {
+      return { src: asset.url, kind: 'concept', sourcedFrom: `concept:${keyword}` };
+    }
+  }
+
+  // Ladder exhausted — render will fall back to placeholder. This is a
+  // visual-starvation finding for stage 7; the synth's video_eligibility
+  // gate should normally block these rows from queueing in the first place.
+  return { src: null, kind: null, sourcedFrom: 'visual-starvation' };
+}
+
 // ─── parse 03_script.md → script object ──────────────────────────────────────
 // The renderer's script object expects:
 //   { full_script, segments: [{ role, text }], story_type }
@@ -275,13 +399,24 @@ function stripSrcComments(text) {
 }
 
 // ─── modules planner ─────────────────────────────────────────────────────────
-function buildModules(plan, evidence, scriptObj) {
+function buildModules(plan, evidence, scriptObj, storyRow) {
   if (!Array.isArray(plan.modules) || plan.modules.length === 0) {
     throw new Error('04_module-plan.json: modules[] is empty');
   }
   const numericById = new Map(
     (evidence.numeric_facts || []).map((n) => [n.id, n]),
   );
+
+  // Asset-resolver context — pulled once from story.row + 02_evidence and
+  // passed into every module. Empty/missing arrays degrade gracefully (the
+  // resolver returns visual-starvation rather than crashing).
+  const assetCtx = {
+    enriched:        Array.isArray(storyRow?.primary_entities_enriched) ? storyRow.primary_entities_enriched : [],
+    geos:            Array.isArray(storyRow?.primary_geos) ? storyRow.primary_geos : [],
+    visualConcepts:  Array.isArray(evidence?.visual_concepts)
+      ? evidence.visual_concepts
+      : (Array.isArray(storyRow?.visual_concepts) ? storyRow.visual_concepts : []),
+  };
 
   // Hook overlay rescue: stage-4 sometimes truncates the hook to a fragment
   // ("New Delhi named BJP leader Dinesh Trivedi" — no object). When the plan
@@ -348,6 +483,19 @@ function buildModules(plan, evidence, scriptObj) {
       notes.push(`numeric_fact_ref "${m.numeric_fact_ref}" not in 02_evidence.json`);
     }
 
+    // Walk the visual-asset rule of thumb ladder per module (playbook §1):
+    //   1. Wikipedia pageimage of a named person in primary_entities_enriched
+    //   2. Country flag from primary_geos
+    //   3. Concept stock from visual_concepts / module text
+    //   4. NumberCard data plate (already wired via numeric_fact_ref above)
+    // If none hit, sourcedFrom='visual-starvation' is logged in notes; the
+    // synth-side video_eligibility gate is supposed to keep these rows out
+    // of the queue in the first place.
+    const resolved = resolveModuleAsset(m, assetCtx);
+    if (resolved.sourcedFrom) notes.push(`asset:${resolved.sourcedFrom}`);
+
+    const assetKind = resolved.kind || (mapAssetClass(m.asset_hint) === 'photo' ? 'photo' : 'graphic');
+
     modules.push({
       moduleId: i + 1,
       role: choice.role,
@@ -360,8 +508,15 @@ function buildModules(plan, evidence, scriptObj) {
       narration,
       assetClass: mapAssetClass(m.asset_hint),
       data,
-      // Placeholder asset — no Mapbox/Wikimedia fetch in this bridge.
-      asset: { kind: 'graphic', src: null, safetyClass: 'graphic' },
+      // Resolved by resolveModuleAsset above. src=null falls through to the
+      // existing placeholder rendering and the manifest writer marks it as
+      // asset_status='placeholder' for stage 7.
+      asset: {
+        kind:         assetKind,
+        src:          resolved.src,
+        safetyClass:  assetKind === 'photo' ? 'photo' : 'graphic',
+        sourcedFrom:  resolved.sourcedFrom,
+      },
       subtitleSuppress: false,
       _planRef: {
         plan_index: i,
@@ -402,6 +557,13 @@ function buildManifest({ storyId, storyPackage, propsPath, outputPath }) {
       asset_status: assetStatus,
       asset_kind: m.asset?.kind || 'graphic',
       asset_class: m.assetClass,
+      // Asset-resolver provenance (playbook §1 ladder). Stage 7 reads this
+      // to attribute placeholder findings: 'visual-starvation' = synth row
+      // had nothing to draw on; 'wikipedia:<name>' = portrait fetched from
+      // Wikipedia; 'flag:<code>' = country flag; 'concept:<keyword>' =
+      // concept stock library hit; 'map-pipeline' = MapCallout owns it.
+      asset_sourced_from: m.asset?.sourcedFrom || null,
+      asset_src: m.asset?.src || null,
       component_type: m.componentType,
       evidence_ref: ref.evidence_ref || [],
       numeric_fact_ref: ref.numeric_fact_ref || null,
@@ -485,8 +647,10 @@ async function main(argv) {
     : 'real TTS (ElevenLabs)';
   log('VOICE', `${voice.totalDurationSec.toFixed(2)}s ${voiceLabel}`);
 
-  // 3. Modules (built from the plan + evidence + parsed script).
-  const { modules, totalDurationSec: planTotal } = buildModules(plan, evidence, scriptObj);
+  // 3. Modules (built from the plan + evidence + parsed script + story row
+  //    for asset resolution per the playbook §1 visual-asset ladder).
+  const storyRowForAssets = (story && story.row) || story || {};
+  const { modules, totalDurationSec: planTotal } = buildModules(plan, evidence, scriptObj, storyRowForAssets);
   // Reconcile plan vs actual narration. ElevenLabs usually reads slower than
   // stage-4 plans (~120-145 wpm vs 165 plan-side), so voice overruns by
   // 10-20s on most stories. The previous bridge dumped the entire overrun
