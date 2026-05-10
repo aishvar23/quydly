@@ -62,14 +62,37 @@ export default function SaveStreakModal({ visible, streak, supabase, onSuccess, 
     try {
       // Save quiz state before the redirect so it can be restored on return
       onBeforeOAuth?.();
-      const { error: oauthErr } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
-        },
-      });
-      if (oauthErr) throw oauthErr;
-      // linkIdentity redirects — success handled after redirect via onAuthStateChange in App.jsx
+      const redirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
+
+      // If the current session is anonymous, link the Google identity to the
+      // existing user_id so server-side progress (user_daily_progress, etc.)
+      // carries over. Otherwise fall back to a fresh OAuth sign-in.
+      const { data: { session: current } } = await supabase.auth.getSession();
+      const isAnon = current?.user?.is_anonymous === true;
+
+      if (isAnon) {
+        const { error: linkErr } = await supabase.auth.linkIdentity({
+          provider: "google",
+          options: { redirectTo },
+        });
+        if (linkErr) {
+          // Common case: this Google account is already a Supabase user (returning
+          // user from a different device). Fall back to a regular sign-in so they
+          // can still get in — they'll resume from their existing progress.
+          const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+            provider: "google",
+            options: { redirectTo },
+          });
+          if (oauthErr) throw oauthErr;
+        }
+      } else {
+        const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: { redirectTo },
+        });
+        if (oauthErr) throw oauthErr;
+      }
+      // Redirect happens — success handled after return via onAuthStateChange in App.jsx
     } catch (err) {
       setError(err.message ?? "Google sign-in failed. Please try again.");
       setLoading(false);
@@ -81,13 +104,35 @@ export default function SaveStreakModal({ visible, streak, supabase, onSuccess, 
     setLoading(true);
     setError(null);
     try {
-      const { error: otpErr } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-        options: {
-          emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
-        },
-      });
-      if (otpErr) throw otpErr;
+      const emailRedirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
+
+      // If the current session is anonymous, upgrade it to a permanent user via
+      // updateUser({ email }) so the user_id is preserved and prior progress
+      // carries over. Otherwise send a normal magic link sign-in.
+      const { data: { session: current } } = await supabase.auth.getSession();
+      const isAnon = current?.user?.is_anonymous === true;
+
+      if (isAnon) {
+        const { error: updErr } = await supabase.auth.updateUser(
+          { email: email.trim() },
+          { emailRedirectTo },
+        );
+        if (updErr) {
+          // Likely: email already belongs to another Supabase user. Fall back to
+          // a regular magic-link sign-in so they can still get in.
+          const { error: otpErr } = await supabase.auth.signInWithOtp({
+            email: email.trim(),
+            options: { emailRedirectTo },
+          });
+          if (otpErr) throw otpErr;
+        }
+      } else {
+        const { error: otpErr } = await supabase.auth.signInWithOtp({
+          email: email.trim(),
+          options: { emailRedirectTo },
+        });
+        if (otpErr) throw otpErr;
+      }
       setEmailSent(true);
     } catch (err) {
       setError(err.message ?? "Could not send link. Please try again.");

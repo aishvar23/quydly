@@ -168,8 +168,10 @@ export default function App() {
         if (Platform.OS === "web" && typeof window !== "undefined" && window.location.hash) {
           window.history.replaceState(null, "", window.location.pathname);
         }
-        // Show a brief "signed in" confirmation banner
-        if (event === "SIGNED_IN") {
+        // Show a brief "signed in" confirmation banner.
+        // USER_UPDATED fires after linkIdentity / updateUser upgrades an anon
+        // user to a permanent one — treat that as a successful sign-in too.
+        if (event === "SIGNED_IN" || event === "USER_UPDATED") {
           const firstName =
             s.user.user_metadata?.full_name?.split(" ")[0] ??
             s.user.user_metadata?.name?.split(" ")[0] ??
