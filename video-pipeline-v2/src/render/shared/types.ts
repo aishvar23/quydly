@@ -73,6 +73,12 @@ export type SubtitleBlackoutRange = {
   endSec: number;
 };
 
+export type PrimaryCountry = {
+  code: string;
+  name: string;
+  flag_emoji: string;
+};
+
 export type VideoProps = {
   storyType: string;
   accentColor: string;
@@ -86,6 +92,7 @@ export type VideoProps = {
   subtitles: SubtitleCue[];
   subtitleBlackouts?: SubtitleBlackoutRange[];
   publishedDate?: string | null;
+  primaryCountry?: PrimaryCountry | null;
   evidenceSources?: EvidenceSource[];
   safetyNotes?: string[];
 };

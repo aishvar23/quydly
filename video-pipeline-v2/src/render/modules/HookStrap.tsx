@@ -38,7 +38,8 @@ export const HookStrap: React.FC<{ module: RenderModule; accentColor: string }> 
   const eyebrowText = pickText(module.data, "kicker", "");
   const headline    = pickText(module.data, "headline", module.overlayText || "");
   const subhead     = pickText(module.data, "subhead", "");
-  const postureChips = readPostureChips(module.data);
+  // Posture chips are editorial QC chrome; off by default in viewer renders.
+  const postureChips = module.data.showPostureChips === true ? readPostureChips(module.data) : [];
 
   // Optional icon flow: data.iconFlow is an array of FinanceIconKey
   // (e.g. ["bank", "down", "house"]) that renders ABOVE the headline as

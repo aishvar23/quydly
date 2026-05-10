@@ -50,6 +50,96 @@ const STORY_TYPE_MAP = {
   'service-journalism': 'general',
 };
 
+// ─── primary country resolution ──────────────────────────────────────────────
+// Pick the highest-confidence country from the story's geo signals. Logic:
+//   1. row.geo_scores: country with score ≥ 0.5 (pick max). Skip 'global'.
+//   2. fallback: row.primary_geos[0].
+//   3. else: null.
+// Returns { code, name, flag_emoji } or null. Crash loudly only on malformed
+// shape — null is a legitimate result for stories with no geo signal.
+//
+// NOTE: geo_scores keys are mixed-case country *names* (e.g. "india", "global"),
+// while primary_geos are ISO-2 codes (e.g. "in"). We bridge via NAME_TO_CODE.
+
+const COUNTRY_CODE_TO_NAME = {
+  in: 'India',          bd: 'Bangladesh',     pk: 'Pakistan',
+  lk: 'Sri Lanka',      np: 'Nepal',          cn: 'China',
+  jp: 'Japan',          kr: 'South Korea',    kp: 'North Korea',
+  tw: 'Taiwan',         hk: 'Hong Kong',      sg: 'Singapore',
+  my: 'Malaysia',       id: 'Indonesia',      ph: 'Philippines',
+  th: 'Thailand',       vn: 'Vietnam',        us: 'United States',
+  ca: 'Canada',         mx: 'Mexico',         br: 'Brazil',
+  ar: 'Argentina',      ve: 'Venezuela',      co: 'Colombia',
+  cl: 'Chile',          pe: 'Peru',           gb: 'United Kingdom',
+  uk: 'United Kingdom', ie: 'Ireland',        fr: 'France',
+  de: 'Germany',        it: 'Italy',          es: 'Spain',
+  pt: 'Portugal',       nl: 'Netherlands',    be: 'Belgium',
+  ch: 'Switzerland',    at: 'Austria',        pl: 'Poland',
+  se: 'Sweden',         no: 'Norway',         dk: 'Denmark',
+  fi: 'Finland',        is: 'Iceland',        gr: 'Greece',
+  tr: 'Turkey',         ru: 'Russia',         ua: 'Ukraine',
+  by: 'Belarus',        ro: 'Romania',        cz: 'Czech Republic',
+  hu: 'Hungary',        il: 'Israel',         ps: 'Palestinian Territories',
+  ir: 'Iran',           sa: 'Saudi Arabia',   ae: 'United Arab Emirates',
+  qa: 'Qatar',          eg: 'Egypt',          za: 'South Africa',
+  ng: 'Nigeria',        ke: 'Kenya',          et: 'Ethiopia',
+  au: 'Australia',      nz: 'New Zealand',
+};
+
+// Regional indicator letter offset trick: ISO-2 → 🇽🇽 emoji.
+function flagEmojiFromCode(code) {
+  if (!code || typeof code !== 'string' || code.length !== 2) return '';
+  const A = 0x1F1E6;
+  const a = 'a'.charCodeAt(0);
+  const c0 = code.toLowerCase().charCodeAt(0);
+  const c1 = code.toLowerCase().charCodeAt(1);
+  if (c0 < a || c0 > a + 25 || c1 < a || c1 > a + 25) return '';
+  return String.fromCodePoint(A + (c0 - a)) + String.fromCodePoint(A + (c1 - a));
+}
+
+function resolvePrimaryCountry(row) {
+  if (!row || typeof row !== 'object') return null;
+  const codeOf = (name) => {
+    const n = String(name || '').toLowerCase();
+    for (const [code, full] of Object.entries(COUNTRY_CODE_TO_NAME)) {
+      if (full.toLowerCase() === n) return code;
+    }
+    return null;
+  };
+
+  const scores = row.geo_scores;
+  if (scores && typeof scores === 'object') {
+    let bestCode = null;
+    let bestScore = 0;
+    for (const [name, score] of Object.entries(scores)) {
+      if (name === 'global') continue;
+      const numeric = Number(score);
+      if (!Number.isFinite(numeric) || numeric < 0.5) continue;
+      const code = codeOf(name);
+      if (code && numeric > bestScore) {
+        bestScore = numeric;
+        bestCode  = code;
+      }
+    }
+    if (bestCode) {
+      return { code: bestCode, name: COUNTRY_CODE_TO_NAME[bestCode], flag_emoji: flagEmojiFromCode(bestCode) };
+    }
+  }
+
+  // Fallback: first primary_geos code with a known name.
+  const geos = Array.isArray(row.primary_geos) ? row.primary_geos : [];
+  for (const raw of geos) {
+    const code = String(raw || '').toLowerCase();
+    if (COUNTRY_CODE_TO_NAME[code]) {
+      return { code, name: COUNTRY_CODE_TO_NAME[code], flag_emoji: flagEmojiFromCode(code) };
+    }
+  }
+
+  // TODO(stage-5): warn when primary_country is null AND geo_scores empty AND
+  // primary_geos empty — that's a real data gap the renderer can't paint over.
+  return null;
+}
+
 // ─── kind → componentType mapping ────────────────────────────────────────────
 // Keep this conservative. Components that don't exist in the registry render
 // as a "[Foo not implemented]" placeholder card (see EvidenceVideo.tsx). For
@@ -193,6 +283,14 @@ function buildModules(plan, evidence, scriptObj) {
     (evidence.numeric_facts || []).map((n) => [n.id, n]),
   );
 
+  // Hook overlay rescue: stage-4 sometimes truncates the hook to a fragment
+  // ("New Delhi named BJP leader Dinesh Trivedi" — no object). When the plan
+  // text is a strict prefix of the script's hook segment AND lacks terminal
+  // punctuation, swap in the script's full hook sentence so the on-frame
+  // copy reads as a complete proposition.
+  const hookSegment = scriptObj.segments.find((s) => s.role === 'hook');
+  const hookSegmentText = hookSegment ? hookSegment.text.trim() : '';
+
   const modules = [];
   let cursor = 0;
   for (let i = 0; i < plan.modules.length; i++) {
@@ -210,19 +308,33 @@ function buildModules(plan, evidence, scriptObj) {
     const segment = scriptObj.segments.find((s) => s.role === choice.role)
       || scriptObj.segments[Math.min(i, scriptObj.segments.length - 1)];
 
-    const overlayText = String(m.text || '').trim();
-    const narration   = segment ? segment.text : overlayText;
+    let overlayText = String(m.text || '').trim();
+    const narration = segment ? segment.text : overlayText;
+    let hookOverlayNote = null;
+
+    if (
+      choice.role === 'hook'
+      && hookSegmentText
+      && overlayText
+      && !/[.!?]$/.test(overlayText)
+      && hookSegmentText.startsWith(overlayText)
+      && hookSegmentText.length > overlayText.length
+    ) {
+      hookOverlayNote = `hook overlay extended from plan fragment to script sentence (was: "${overlayText}")`;
+      overlayText = hookSegmentText;
+    }
 
     const data = {};
     if (m.numeric_fact_ref) {
       const nf = numericById.get(m.numeric_fact_ref);
       if (nf) {
-        // NumberCard reads `count`/`label`/`secondary` from data; fill what we
-        // have. We do NOT fabricate cosmetic copy.
-        data.count          = String(nf.value);
-        data.label          = String(nf.unit || '');
-        data.secondary      = String(nf.context || '');
-        data.sourceCitation = (nf.source_ids || []).join(', ');
+        // NumberCard reads `count`/`label` from data. `secondary` and
+        // `sourceCitation` were leaking editorial provenance / per-module
+        // citation chips on every frame — the renderer's gates fall through
+        // to empty when these are unset, which is the correct viewer state.
+        // Sources stay only on the end card (manifest end-card block).
+        data.count = String(nf.value);
+        data.label = String(nf.unit || '');
       }
     }
 
@@ -231,6 +343,7 @@ function buildModules(plan, evidence, scriptObj) {
 
     const notes = [];
     if (choice.note) notes.push(choice.note);
+    if (hookOverlayNote) notes.push(hookOverlayNote);
     if (m.numeric_fact_ref && !numericById.has(m.numeric_fact_ref)) {
       notes.push(`numeric_fact_ref "${m.numeric_fact_ref}" not in 02_evidence.json`);
     }
@@ -254,6 +367,9 @@ function buildModules(plan, evidence, scriptObj) {
         plan_index: i,
         kind: m.kind,
         text: m.text,
+        // Snapshot of the plan duration before any voice-overrun
+        // redistribution; manifest_duration reflects what actually rendered.
+        planned_duration_sec: round(duration),
         evidence_ref: m.evidence_ref || [],
         asset_hint: m.asset_hint || null,
         numeric_fact_ref: m.numeric_fact_ref || null,
@@ -281,7 +397,7 @@ function buildManifest({ storyId, storyPackage, propsPath, outputPath }) {
       role: m.role,
       kind: ref.kind || null,
       text: ref.text || m.overlayText,
-      planned_duration: round(m.durationSec),
+      planned_duration: round(ref.planned_duration_sec ?? m.durationSec),
       manifest_duration: round(m.durationSec),
       asset_status: assetStatus,
       asset_kind: m.asset?.kind || 'graphic',
@@ -371,26 +487,93 @@ async function main(argv) {
 
   // 3. Modules (built from the plan + evidence + parsed script).
   const { modules, totalDurationSec: planTotal } = buildModules(plan, evidence, scriptObj);
-  // The plan's module total may not equal the narration duration (the v2 plan
-  // is duration-hinted, not voice-aligned). Stretch the closing module to
-  // cover any narration that runs past the planned end so audio doesn't get
-  // cut off mid-sentence at render.
-  const tailPad = 0.4;
-  const minTotal = voice.totalDurationSec + tailPad;
+  // Reconcile plan vs actual narration. ElevenLabs usually reads slower than
+  // stage-4 plans (~120-145 wpm vs 165 plan-side), so voice overruns by
+  // 10-20s on most stories. The previous bridge dumped the entire overrun
+  // onto the last module (the close), producing 26s of static OutroLockup
+  // after content ended. New policy:
+  //   - cap close drift at +2.0s above planned
+  //   - distribute the rest across the last 2-3 BODY modules (proportional)
+  //   - trim close to voice_end_within_close + 1.5s if narration ends early
+  //   - render total = voice + 1.5s tail; no static beyond that
+  const TAIL_PAD = 1.5;
+  const CLOSE_MAX_DRIFT = 2.0;
+  const requiredTotal = voice.totalDurationSec + TAIL_PAD;
   let totalDurationSec = planTotal;
-  if (planTotal < minTotal && modules.length > 0) {
-    const last = modules[modules.length - 1];
-    const extra = round(minTotal - planTotal);
-    last.durationSec = round(last.durationSec + extra);
-    last.endSec = round(last.startSec + last.durationSec);
-    totalDurationSec = round(minTotal);
-    log('MODULES', `extended last module by ${extra}s to cover narration tail`);
+  let redistributionLog = null;
+
+  if (modules.length > 0 && requiredTotal > planTotal) {
+    const overrun = round(requiredTotal - planTotal);
+    const closeIdx = modules.length - 1;
+    const closePlanned = modules[closeIdx].durationSec;
+
+    const closeDelta = Math.min(CLOSE_MAX_DRIFT, overrun);
+    const bodyDelta = round(overrun - closeDelta);
+
+    // Pick last 2-3 body modules (exclude close). Fewer if plan is short.
+    const bodyTail = [];
+    for (let i = closeIdx - 1; i >= 0 && bodyTail.length < 3; i--) bodyTail.push(i);
+
+    if (bodyDelta > 0 && bodyTail.length > 0) {
+      // Proportional to current planned duration so already-long body beats
+      // absorb proportionally more — keeps pacing roughly intact.
+      const totalWeight = bodyTail.reduce((s, i) => s + modules[i].durationSec, 0);
+      let assigned = 0;
+      for (let k = 0; k < bodyTail.length; k++) {
+        const i = bodyTail[k];
+        const isLast = k === bodyTail.length - 1;
+        const share = isLast
+          ? round(bodyDelta - assigned)
+          : round((modules[i].durationSec / totalWeight) * bodyDelta);
+        modules[i].durationSec = round(modules[i].durationSec + share);
+        assigned = round(assigned + share);
+      }
+    } else if (bodyDelta > 0) {
+      // No body modules — fold residue into close (single-module plans).
+      modules[closeIdx].durationSec = round(modules[closeIdx].durationSec + bodyDelta);
+    }
+    modules[closeIdx].durationSec = round(closePlanned + closeDelta);
+
+    redistributionLog = `voice +${overrun}s; close +${closeDelta}s, body +${bodyDelta}s across last ${bodyTail.length}`;
   }
-  log('MODULES', `${modules.length} modules; ${totalDurationSec.toFixed(2)}s total`);
+
+  // Recompute startSec / endSec after any duration changes.
+  let cursor = 0;
+  for (const m of modules) {
+    m.startSec = round(cursor);
+    m.endSec = round(cursor + m.durationSec);
+    cursor = m.endSec;
+  }
+  totalDurationSec = round(cursor);
+
+  // Trim close: if narration ends within the close beat earlier than the
+  // close end, render only voice_end_in_close + 1.5s. Stops the OutroLockup
+  // from holding static logo for any meaningful time after audio.
+  if (modules.length > 0) {
+    const close = modules[modules.length - 1];
+    const voiceEndInClose = round(voice.totalDurationSec - close.startSec);
+    if (voiceEndInClose >= 0) {
+      const trimmedDuration = round(Math.min(close.durationSec, voiceEndInClose + TAIL_PAD));
+      if (trimmedDuration < close.durationSec) {
+        close.durationSec = trimmedDuration;
+        close.endSec = round(close.startSec + trimmedDuration);
+        totalDurationSec = close.endSec;
+      }
+    }
+  }
+
+  if (redistributionLog) log('MODULES', redistributionLog);
+  log('MODULES', `${modules.length} modules; ${totalDurationSec.toFixed(2)}s total (voice ${voice.totalDurationSec.toFixed(2)}s + tail)`);
 
   // 4. Story package (the shape prepareRenderProps + generateSubtitles want).
+  // Resolve the unambiguous primary country (geo_scores ≥ 0.5, else first
+  // primary_geos) so the renderer can paint a persistent "<flag> <COUNTRY>
+  // NEWS" banner. null when the row has no resolvable geo signal.
+  const storyRow = story.row || story;
+  const primaryCountry = resolvePrimaryCountry(storyRow);
+  const augmentedStory = { ...storyRow, primary_country: primaryCountry };
   let storyPackage = {
-    story: story.row || story,
+    story: augmentedStory,
     script: scriptObj,
     modules,
     totalDurationSec,

@@ -43,7 +43,8 @@ export const ChargeCard: React.FC<{ module: RenderModule; accentColor: string }>
   const authority      = pickText(module.data, "authority",      "");
   const sourceLabel    = pickText(module.data, "sourceLabel",    "Source");
   const sourceCitation = pickText(module.data, "sourceCitation", "");
-  const postureChips   = readPostureChips(module.data);
+  // Posture chips are editorial QC chrome; off by default in viewer renders.
+  const postureChips   = module.data.showPostureChips === true ? readPostureChips(module.data) : [];
   const charges        = readCharges(module.data, "charges");
 
   return (

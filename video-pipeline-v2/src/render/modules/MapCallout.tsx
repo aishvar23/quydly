@@ -42,7 +42,8 @@ export const MapCallout: React.FC<{ module: RenderModule; accentColor: string }>
   const disclaimer     = pickText(module.data, "disclaimer",     "");
   const sourceLabel    = pickText(module.data, "sourceLabel",    "Source");
   const sourceCitation = pickText(module.data, "sourceCitation", "");
-  const postureChips   = readPostureChips(module.data);
+  // Posture chips are editorial QC chrome; off by default in viewer renders.
+  const postureChips   = module.data.showPostureChips === true ? readPostureChips(module.data) : [];
 
   const bgSrc   = module.asset?.src || null;
   const bgKind  = module.asset?.kind;
