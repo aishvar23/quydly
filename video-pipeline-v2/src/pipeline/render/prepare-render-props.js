@@ -86,10 +86,26 @@ function copyMusic(storyType, publicDir, jobKey) {
 
 // Copy a fetched asset (e.g. a Mapbox PNG) into public/jobs/{jobKey}/ and
 // return an asset object with src set to the staticFile-relative path.
+//
+// Three input shapes are accepted:
+//   - asset.path set + file exists → copy into public/jobs/{jobKey}/
+//   - asset.src is an absolute http(s) URL → pass through as-is (Remotion
+//     fetches it at render time). Used by the v2-bridge asset resolver
+//     (scripts/render-from-plan.js) for Wikipedia pageimages, country
+//     flags, and concept stock — none of which we download to disk yet.
+//   - neither → src is nulled, render falls back to placeholder card.
 function copyModuleAsset(asset, moduleId, publicDir, jobKey) {
   const fallback = { kind: 'graphic', src: null, safetyClass: 'graphic' };
   if (!asset) return fallback;
+
+  // Absolute URL passthrough — preserves the resolver's choice without a
+  // disk round-trip. Restricted to http(s) to avoid accepting file:// or
+  // anything weirder. Local file paths (asset.path) still take precedence
+  // when both are set, since the file copy guarantees offline rendering.
+  const hasAbsoluteUrl = typeof asset.src === 'string' && /^https?:\/\//i.test(asset.src);
+
   if (!asset.path || !fs.existsSync(asset.path)) {
+    if (hasAbsoluteUrl) return { ...asset };
     return { ...asset, src: null };
   }
   const ext = path.extname(asset.path) || '.asset';

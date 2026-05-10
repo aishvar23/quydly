@@ -76,6 +76,9 @@ test("P0-1 buildSourceDocuments projects core fields onto each article", () => {
     date:           "2026-04-01T10:00:00Z",
     authority:      0.9,
     source_country: "us",
+    // 2026-05-09: byline persisted so source-diversity / video gate-2a
+    // can detect same-author concentration across the source set.
+    author:         "Jane Doe",
     quote_text:     null,
     quote_speaker:  null,
     quote_role:     null,
