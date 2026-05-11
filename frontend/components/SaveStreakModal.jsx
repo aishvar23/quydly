@@ -29,6 +29,19 @@ const FONT = {
 const MAX_WIDTH  = 900;
 const BASE_WIDTH = 600;
 
+// Only fall back to a non-linking sign-in when the upgrade failed *because* the
+// target identity / email already belongs to another Supabase user. Any other
+// error (manual linking disabled, network, server, expired session) must surface
+// — otherwise we silently reintroduce the anon-progress-loss bug PR #93 fixed.
+const isIdentityConflict = (err) =>
+  err?.code === "identity_already_exists" ||
+  /identity (is )?already (linked|exists|in use)/i.test(err?.message ?? "");
+
+const isEmailConflict = (err) =>
+  err?.code === "email_exists" ||
+  err?.code === "user_already_exists" ||
+  /email address (is )?already|user already registered|already (been )?registered/i.test(err?.message ?? "");
+
 // ── SaveStreakModal ───────────────────────────────────────────────────────────
 // Props:
 //   visible   — bool
@@ -76,14 +89,21 @@ export default function SaveStreakModal({ visible, streak, supabase, onSuccess, 
           options: { redirectTo },
         });
         if (linkErr) {
-          // Common case: this Google account is already a Supabase user (returning
-          // user from a different device). Fall back to a regular sign-in so they
-          // can still get in — they'll resume from their existing progress.
-          const { error: oauthErr } = await supabase.auth.signInWithOAuth({
-            provider: "google",
-            options: { redirectTo },
-          });
-          if (oauthErr) throw oauthErr;
+          if (isIdentityConflict(linkErr)) {
+            // Returning user — this Google account already belongs to another
+            // Supabase user. Sign them in normally; their existing progress
+            // resumes from that account.
+            const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+              provider: "google",
+              options: { redirectTo },
+            });
+            if (oauthErr) throw oauthErr;
+          } else {
+            // Anything else (manual linking disabled, network, server) must
+            // surface — falling back to signInWithOAuth here would abandon the
+            // anon user_id and drop their server-side progress.
+            throw linkErr;
+          }
         }
       } else {
         const { error: oauthErr } = await supabase.auth.signInWithOAuth({
@@ -118,13 +138,19 @@ export default function SaveStreakModal({ visible, streak, supabase, onSuccess, 
           { emailRedirectTo },
         );
         if (updErr) {
-          // Likely: email already belongs to another Supabase user. Fall back to
-          // a regular magic-link sign-in so they can still get in.
-          const { error: otpErr } = await supabase.auth.signInWithOtp({
-            email: email.trim(),
-            options: { emailRedirectTo },
-          });
-          if (otpErr) throw otpErr;
+          if (isEmailConflict(updErr)) {
+            // This email already belongs to another Supabase user. Send a
+            // regular magic link so they sign back into that account.
+            const { error: otpErr } = await supabase.auth.signInWithOtp({
+              email: email.trim(),
+              options: { emailRedirectTo },
+            });
+            if (otpErr) throw otpErr;
+          } else {
+            // Other failures must surface — falling back to signInWithOtp here
+            // would abandon the anon user_id and drop their progress.
+            throw updErr;
+          }
         }
       } else {
         const { error: otpErr } = await supabase.auth.signInWithOtp({
