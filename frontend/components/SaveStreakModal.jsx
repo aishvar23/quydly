@@ -3,6 +3,7 @@ import {
   View, Text, TouchableOpacity, Modal, ActivityIndicator,
   TextInput, useWindowDimensions, KeyboardAvoidingView, Platform,
 } from "react-native";
+import { isIdentityConflict, isEmailConflict } from "../services/authConflicts";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -28,19 +29,6 @@ const FONT = {
 
 const MAX_WIDTH  = 900;
 const BASE_WIDTH = 600;
-
-// Only fall back to a non-linking sign-in when the upgrade failed *because* the
-// target identity / email already belongs to another Supabase user. Any other
-// error (manual linking disabled, network, server, expired session) must surface
-// — otherwise we silently reintroduce the anon-progress-loss bug PR #93 fixed.
-const isIdentityConflict = (err) =>
-  err?.code === "identity_already_exists" ||
-  /identity (is )?already (linked|exists|in use)/i.test(err?.message ?? "");
-
-const isEmailConflict = (err) =>
-  err?.code === "email_exists" ||
-  err?.code === "user_already_exists" ||
-  /email address (is )?already|user already registered|already (been )?registered/i.test(err?.message ?? "");
 
 // ── SaveStreakModal ───────────────────────────────────────────────────────────
 // Props:
