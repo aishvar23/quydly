@@ -14,6 +14,7 @@ import QuestionScreen from "./screens/QuestionScreen";
 import EndScreen from "./screens/EndScreen";
 import GateScreen from "./screens/GateScreen";
 import { getActiveStrategy } from "./services/contentStrategy";
+import { isIdentityConflict, readOAuthErrorFromUrl } from "./services/authConflicts";
 import FLAGS from "../config/flags";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
@@ -94,6 +95,20 @@ function AuthBanner({ name }) {
   );
 }
 
+function AuthErrorBanner({ message }) {
+  const TOP = Platform.OS === "ios" ? 44 : Platform.OS === "android" ? 28 : 0;
+  return (
+    <View style={{
+      position: "absolute", top: TOP, left: 0, right: 0, zIndex: 200,
+      backgroundColor: "#d94040", paddingVertical: 10, paddingHorizontal: 16, alignItems: "center",
+    }}>
+      <Text style={{ fontFamily: "JetBrainsMono-Bold", fontSize: 12, color: "#0c0b09", letterSpacing: 0.5, textAlign: "center" }}>
+        {message}
+      </Text>
+    </View>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -124,6 +139,7 @@ export default function App() {
   const [pendingPlayAgain, setPendingPlayAgain] = useState(false);
   const [showLoginModal,   setShowLoginModal]   = useState(false);
   const [authBanner,       setAuthBanner]       = useState(null); // first name string
+  const [authError,        setAuthError]        = useState(null); // post-redirect OAuth error
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -133,6 +149,60 @@ export default function App() {
       Platform.OS === "web" &&
       typeof window !== "undefined" &&
       window.location.hash.includes("access_token");
+
+    const canStore = typeof sessionStorage !== "undefined";
+    const cleanUrl = () => {
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        window.history.replaceState(null, "", window.location.pathname);
+      }
+    };
+
+    // A successful sign-in came back — clear the conflict-retry guard so a
+    // future genuine conflict can retry again.
+    if (isOAuthRedirect && canStore) {
+      sessionStorage.removeItem("quydly_oauth_conflict_retry");
+    }
+
+    // linkIdentity()/signInWithOAuth() with an OAuth provider redirect before
+    // any conflict is known — a failure comes back here as URL params, which
+    // nothing else reads (no access_token hash → not treated as a redirect).
+    const oauthErr = Platform.OS === "web" ? readOAuthErrorFromUrl() : null;
+    let handlingConflict = false;
+    if (oauthErr) {
+      const alreadyRetried =
+        canStore && sessionStorage.getItem("quydly_oauth_conflict_retry") === "1";
+
+      if (isIdentityConflict(oauthErr) && !alreadyRetried) {
+        // The Google account is already linked to another user. linkIdentity
+        // can't merge them, so sign the user into that existing account; their
+        // progress resumes from there. Retry once to avoid a redirect loop.
+        handlingConflict = true;
+        if (canStore) sessionStorage.setItem("quydly_oauth_conflict_retry", "1");
+        cleanUrl();
+        supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+          },
+        }).then(({ error }) => {
+          if (error) {
+            setAuthError(error.message ?? "Sign-in failed. Please try again.");
+            setTimeout(() => setAuthError(null), 6000);
+          }
+        });
+      } else {
+        // Any other error (or a conflict that didn't resolve on retry) must
+        // surface rather than fail silently.
+        if (canStore) sessionStorage.removeItem("quydly_oauth_conflict_retry");
+        setAuthError(
+          isIdentityConflict(oauthErr)
+            ? "Couldn't sign you in with Google. Please try again."
+            : (oauthErr.message || "Sign-in failed. Please try again."),
+        );
+        setTimeout(() => setAuthError(null), 6000);
+        cleanUrl();
+      }
+    }
 
     // Restore quiz state saved before the OAuth redirect
     if (isOAuthRedirect && typeof sessionStorage !== "undefined") {
@@ -149,16 +219,19 @@ export default function App() {
       }
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setSession(session);
-        loadUserData(session.user.id);
-      } else if (!isOAuthRedirect) {
-        supabase.auth.signInAnonymously().then(({ data, error }) => {
-          if (!error) setSession(data.session);
-        });
-      }
-    });
+    // Skip while a conflict retry is redirecting — don't spawn a new anon user.
+    if (!handlingConflict) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          setSession(session);
+          loadUserData(session.user.id);
+        } else if (!isOAuthRedirect) {
+          supabase.auth.signInAnonymously().then(({ data, error }) => {
+            if (!error) setSession(data.session);
+          });
+        }
+      });
+    }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
@@ -314,6 +387,7 @@ export default function App() {
       />
 
       {authBanner && <AuthBanner name={authBanner} />}
+      {authError && <AuthErrorBanner message={authError} />}
 
       <SaveStreakModal
         visible={showLoginModal}
