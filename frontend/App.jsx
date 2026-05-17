@@ -128,6 +128,8 @@ export default function App() {
   const [allCaughtUp, setAllCaughtUp] = useState(false);
   const [answered,    setAnswered]    = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(null);
+  const [skipped,     setSkipped]     = useState(false);
+  const [unlimited,   setUnlimited]   = useState(false);
   const [wager,       setWager]       = useState(25);
   const [points,      setPoints]      = useState(0);
   const [streak,      setStreak]      = useState(0);
@@ -140,6 +142,9 @@ export default function App() {
   const [showLoginModal,   setShowLoginModal]   = useState(false);
   const [authBanner,       setAuthBanner]       = useState(null); // first name string
   const [authError,        setAuthError]        = useState(null); // post-redirect OAuth error
+
+  // Signed-in (non-anonymous) users get unlimited play and no credit gate.
+  const isSignedIn = !!session && !(session.user?.is_anonymous ?? true);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -297,7 +302,7 @@ export default function App() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
   const handleStart = async (skipCreditCheck = false) => {
-    if (!skipCreditCheck && credits <= 0) { setScreen("gate"); return; }
+    if (!skipCreditCheck && !isSignedIn && credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
@@ -318,11 +323,13 @@ export default function App() {
       }
 
       setQuestions(data.questions);
-      setCredits(FLAGS.freeQuestionsPerDay);
+      setUnlimited(!!data.unlimited);
+      setCredits(data.unlimited ? Infinity : FLAGS.freeQuestionsPerDay);
       setAllCaughtUp(false);
       setCurrentQ(0);
       setAnswered(false);
       setSelectedIdx(null);
+      setSkipped(false);
       setWager(25);
       setResults([]);
       setScreen("quiz");
@@ -337,42 +344,70 @@ export default function App() {
     const correct = idx === q.correctIndex;
     const delta = correct ? wager : -Math.floor(wager / 2);
     setPoints((p) => p + delta);
-    setCredits((c) => Math.max(0, c - 1));
+    if (!isSignedIn) setCredits((c) => Math.max(0, c - 1));
     setSelectedIdx(idx);
+    setSkipped(false);
     setAnswered(true);
     setResults((prev) => [...prev, { correct, delta, categoryId: q.categoryId }]);
+  };
+
+  // Skip & reveal — no points, no penalty. Recorded as not-correct so it
+  // never counts toward the grade, but never costs anything either.
+  const handleSkip = () => {
+    const q = questions[currentQ];
+    if (!isSignedIn) setCredits((c) => Math.max(0, c - 1));
+    setSelectedIdx(null);
+    setSkipped(true);
+    setAnswered(true);
+    setResults((prev) => [...prev, { correct: false, delta: 0, categoryId: q.categoryId, skipped: true }]);
+  };
+
+  // Submit the run so far (points, streak, rank). Used by both the natural
+  // end-of-pool finish and the "quit anytime" path.
+  const submitCompletion = async () => {
+    if (!session) return;
+    try {
+      const sessionScore = results.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
+      const resp = await fetch(`${API_BASE}/api/complete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ score: sessionScore, results }),
+      });
+      const data = await resp.json();
+      if (data.streak !== undefined) setStreak(data.streak);
+      if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+      if (data.rank !== undefined) setEndRank(data.rank);
+      if (data.promptSaveStreak) setPromptSaveStreak(true);
+    } catch {
+      // non-fatal
+    }
   };
 
   const handleNext = async () => {
     const total = questions.length || FLAGS.freeQuestionsPerDay;
     if (currentQ + 1 >= total) {
-      if (session) {
-        try {
-          const sessionScore = results.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
-          const resp = await fetch(`${API_BASE}/api/complete`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({ score: sessionScore, results }),
-          });
-          const data = await resp.json();
-          if (data.streak !== undefined) setStreak(data.streak);
-          if (data.totalPoints !== undefined) setPoints(data.totalPoints);
-          if (data.rank !== undefined) setEndRank(data.rank);
-          if (data.promptSaveStreak) setPromptSaveStreak(true);
-        } catch {
-          // non-fatal
-        }
-      }
+      await submitCompletion();
       setScreen("end");
     } else {
       setCurrentQ((q) => q + 1);
       setAnswered(false);
       setSelectedIdx(null);
+      setSkipped(false);
       setWager(25);
     }
+  };
+
+  // Quit anytime → see results for what's been answered so far. Unlimited
+  // (signed-in) only: anonymous users keep the fixed 5-question session, so
+  // they must never early-finalize a completion via this path.
+  const handleQuit = async () => {
+    if (!isSignedIn) { setScreen("home"); return; }
+    if (results.length === 0) { setScreen("home"); return; }
+    await submitCompletion();
+    setScreen("end");
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -415,7 +450,7 @@ export default function App() {
       {screen === "home" && (
         <HomeScreen
           onStart={() => handleStart(0)}
-          credits={credits}
+          credits={isSignedIn ? Infinity : credits}
           strategy={strategy}
           streak={streak}
           points={points}
@@ -435,7 +470,9 @@ export default function App() {
       {screen === "end" && (
         <EndScreen
           score={results.reduce((acc, r) => acc + Math.max(0, r.delta), 0)}
-          maxScore={FLAGS.freeQuestionsPerDay * 100}
+          maxScore={results.filter((r) => !r.skipped).length * 100}
+          attempted={results.filter((r) => !r.skipped).length}
+          skippedCount={results.filter((r) => r.skipped).length}
           results={results}
           strategy={strategy}
           streak={streak}
@@ -469,12 +506,16 @@ export default function App() {
           question={questions[currentQ]}
           onAnswer={handleAnswer}
           onNext={handleNext}
+          onSkip={handleSkip}
+          onQuit={handleQuit}
           answered={answered}
+          skipped={skipped}
           selectedIndex={selectedIdx}
           wager={wager}
           setWager={setWager}
           currentQ={currentQ}
           totalQ={questions.length}
+          unlimited={unlimited}
           strategyLabel={strategy.getLabel()}
         />
       )}
