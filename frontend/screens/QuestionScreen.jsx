@@ -262,11 +262,16 @@ export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQ
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <View style={styles.quitRow}>
-        <TouchableOpacity style={styles.quitBtn} onPress={onQuit} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Text style={styles.quitBtnText}>✕ Quit &amp; see results</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Quit is part of the unlimited (signed-in) flow only. Anonymous users
+          keep the fixed 5-question session, which ends naturally — exposing
+          quit to them would let early-quit churn advance sessions_completed. */}
+      {unlimited && (
+        <View style={styles.quitRow}>
+          <TouchableOpacity style={styles.quitBtn} onPress={onQuit} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.quitBtnText}>✕ Quit &amp; see results</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ProgressBar current={currentQ + (answered ? 1 : 0)} total={total} label={strategyLabel} unlimited={unlimited} styles={styles} />
 

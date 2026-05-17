@@ -400,8 +400,11 @@ export default function App() {
     }
   };
 
-  // Quit anytime → see results for what's been answered so far.
+  // Quit anytime → see results for what's been answered so far. Unlimited
+  // (signed-in) only: anonymous users keep the fixed 5-question session, so
+  // they must never early-finalize a completion via this path.
   const handleQuit = async () => {
+    if (!isSignedIn) { setScreen("home"); return; }
     if (results.length === 0) { setScreen("home"); return; }
     await submitCompletion();
     setScreen("end");
