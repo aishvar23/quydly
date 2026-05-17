@@ -83,29 +83,45 @@ router.get("/", async (req, res) => {
   try {
     const { questions: allQuestions, generatedAt = null, source } = await getAllQuestions(date, audience, redis, supabase);
 
-    // Determine session index from auth token
+    // Resolve the caller from the auth token (if any)
     const authHeader = req.headers.authorization ?? "";
     const token      = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
-    let sessionIndex = 0;
-
+    let user = null;
     if (token) {
       try {
         const anonClient = buildAnonSupabase();
-        const { data: { user }, error: authErr } = await anonClient.auth.getUser(token);
-
-        if (!authErr && user) {
-          const { data: progress } = await supabase
-            .from("user_daily_progress")
-            .select("sessions_completed")
-            .eq("user_id", user.id)
-            .eq("date", date)
-            .single();
-
-          sessionIndex = progress?.sessions_completed ?? 0;
-        }
+        const { data: { user: u }, error: authErr } = await anonClient.auth.getUser(token);
+        if (!authErr) user = u;
       } catch {
-        // Auth lookup failed — fall back to session 0
+        // Auth lookup failed — treat as anonymous (session 0)
+      }
+    }
+
+    const isSignedIn = !!user && !(user.is_anonymous ?? false);
+
+    // Signed-in users get unlimited play: serve the entire daily pool in one
+    // continuous run. They can quit anytime via POST /api/complete.
+    if (isSignedIn) {
+      if (allQuestions.length === 0) {
+        return res.json({ date, allCaughtUp: true });
+      }
+      return res.json({ date, questions: allQuestions, unlimited: true, generatedAt, source });
+    }
+
+    // Anonymous / unauthenticated: keep the 5-question daily session model.
+    let sessionIndex = 0;
+    if (user) {
+      try {
+        const { data: progress } = await supabase
+          .from("user_daily_progress")
+          .select("sessions_completed")
+          .eq("user_id", user.id)
+          .eq("date", date)
+          .single();
+        sessionIndex = progress?.sessions_completed ?? 0;
+      } catch {
+        // Progress lookup failed — fall back to session 0
       }
     }
 

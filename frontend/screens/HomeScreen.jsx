@@ -103,7 +103,7 @@ function StatsBar({ points, credits, answered, styles }) {
     <View style={styles.statsBar}>
       {[
         { val: points,   lbl: "Points"     },
-        { val: credits,  lbl: "Left Today" },
+        { val: Number.isFinite(credits) ? credits : "∞", lbl: "Left Today" },
         { val: answered, lbl: "Answered"   },
       ].map(({ val, lbl }) => (
         <View key={lbl} style={styles.statChip}>
@@ -148,7 +148,9 @@ export default function HomeScreen({ onStart, credits, strategy, streak = 0, poi
           <Text style={styles.startBtnText}>Start Today's Edition →</Text>
         </TouchableOpacity>
         <Text style={styles.creditsNote}>
-          {credits} question{credits !== 1 ? "s" : ""} remaining today
+          {Number.isFinite(credits)
+            ? `${credits} question${credits !== 1 ? "s" : ""} remaining today`
+            : "Unlimited questions today"}
         </Text>
       </View>
     </ScrollView>

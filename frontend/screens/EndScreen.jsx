@@ -116,19 +116,25 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp }) {
+export default function EndScreen({ score, maxScore, attempted, skippedCount = 0, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
   const [copied, setCopied] = useState(false);
-  const grade   = getGrade(score, maxScore);
+  // Grade is judged only on questions actually answered; skips don't count
+  // for or against you. Quitting before answering anything → no grade.
+  const answeredCount = attempted ?? results.filter((r) => !r.skipped).length;
+  const grade   = maxScore > 0 ? getGrade(score, maxScore) : { emoji: "👀", label: "Just Browsing" };
   const mix     = strategy.getCategoryMix();
   const total   = Object.values(mix).reduce((a, b) => a + b, 0);
   const correct = results.filter((r) => r.correct).length;
+  const hasRank = rank != null || answeredCount > 0;
 
   // Rank display — use API rank if available, otherwise derive from score
-  const beatenPct = rank ? Math.min(Math.max(100 - rank, 1), 99) : Math.floor((score / maxScore) * 73);
+  const beatenPct = rank
+    ? Math.min(Math.max(100 - rank, 1), 99)
+    : (maxScore > 0 ? Math.floor((score / maxScore) * 73) : 0);
   const topPct    = 100 - beatenPct;
 
   const handleShare = () => {
@@ -155,13 +161,20 @@ export default function EndScreen({ score, maxScore, results, strategy, streak, 
         {/* Grade */}
         <Text style={styles.gradeEmoji}>{grade.emoji}</Text>
         <Text style={styles.gradeLabel}>{grade.label}</Text>
-        <Text style={styles.gradeScore}>{score} points · {correct}/5 correct</Text>
+        <Text style={styles.gradeScore}>
+          {answeredCount === 0
+            ? "No questions answered"
+            : `${score} points · ${correct}/${answeredCount} correct`}
+          {skippedCount > 0 ? ` · ${skippedCount} skipped` : ""}
+        </Text>
 
         {/* Rank */}
-        <View style={styles.rankBox}>
-          <Text style={styles.rankVal}>Top {topPct}%</Text>
-          <Text style={styles.rankLbl}>You beat {beatenPct}% of readers today</Text>
-        </View>
+        {hasRank && (
+          <View style={styles.rankBox}>
+            <Text style={styles.rankVal}>Top {topPct}%</Text>
+            <Text style={styles.rankLbl}>You beat {beatenPct}% of readers today</Text>
+          </View>
+        )}
 
         {/* Mix breakdown */}
         <Text style={styles.sectionLabel}>Today's Mix</Text>

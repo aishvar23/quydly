@@ -89,11 +89,23 @@ function makeStyles(scale) {
     // Next button
     nextBtn:     { width: "100%", marginTop: s(14), paddingVertical: s(13), backgroundColor: T.amber, borderRadius: s(11), alignItems: "center" },
     nextBtnText: { fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
+
+    // Quit row
+    quitRow:     { flexDirection: "row", justifyContent: "flex-end", marginBottom: s(6) },
+    quitBtn:     { paddingVertical: s(4), paddingHorizontal: s(8) },
+    quitBtnText: { fontFamily: FONT.monoReg, fontSize: s(11), color: T.muted, letterSpacing: s(0.5) },
+
+    // Skip & reveal button
+    skipBtn:     { width: "100%", marginTop: s(12), paddingVertical: s(11), backgroundColor: "transparent", borderWidth: 1, borderColor: T.border2, borderRadius: s(11), alignItems: "center" },
+    skipBtnText: { fontFamily: FONT.mono, fontSize: s(12), fontWeight: "700", color: T.cream2, letterSpacing: s(0.5) },
+
+    // Skipped note (replaces points flash on skip)
+    skipNote:    { textAlign: "center", fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", color: T.muted, marginTop: s(12), marginBottom: s(4) },
   };
 }
 
 // ── ProgressBar ───────────────────────────────────────────────────────────────
-function ProgressBar({ current, total, label, styles }) {
+function ProgressBar({ current, total, label, unlimited, styles }) {
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -106,7 +118,7 @@ function ProgressBar({ current, total, label, styles }) {
     <View style={styles.progressWrap}>
       <View style={styles.progressHeader}>
         <Text style={styles.progressLabel}>{label}</Text>
-        <Text style={styles.progressLabel}>{current} / {total}</Text>
+        <Text style={styles.progressLabel}>{unlimited ? `Q ${current}` : `${current} / ${total}`}</Text>
       </View>
       <View style={styles.progressTrack}>
         <Animated.View style={[styles.progressFill, { width: widthInterpolated }]} />
@@ -116,7 +128,7 @@ function ProgressBar({ current, total, label, styles }) {
 }
 
 // ── QuestionCard ──────────────────────────────────────────────────────────────
-function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setWager, styles }) {
+function QuestionCard({ question, onAnswer, answered, skipped, selectedIndex, wager, setWager, styles }) {
   const cat = CATEGORIES.find((c) => c.id === question.categoryId) || CATEGORIES[0];
 
   // Shuffle options once per question, keeping correctIndex in sync
@@ -164,8 +176,8 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
     onAnswer(indexMap[i]); // pass original index so App.jsx scoring stays correct
   };
 
-  const delta  = answered ? (shuffledSelectedIndex === shuffledCorrectIndex ? `+${wager}` : `-${Math.floor(wager / 2)}`) : null;
-  const isGain = answered && shuffledSelectedIndex === shuffledCorrectIndex;
+  const isGain = answered && !skipped && shuffledSelectedIndex === shuffledCorrectIndex;
+  const delta  = answered && !skipped ? (isGain ? `+${wager}` : `-${Math.floor(wager / 2)}`) : null;
 
   return (
     <Animated.View style={[styles.card, { opacity: opacityAnim, transform: [{ translateY: slideAnim }, { scale: scaleAnim }, { translateX: shakeAnim }] }]}>
@@ -224,7 +236,11 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
 
       {answered && (
         <>
-          <Text style={[styles.pointsFlash, isGain ? styles.pointsGain : styles.pointsLoss]}>{delta} pts</Text>
+          {skipped ? (
+            <Text style={styles.skipNote}>Skipped — no points</Text>
+          ) : (
+            <Text style={[styles.pointsFlash, isGain ? styles.pointsGain : styles.pointsLoss]}>{delta} pts</Text>
+          )}
           <View style={styles.revealPanel}>
             <Text style={styles.revealLabel}>📰 TL;DR</Text>
             <Text style={styles.revealText}>{question.tldr || question.insight_tldr || "No context available for this question."}</Text>
@@ -236,7 +252,7 @@ function QuestionCard({ question, onAnswer, answered, selectedIndex, wager, setW
 }
 
 // ── QuestionScreen ────────────────────────────────────────────────────────────
-export default function QuestionScreen({ question, onAnswer, onNext, answered, selectedIndex, wager, setWager, currentQ, totalQ, strategyLabel }) {
+export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQuit, answered, skipped, selectedIndex, wager, setWager, currentQ, totalQ, unlimited, strategyLabel }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -246,17 +262,30 @@ export default function QuestionScreen({ question, onAnswer, onNext, answered, s
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <ProgressBar current={currentQ + (answered ? 1 : 0)} total={total} label={strategyLabel} styles={styles} />
+      <View style={styles.quitRow}>
+        <TouchableOpacity style={styles.quitBtn} onPress={onQuit} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Text style={styles.quitBtnText}>✕ Quit &amp; see results</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ProgressBar current={currentQ + (answered ? 1 : 0)} total={total} label={strategyLabel} unlimited={unlimited} styles={styles} />
 
       <QuestionCard
         question={question}
         onAnswer={onAnswer}
         answered={answered}
+        skipped={skipped}
         selectedIndex={selectedIndex}
         wager={wager}
         setWager={setWager}
         styles={styles}
       />
+
+      {!answered && (
+        <TouchableOpacity style={styles.skipBtn} onPress={onSkip} activeOpacity={0.7}>
+          <Text style={styles.skipBtnText}>Skip &amp; reveal answer</Text>
+        </TouchableOpacity>
+      )}
 
       {answered && (
         <TouchableOpacity style={styles.nextBtn} onPress={onNext} activeOpacity={0.85}>
