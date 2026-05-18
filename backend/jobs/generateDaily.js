@@ -58,6 +58,40 @@ function todayKey(audience = "global") {
   return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
 
+// ── Narrative dedup ───────────────────────────────────────────────────────────
+// Two stories can describe the same real-world event with different wording.
+// We compare the salient vocabulary (proper nouns / content words) of each
+// story; a strong overlap means "same narrative" and the slot is retried with
+// the next story so the daily set doesn't ask about one event twice.
+
+const DEDUP_STOPWORDS = new Set(
+  ("the a an and or of to in on for with at by from as is are was were be been " +
+   "being it its this that these those after over amid into out up down new " +
+   "news say says said report reports will would can could has have had not " +
+   "about more most than then now today").split(" "),
+);
+
+function salientTokens(text) {
+  const set = new Set();
+  for (const tok of String(text ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)) {
+    if (tok.length >= 4 && !DEDUP_STOPWORDS.has(tok)) set.add(tok);
+  }
+  return set;
+}
+
+function isDuplicateNarrative(sig, usedSignatures) {
+  const MIN_SHARED = 4;   // ignore short headlines sharing one common word
+  const THRESHOLD  = 0.5; // ≥50% of the smaller vocabulary in common
+  for (const used of usedSignatures) {
+    if (sig.size === 0 || used.size === 0) continue;
+    const [small, big] = sig.size <= used.size ? [sig, used] : [used, sig];
+    let inter = 0;
+    for (const t of small) if (big.has(t)) inter++;
+    if (inter >= MIN_SHARED && inter / small.size >= THRESHOLD) return true;
+  }
+  return false;
+}
+
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 async function cacheInRedis(redis, key, questions) {
@@ -210,8 +244,11 @@ export async function generateDaily(audience = "global", { silent = false } = {}
   // Each slot tries up to MAX_SKIP_ATTEMPTS stories before giving up.
   // generateQuestion returns null when a story is skipped (no central fact or
   // critique rejection); the next story in the pool is tried automatically.
-  const MAX_SKIP_ATTEMPTS = 3;
+  // Bumped 3 → 5 so a slot that keeps drawing same-narrative stories still
+  // has room to reach a fresh one (dedup skips cost no Claude call).
+  const MAX_SKIP_ATTEMPTS = 5;
   const questions = [];
+  const usedSignatures = []; // salient-token sets of stories already used today
   let stoppedForDeadline = false;
 
   for (const category of categoryQueue) {
@@ -238,6 +275,13 @@ export async function generateDaily(audience = "global", { silent = false } = {}
         break;
       }
 
+      // Skip same-narrative stories before spending a Claude call on them.
+      const sig = salientTokens(`${article.title} ${article.description}`);
+      if (isDuplicateNarrative(sig, usedSignatures)) {
+        console.warn(`[generateDaily] "${category.id}" story repeats an earlier narrative — trying next`);
+        continue;
+      }
+
       try {
         question = await generateQuestion(article, resolvedCategoryId);
       } catch (err) {
@@ -247,7 +291,10 @@ export async function generateDaily(audience = "global", { silent = false } = {}
         break;
       }
 
-      if (question) break;
+      if (question) {
+        usedSignatures.push(sig);
+        break;
+      }
       console.warn(`[generateDaily] story skipped (attempt ${attempt + 1}) for "${category.id}" — trying next`);
     }
 
