@@ -117,7 +117,7 @@ async function critiqueQuestion(story, generated) {
     ? `Title: ${story.title}\nKey facts:\n${story.key_points.map((kp, i) => `${i + 1}. ${kp}`).join("\n")}`
     : `Title: ${story.title}\n${story.description}`;
 
-  const prompt = `You are a quiz quality reviewer. Score this question on 5 dimensions (1–5 each).
+  const prompt = `You are a quiz quality reviewer. Score this question on all 6 dimensions (1–5 each). Every one of the 6 scores below is REQUIRED — never omit a field.
 
 Story:
 ${storyContext}
