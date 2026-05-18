@@ -25,24 +25,54 @@ Generate ONE multiple-choice question from this real news story.
 
 ${storyContext}
 
+WHO IS PLAYING — read this first:
+Quydly's reader is a busy, reasonably informed adult. They are NOT an expert
+and they do NOT memorize figures. After skimming today's news they remember
+WHO did WHAT, to WHOM, WHY it matters, and the DIRECTION of a change
+(rose/fell, won/lost, launched/banned, hired/fired). They do NOT remember
+exact amounts, box-office gross, percentages, counts, poll numbers, dates,
+ages, rankings, or scores. Every question must be answerable a day later by
+someone who read the story once and remembers the gist — never by recall of
+a number.
+
 STEP 1 — Select the central fact:
-Identify the single most important, specific, verifiable fact from the main development.
+Identify the single most important, verifiable takeaway of the main
+development that a non-expert would actually retain.
 Central facts come from: main_development | why_it_matters | cause_effect | leadership_change | implication | comparison_or_positioning
 
 Do NOT select:
 - Exact quotes or specific wording used by a person
-- Non-central percentages, forecasts, or dates unless they are the entire story
+- ANY exact quantity as the thing being tested: money/revenue/earnings,
+  box-office, percentages, counts, poll figures, dates, ages, rankings,
+  scores — EVEN WHEN that number is the headline of the story. If the story
+  is fundamentally "a number went up / down / hit a record", the central
+  fact is the QUALITATIVE takeaway (what it was, who it involved, that it
+  was a record/flop/surge/first), never the figure itself.
 - Side details from secondary sub-plots
 
 If no suitable central fact exists, set skip_reason to one of:
 MIXED_STORY | TOO_TRIVIAL | QUOTE_TRIVIA | NUMERIC_TRIVIA | NO_CLEAR_CENTRAL_FACT | UNSUPPORTED_FACT_RISK
 and leave question/options/correctIndex/tldr as null.
+(Use NUMERIC_TRIVIA only if the story has no qualitative takeaway at all —
+prefer reframing over skipping.)
 
 STEP 2 — Write the question (only when skip_reason is null):
 - Punchy, witty, jargon-free — smart but not academic
-- Asks about the main development, cause/effect, implication, or leadership change
+- Tests the memorable takeaway: who/what/where, the actor behind an event,
+  cause/effect, implication, leadership change, or the DIRECTION/significance
+  of a change — never a figure to recall
+- If the most obvious question would ask for a number, REFRAME it to test
+  the recognizable fact instead. Example:
+    BAD:  "How much did Ayushmann Khurrana's comedy-drama 'Pati Patni Aur
+           Woh Do' earn globally in its opening weekend?"
+    GOOD: "Which Bollywood star headlined the comedy-drama 'Pati Patni Aur
+           Woh Do' that opened this past weekend?"
+  (Test the star/film/event everyone who read it remembers, not the gross.)
+- A correct answer a non-expert could NOT confidently recall a day later is
+  a failed question — reframe or skip
 - 4 options: exactly 1 correct, 3 plausible but clearly distinct distractors
-- Wrong answers must NOT be near-synonyms of each other
+- Wrong answers must NOT be near-synonyms of each other, and must be the
+  same kind of thing as the answer (don't mix a number option among names)
 - TL;DR: exactly 2 sentences of story context
 
 Respond ONLY with valid JSON, no markdown:
@@ -87,7 +117,7 @@ async function critiqueQuestion(story, generated) {
     ? `Title: ${story.title}\nKey facts:\n${story.key_points.map((kp, i) => `${i + 1}. ${kp}`).join("\n")}`
     : `Title: ${story.title}\n${story.description}`;
 
-  const prompt = `You are a quiz quality reviewer. Score this question on 5 dimensions (1–5 each).
+  const prompt = `You are a quiz quality reviewer. Score this question on all 6 dimensions (1–5 each). Every one of the 6 scores below is REQUIRED — never omit a field.
 
 Story:
 ${storyContext}
@@ -97,18 +127,28 @@ Options: ${generated.options.join(" / ")}
 Correct answer: "${generated.options[generated.correctIndex]}"
 Central fact used: ${generated.central_fact}
 
+Quydly's player is a busy, reasonably informed non-expert who does NOT
+memorize figures. A good question is answerable a day later from the gist
+of the story, never from recall of a number.
+
 Dimensions (1 = very poor, 5 = excellent):
 relevance_score — tests understanding of the main story, not a side detail
 intuitiveness_score — a news-aware person would find this fair and natural
 centrality_score — correct answer comes from the central fact, not a subplot
 distractor_quality_score — wrong answers are plausible but clearly distinct (not synonyms)
 tense_correctness_score — grammar and tense are natural and unambiguous
+everyday_recall_score — a non-expert who read this story once could confidently recall the correct answer a day later WITHOUT having memorized any figure
 
 Reject (decision: "reject") if any of:
 - Question tests exact wording rather than understanding
-- Correct answer is a low-signal number, date, or forecast not central to the story
+- Correct answer is ANY exact quantity — money/revenue/earnings, box-office,
+  percentage, count, poll number, date, age, ranking, or score — even if
+  that number is the headline of the story
+- Answering correctly requires recalling a specific figure rather than the
+  qualitative takeaway
 - Correct answer is a side detail rather than the main development
-- Wrong options are near-synonyms of each other
+- Wrong options are near-synonyms of each other, or are a different kind of
+  thing than the answer (e.g. a number mixed among names)
 - Tense is awkward or logically wrong
 
 Respond ONLY with valid JSON, no markdown:
@@ -118,6 +158,7 @@ Respond ONLY with valid JSON, no markdown:
   "centrality_score": 1,
   "distractor_quality_score": 1,
   "tense_correctness_score": 1,
+  "everyday_recall_score": 1,
   "decision": "approve",
   "reason": "one sentence"
 }`;
@@ -177,6 +218,7 @@ export async function generateQuestion(story, categoryId) {
     critique.centrality_score,
     critique.distractor_quality_score,
     critique.tense_correctness_score,
+    critique.everyday_recall_score,
   ];
 
   if (critique.decision !== "approve" || scores.some(s => typeof s !== "number" || s < CRITIQUE_MIN)) {
