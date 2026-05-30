@@ -1,8 +1,8 @@
 # Implementation Tracker: Social Distribution Pipeline
 
 **Design doc:** [`social-distribution-pipeline-design.md`](./social-distribution-pipeline-design.md)
-**Branch:** `feature/social-distribution-pipeline`
-**Status:** Not started
+**Branch:** `feature/social-distribution-pipeline-impl` (docs already merged to `main` from `feature/social-distribution-pipeline`)
+**Status:** In progress — Phase 0 ☑ · Phase 1 ☑ (live-verified) · Phase 2 next
 **Owner:** Aishvarya Suhane
 
 > One canonical story. Many platform-native assets. The social layer is added *after*
@@ -27,7 +27,9 @@ The design doc's "Files to Add" section assumes a layout that does **not** match
 |---|---|---|---|
 | D1 | `azure-functions/functions/*.js` (flat files) | Folder-per-function: `azure-functions/discover/`, `article-scraper/`, etc. each with `function.json` | Use folder-per-function: `azure-functions/social-candidate-selector/`, `social-post-generator/`, `social-publisher/` |
 | D2 | `azure-functions/lib/social/...` shared utils | `azure-functions/lib/` is the canonical shared-utils home (authoritative, no backend copy) | ✅ Matches — put shared code under `azure-functions/lib/social/` |
-| D3 | `app/admin/social/page.js` (Next.js App Router) | Stack is React Native (Expo) frontend + Express backend. No Next.js `app/` dir. | Pick admin host: (a) Express server-rendered page + actions under `backend/routes/`, (b) new Expo admin screen, or (c) standalone minimal Next.js admin app. **Recommend (a)** for a 2-person team. |
+| D3 | `app/admin/social/page.js` (Next.js App Router) | Stack is React Native (Expo) frontend + Express backend. No Next.js `app/` dir. | ✅ **RESOLVED (owner):** option (a) — Express server-rendered page + actions under `backend/routes/adminSocial.js`. |
+| D6 | `story_id uuid references stories(id)` | `stories.id` is `bigserial` (bigint); `story_audiences.story_id` is bigint | ✅ **RESOLVED:** all `story_id` FKs use `bigint`. Social tables keep `uuid` surrogate PKs. |
+| D7 | story has `category` col; selector filters `s.created_at >= now()-36h` | story has `category_id` (text), no `created_at` — only `published_at` | ✅ **RESOLVED:** candidate `category` ← `category_id`; freshness window uses `published_at`. |
 | D4 | Service Bus `social-post-generate-queue` | Existing queues: `scrape-queue`, `synthesize-queue` (ServiceBus) | Provision new `social-post-generate-queue` in same namespace |
 | D5 | AI model unspecified for post gen | `backend/services/claude.js` uses `claude-sonnet-4-20250514` | Reuse Claude client + same model for post generation |
 
@@ -39,12 +41,12 @@ Goal: all three tables exist; nothing runs yet.
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 0.1 | Create migration adding `social_publication_candidates` | `backend/db/migration_social_distribution.sql` (mirror `migration_geo_pipeline.sql` convention) | ☐ | Table + `unique(story_id, audience_geo)` + status/sensitivity defaults present |
-| 0.2 | Add `social_posts` table | same migration | ☐ | Table + `unique(story_id, platform, audience_geo)` present |
-| 0.3 | Add `social_media_assets` table | same migration | ☐ | Table with `asset_type`, `asset_url`, generation metadata |
-| 0.4 | Add helpful indexes | same migration | ☐ | Index on `social_posts(status, scheduled_for)`; `social_publication_candidates(status)`; `*(story_id, audience_geo)` |
-| 0.5 | Document status enums as CHECK constraints or comments | same migration | ☐ | Candidate/post/asset status values from §6 enforced or documented |
-| 0.6 | Apply migration to Supabase (dev) | — | ☐ | Tables visible via Supabase MCP / dashboard |
+| 0.1 | Create migration adding `social_publication_candidates` | `backend/db/migration_social_distribution.sql` (mirror `migration_geo_pipeline.sql` convention) | ☑ | Table + `unique(story_id, audience_geo)` + status/sensitivity defaults present |
+| 0.2 | Add `social_posts` table | same migration | ☑ | Table + `unique(story_id, platform, audience_geo)` present |
+| 0.3 | Add `social_media_assets` table | same migration | ☑ | Table with `asset_type`, `asset_url`, generation metadata |
+| 0.4 | Add helpful indexes | same migration | ☑ | Index on `social_posts(status, scheduled_for)`; `social_publication_candidates(status)`; `*(story_id, audience_geo)` |
+| 0.5 | Document status enums as CHECK constraints or comments | same migration | ☑ | All status/sensitivity/platform/asset_type enums enforced via CHECK |
+| 0.6 | Apply migration to Supabase (dev) | — | ☑ | Applied via Supabase MCP (`social_distribution_phase0`); 3 tables verified, 0 rows |
 
 **Phase 0 exit:** migration applied, tables queryable, no behavior change to existing pipeline.
 
@@ -56,14 +58,15 @@ Goal: candidate rows created from high-quality stories; no post text yet.
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 1.1 | Shared candidate logic (query, dedupe, insert) | `azure-functions/lib/social/social-candidates.js` | ☐ | Pure functions: `selectEligibleStories`, `insertCandidate`, `buildPublishReason` |
-| 1.2 | Sensitivity classifier | `azure-functions/lib/social/social-safety.js` | ☐ | `classifySensitivity(story)` → LOW/MEDIUM/HIGH/UNKNOWN per §10.1 categories |
-| 1.3 | Scoring thresholds added to pipeline flags | `azure-functions/lib/flags.js` | ☐ | `SOCIAL_*` thresholds (story_score≥25, confidence≥7, relevance≥20, max/day/geo=10) — pipeline flags file only |
-| 1.4 | Timer function `social-candidate-selector` | `azure-functions/social-candidate-selector/{index.js,function.json}` | ☐ | TimerTrigger `0 */60 * * * *`; reads stories+story_audiences |
-| 1.5 | Enqueue generation messages | uses `lib/clients.js` ServiceBus | ☐ | One message per candidate to `social-post-generate-queue` |
-| 1.6 | Per-geo selection (global vs india) | in 1.1 | ☐ | Respects `audience_geo` rules + per-day cap |
+| 1.1 | Shared candidate logic (query, dedupe, insert) | `azure-functions/lib/social/social-candidates.js` | ☑ | `selectEligibleStories`, `insertCandidate`, `buildPublishReason` (+ pure `buildEligiblePairs`); unit-tested |
+| 1.2 | Sensitivity classifier | `azure-functions/lib/social/social-safety.js` | ☑ | `classifySensitivity(story)` → LOW/MEDIUM/HIGH/UNKNOWN; word-boundary + inflection matching; unit-tested |
+| 1.3 | Scoring thresholds added to pipeline flags | `azure-functions/lib/flags.js` | ☑ | `FLAGS.social.*` (score≥25, conf≥7, rel≥20, max/day/geo=10) — pipeline flags file only |
+| 1.4 | Timer function `social-candidate-selector` | `azure-functions/social-candidate-selector/{index.js,function.json}` | ☑ | TimerTrigger `0 */60 * * * *`; reads stories+story_audiences (read path verified live) |
+| 1.5 | Enqueue generation messages | uses `lib/clients.js` ServiceBus | ☑ | One msg/candidate to `social-post-generate-queue`; 10 messages confirmed on queue |
+| 1.6 | Per-geo selection (global vs india) | in 1.1 | ☑ | Respects `audience_geo` + per-day cap; unit-tested |
 
-**Phase 1 exit:** running the selector creates candidate rows for eligible stories, no duplicates for `story_id+audience_geo`, messages enqueued, no post text generated.
+**Phase 1 exit:** ☑ Live run created **10 candidate rows** (all `PENDING`/`global`) + **10 queue messages**; re-run created 0 (idempotent via `UNIQUE(story_id,audience_geo)` + daily cap → `social_candidates_none`). No post text generated, no external social API calls.
+**Verification:** `node --test test/social-candidates.test.js` (9 pass) · `node test/verify-social-candidates.js` (read-only) · `node test/run-social-candidate-selector.js` (live).
 
 ---
 
@@ -155,7 +158,7 @@ Goal: auto-publish only safe science/tech stories. **Off by default.**
 | # | Task | Status | Notes |
 |---|---|---|---|
 | X1 | Create branch `feature/social-distribution-pipeline` | ☐ | |
-| X2 | Provision `social-post-generate-queue` (ServiceBus) | ☐ | Same namespace as scrape/synthesize |
+| X2 | Provision `social-post-generate-queue` (ServiceBus) | ☑ | Created in `quydly-pipeline` ns (rg `quydly-pipeline-rg`); lock PT5M, max-delivery 3, TTL 2d (mirrors `synthesize-queue`) |
 | X3 | Add all env vars (design "Environment Variables") | ☐ | Never hardcode keys (CLAUDE.md rule) |
 | X4 | Confirm `host.json` concurrency fits new triggers | ☐ | `autoComplete:false`, `maxConcurrentCalls:8` |
 | X5 | Lint clean per phase | ☐ | `npm run lint` before marking any task done |
