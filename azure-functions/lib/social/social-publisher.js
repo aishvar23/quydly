@@ -12,7 +12,7 @@
 // Dependencies (publishers, getToken) are injected so tests never hit the network.
 
 import { publish as xPublish } from "./platforms/x.js";
-import { getAccessToken } from "./x-auth.js";
+import { credsFromEnv } from "./x-oauth1.js";
 
 const BATCH = 20;
 const DEFAULT_PUBLISHERS = { x: xPublish };
@@ -33,7 +33,7 @@ function dailyCap(env, platform) {
 export async function publishApprovedPosts({
   supabase,
   publishers = DEFAULT_PUBLISHERS,
-  getToken = getAccessToken,
+  getCreds = credsFromEnv,
   env = process.env,
   logger = noopLogger,
   now = new Date(),
@@ -70,8 +70,8 @@ export async function publishApprovedPosts({
     remaining[p] = dailyCap(env, p) - (count || 0);
   }
 
-  // Resolve the access token once (X only for MVP). Skip if no X posts due.
-  let token = null;
+  // Resolve the static X credentials lazily on first publishable post.
+  let creds = null;
 
   let published = 0, failed = 0, skipped = 0;
 
@@ -102,9 +102,9 @@ export async function publishApprovedPosts({
     if (claimErr) throw new Error(`[social-publisher] claim ${post.id}: ${claimErr.message}`);
     if (!claimed) { skipped++; continue; } // lost the race / already moved
 
-    if (!token) {
+    if (!creds) {
       try {
-        token = (await getToken({ env })).accessToken;
+        creds = getCreds(env);
       } catch (authErr) {
         // Can't authenticate — release the claim and stop; nothing will publish.
         await supabase.from("social_posts").update({ status: "APPROVED" }).eq("id", post.id);
@@ -113,7 +113,7 @@ export async function publishApprovedPosts({
     }
 
     try {
-      const result = await publishers[post.platform](post, { accessToken: token });
+      const result = await publishers[post.platform](post, { creds });
       await supabase
         .from("social_posts")
         .update({

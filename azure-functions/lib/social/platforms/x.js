@@ -8,6 +8,7 @@
 import {
   QUYDLY_URL, keyPointStrings, firstSentences, truncate, bullets,
 } from "./_shared.js";
+import { buildAuthHeader } from "../x-oauth1.js";
 
 export const PLATFORM = "x";
 
@@ -55,18 +56,22 @@ export function format(story, audienceGeo) {
   };
 }
 
-// Publish a post to X via API v2 POST /2/tweets using an OAuth 2.0 user-context
-// Bearer access token (scope tweet.write). Returns { platformPostId, rawResponse }.
+// Publish a post to X via API v2 POST /2/tweets using OAuth 1.0a User Context
+// (four static app-owned credentials). Returns { platformPostId, rawResponse }.
 // Throws on non-2xx so the worker can persist the failure and retry.
-export async function publish(post, { accessToken, fetchImpl = fetch } = {}) {
-  if (!accessToken) throw new Error("X publish: missing accessToken");
+// The JSON body is not part of the OAuth 1.0a signature (only oauth_* params are).
+export async function publish(post, { creds, fetchImpl = fetch } = {}) {
+  if (!creds) throw new Error("X publish: missing OAuth 1.0a creds");
   const text = String(post.post_text || post.text || "");
   if (!text) throw new Error("X publish: empty post text");
 
-  const res = await fetchImpl("https://api.x.com/2/tweets", {
+  const url = "https://api.x.com/2/tweets";
+  const authHeader = buildAuthHeader({ method: "POST", url, creds });
+
+  const res = await fetchImpl(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: authHeader,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ text }),

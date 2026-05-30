@@ -113,16 +113,16 @@ Goal: approved posts publish to platform (start with **X only** per recommended 
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 4.1 | X publisher client | `azure-functions/lib/social/platforms/x.js` `publish()` | ☑ | X API v2 `POST /2/tweets`, OAuth2 Bearer; returns `{platformPostId, rawResponse}`; unit-tested |
+| 4.1 | X publisher client | `azure-functions/lib/social/platforms/x.js` `publish()` | ☑ | X API v2 `POST /2/tweets`, **OAuth 1.0a User Context** (`lib/social/x-oauth1.js`); returns `{platformPostId, rawResponse}`; signing verified vs X's canonical base string |
 | 4.2 | Publishing worker | `azure-functions/social-publisher/{index.js,function.json}` | ☑ | Timer `0 */15 * * * *`; batch ≤20; due APPROVED/SCHEDULED |
 | 4.3 | Publish idempotency | `lib/social/social-publisher.js` | ☑ | Conditional claim APPROVED/SCHEDULED+`platform_post_id IS NULL` → `PUBLISHING` before API call (§12.3) |
 | 4.4 | Success/failure persistence | in 4.3 | ☑ | Success: `platform_post_id`+`platform_response`+`published_at`; failure: `error_message`+`failed_at` |
-| 4.5 | Env vars wired | function app settings | ◐ | Consumed in code (`X_CLIENT_ID/SECRET`, `X_REDIRECT_URI`, `X_ACCESS_TOKEN`/`X_REFRESH_TOKEN`, `SOCIAL_MAX_X_POSTS_PER_DAY`). **Owner must set** (X OAuth2 app + token). Auth = OAuth2 PKCE (`lib/social/x-auth.js` + `scripts/x-oauth-setup.js`) |
+| 4.5 | Env vars wired | function app settings | ◐ | Consumed in code: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (OAuth 1.0a — matches design doc), `SOCIAL_MAX_X_POSTS_PER_DAY`. **Owner must set** the 4 X creds (portal: enable Read+Write, then generate Access Token & Secret). No browser flow / refresh needed |
 | 4.6 | Failures visible in admin | Phase 3 UI | ☑ | Failed section renders `error_message` (already in `adminSocial.js`) |
 | 4.7 | Facebook publisher | `platforms/facebook.js` | ☐ | Deferred until X live-verified |
 
-**Phase 4 exit:** ◐ Code complete + unit-tested (6 tests: publish, claim/idempotency, success/failure persistence, per-day cap, IG media gate). **Live publish blocked on owner**: register an X OAuth2 app (scopes `tweet.read tweet.write users.read offline.access`), run `scripts/x-oauth-setup.js` to get a token, set env, then `node test/run-social-publisher.js` after approving one X draft.
-**Verification:** `node --test test/social-publisher.test.js` (6 pass).
+**Phase 4 exit:** ◐ Code complete + unit-tested (9 tests inc. signing-vs-canonical, claim/idempotency, success/failure persistence, per-day cap, IG media gate). **Auth = OAuth 1.0a User Context** (correct for a single app-owned account — no browser flow, non-expiring portal tokens; chosen over OAuth2 PKCE after reviewing X auth docs). **Live publish blocked on owner**: in the X portal enable Read+Write on the app, generate Access Token & Secret, set the 4 `X_*` env vars, then `node test/run-social-publisher.js` after approving one X draft.
+**Verification:** `node --test test/x-oauth1.test.js test/social-publisher.test.js` (9 pass; base string matches X's published canonical example verbatim).
 
 ---
 

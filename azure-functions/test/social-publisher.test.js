@@ -14,22 +14,25 @@ import { publishApprovedPosts } from "../lib/social/social-publisher.js";
 
 // ── X publish client ──────────────────────────────────────────────────────────
 
-test("x.publish: posts text and returns the tweet id", async () => {
+const CREDS = { consumerKey: "k", consumerSecret: "s", token: "t", tokenSecret: "ts" };
+
+test("x.publish: posts text with an OAuth 1.0a header and returns the tweet id", async () => {
   let captured;
   const fetchImpl = async (url, opts) => {
     captured = { url, opts };
     return { ok: true, json: async () => ({ data: { id: "1789", text: "hi" } }) };
   };
-  const out = await xPublish({ post_text: "Hello quydly.com" }, { accessToken: "tok", fetchImpl });
+  const out = await xPublish({ post_text: "Hello quydly.com" }, { creds: CREDS, fetchImpl });
   assert.equal(out.platformPostId, "1789");
   assert.equal(captured.url, "https://api.x.com/2/tweets");
-  assert.equal(captured.opts.headers.Authorization, "Bearer tok");
+  assert.match(captured.opts.headers.Authorization, /^OAuth /);
+  assert.match(captured.opts.headers.Authorization, /oauth_signature_method="HMAC-SHA1"/);
   assert.equal(JSON.parse(captured.opts.body).text, "Hello quydly.com");
 });
 
 test("x.publish: throws on non-2xx", async () => {
   const fetchImpl = async () => ({ ok: false, status: 403, json: async () => ({ detail: "not allowed" }) });
-  await assert.rejects(() => xPublish({ post_text: "x quydly.com" }, { accessToken: "t", fetchImpl }), /403.*not allowed/);
+  await assert.rejects(() => xPublish({ post_text: "x quydly.com" }, { creds: CREDS, fetchImpl }), /403.*not allowed/);
 });
 
 // ── Mock Supabase for the publisher ────────────────────────────────────────────
@@ -76,7 +79,7 @@ function makeSupabase({ duePosts, counts = {} }) {
   return { client: { from }, byId, updates };
 }
 
-const TOKEN = async () => ({ accessToken: "tok" });
+const CREDS_FN = () => ({ consumerKey: "k", consumerSecret: "s", token: "t", tokenSecret: "ts" });
 
 function xPost(id, over = {}) {
   return { id, story_id: 1, platform: "x", audience_geo: "global", post_text: "Post quydly.com",
@@ -88,7 +91,7 @@ function xPost(id, over = {}) {
 test("publishApprovedPosts: publishes due X posts and stores tweet id", async () => {
   const sb = makeSupabase({ duePosts: [xPost("a"), xPost("b")] });
   const publishers = { x: async (post) => ({ platformPostId: `t_${post.id}`, rawResponse: { data: { id: `t_${post.id}` } } }) };
-  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getToken: TOKEN, env: {} });
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: {} });
 
   assert.deepEqual(res, { published: 2, failed: 0, skipped: 0 });
   assert.equal(sb.byId.get("a").status, "POSTED");
@@ -98,7 +101,7 @@ test("publishApprovedPosts: publishes due X posts and stores tweet id", async ()
 test("publishApprovedPosts: failure marks FAILED with error_message", async () => {
   const sb = makeSupabase({ duePosts: [xPost("a")] });
   const publishers = { x: async () => { throw new Error("rate limited"); } };
-  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getToken: TOKEN, env: {} });
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: {} });
 
   assert.deepEqual(res, { published: 0, failed: 1, skipped: 0 });
   assert.equal(sb.byId.get("a").status, "FAILED");
@@ -109,7 +112,7 @@ test("publishApprovedPosts: respects per-day cap", async () => {
   const sb = makeSupabase({ duePosts: [xPost("a"), xPost("b")], counts: { x: 1 } });
   const publishers = { x: async (p) => ({ platformPostId: `t_${p.id}`, rawResponse: {} }) };
   // cap 1, already 1 posted today → 0 remaining → both skipped
-  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getToken: TOKEN, env: { SOCIAL_MAX_X_POSTS_PER_DAY: "1" } });
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: { SOCIAL_MAX_X_POSTS_PER_DAY: "1" } });
   assert.equal(res.published, 0);
   assert.equal(res.skipped, 2);
 });
@@ -120,7 +123,7 @@ test("publishApprovedPosts: never publishes Instagram without media (#16)", asyn
   const sb = makeSupabase({ duePosts: [igPost] });
   let called = false;
   const publishers = { instagram: async () => { called = true; return { platformPostId: "x", rawResponse: {} }; } };
-  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getToken: TOKEN, env: {} });
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: {} });
   assert.equal(called, false);
   assert.equal(res.skipped, 1);
   assert.equal(sb.byId.get("ig").status, "APPROVED"); // untouched
