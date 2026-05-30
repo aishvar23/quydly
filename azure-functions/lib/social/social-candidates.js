@@ -9,12 +9,12 @@
 //
 // Reference: design doc §7.1 (candidate selection rules + pseudocode).
 
-import { classifySensitivity } from "./social-safety.js";
+import { classifySensitivity, evaluateAutoApproval } from "./social-safety.js";
 
 // Columns the selector needs from `stories` (sensitivity scan + snapshot fields).
 const STORY_COLUMNS =
   "id, headline, summary, category_id, story_score, confidence_score, " +
-  "source_count, published_at, key_points, hook_sentence, why_it_matters";
+  "source_count, source_documents, published_at, key_points, hook_sentence, why_it_matters";
 
 const STORY_FETCH_LIMIT = 500; // bounded scan; cap is applied per-geo afterwards
 
