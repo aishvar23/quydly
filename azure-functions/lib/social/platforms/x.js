@@ -6,7 +6,7 @@
 //   buildPrompt(story, audienceGeo) → Claude prompt to produce native copy
 
 import {
-  QUYDLY_URL, keyPointStrings, firstSentences, truncate, bullets,
+  keyPointStrings, firstSentences, truncate, bullets,
 } from "./_shared.js";
 import { buildAuthHeader } from "../x-oauth1.js";
 
@@ -39,11 +39,11 @@ function oneLine(s) {
 }
 
 // Deterministic build: headline + (optional) one-line summary + (optional)
-// "Why it matters" bullets + CTA. Budgeted by X-weighted length so the CTA
-// (which contains the URL) is never truncated by X.
+// "Why it matters" bullets + CTA. The X CTA carries NO URL — including a link
+// drives X API cost up, so we use a brand-only call to action ("…on Quydly").
+// Budgeted by X-weighted length (still URL-aware in case LLM copy sneaks one in).
 export function format(story, audienceGeo) {
-  const url = QUYDLY_URL();
-  const cta = `Take today's news quiz: ${url}`;
+  const cta = "Take today's news quiz on Quydly";
   const headline = oneLine(story.headline);
   const summary = firstSentences(story.summary, 1);
   const kps = keyPointStrings(story).slice(0, 2);
@@ -66,7 +66,7 @@ export function format(story, audienceGeo) {
     platform: PLATFORM,
     text,
     mediaUrl: null,
-    linkUrl: url,
+    linkUrl: null, // X posts carry no link — a URL raises X API cost
     requiresMedia: false,
     audienceGeo,
   };
@@ -126,11 +126,12 @@ Why it matters:
 • {point}
 • {point}
 
-Take today's news quiz: ${QUYDLY_URL()}
+Take today's news quiz on Quydly
 
 RULES:
 - Hard limit ${CONSTRAINTS.maxLength} characters; aim for ${CONSTRAINTS.targetLength}.
-- Must end with the quiz CTA and URL.
+- Must end with the brand CTA "Take today's news quiz on Quydly".
+- Do NOT include any URL or link (no quydly.com, no http) — links raise X API cost.
 - No hashtags. No source links. No invented facts, numbers, or quotes.
 - Do not say "breaking". Do not overstate certainty.
 

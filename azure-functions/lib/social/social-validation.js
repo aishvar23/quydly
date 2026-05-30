@@ -50,6 +50,12 @@ export function validatePost({ platform, text, story, constraints }) {
     errors.push("missing Quydly CTA");
   }
 
+  // X posts must carry NO URL — a link raises X API cost. (Other platforms may
+  // link to quydly.com.) Reject any http(s) link or bare quydly.com.
+  if (platform === "x" && /(https?:\/\/|\bquydly\.com\b)/i.test(value)) {
+    errors.push("X post must not include a URL/link");
+  }
+
   // No "breaking" unless story was just updated — we have no reliable freshness
   // signal at post level, so forbid it outright in MVP.
   if (/\bbreaking\b/i.test(value)) {

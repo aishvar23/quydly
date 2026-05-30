@@ -76,7 +76,7 @@ Goal: X / Facebook / Instagram drafts generated, all `PENDING_REVIEW`, no extern
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 2.1 | Platform formatters | `azure-functions/lib/social/platforms/{x,facebook,instagram}.js` (+ `_shared.js`) | ☑ | `format()` + `buildPrompt()` honoring §8 templates; X reserves CTA space; unit-tested |
+| 2.1 | Platform formatters | `azure-functions/lib/social/platforms/{x,facebook,instagram}.js` (+ `_shared.js`) | ☑ | `format()` + `buildPrompt()` honoring §8 templates; unit-tested. **X CTA carries NO URL** — brand-only "Take today's news quiz on Quydly" (a link raises X API cost; owner decision); validation rejects any URL in X posts. FB/IG keep `quydly.com`. |
 | 2.2 | Generator orchestrator | `azure-functions/lib/social/social-post-generator.js` | ☑ | `generateSocialPosts({supabase,anthropic,candidateId})` loops platforms, idempotent upsert |
 | 2.3 | Text validation | `azure-functions/lib/social/social-validation.js` | ☑ | §10.4: length, CTA, no "breaking", no unsupported numbers/sources (list ordinals exempt) |
 | 2.4 | Claude integration for drafts | `lib/clients.js` `getAnthropic()` | ☑ | `claude-sonnet-4-20250514`; deterministic-first, LLM copy used only if it passes validation |
