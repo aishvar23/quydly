@@ -55,6 +55,35 @@ export function format(story, audienceGeo) {
   };
 }
 
+// Publish a post to X via API v2 POST /2/tweets using an OAuth 2.0 user-context
+// Bearer access token (scope tweet.write). Returns { platformPostId, rawResponse }.
+// Throws on non-2xx so the worker can persist the failure and retry.
+export async function publish(post, { accessToken, fetchImpl = fetch } = {}) {
+  if (!accessToken) throw new Error("X publish: missing accessToken");
+  const text = String(post.post_text || post.text || "");
+  if (!text) throw new Error("X publish: empty post text");
+
+  const res = await fetchImpl("https://api.x.com/2/tweets", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ text }),
+  });
+
+  const raw = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = raw.detail || raw.title || JSON.stringify(raw).slice(0, 300);
+    throw new Error(`X publish failed (${res.status}): ${detail}`);
+  }
+
+  const platformPostId = raw?.data?.id;
+  if (!platformPostId) throw new Error(`X publish: no tweet id in response: ${JSON.stringify(raw).slice(0, 200)}`);
+
+  return { platformPostId, rawResponse: raw };
+}
+
 export function buildPrompt(story, audienceGeo) {
   const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
   return `You write concise, factual posts for Quydly, a daily news quiz, for the X (Twitter) account.

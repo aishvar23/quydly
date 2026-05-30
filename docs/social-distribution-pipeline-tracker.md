@@ -2,7 +2,7 @@
 
 **Design doc:** [`social-distribution-pipeline-design.md`](./social-distribution-pipeline-design.md)
 **Branch:** `feature/social-distribution-pipeline-impl` (docs already merged to `main` from `feature/social-distribution-pipeline`)
-**Status:** In progress — Phase 0–3 ☑ (all live-verified) · Phase 4 next
+**Status:** In progress — Phase 0–3 ☑ (live-verified) · Phase 4 code ☑ (live X post blocked on owner creds) · Phase 5 next
 **Owner:** Aishvarya Suhane
 
 > One canonical story. Many platform-native assets. The social layer is added *after*
@@ -113,15 +113,16 @@ Goal: approved posts publish to platform (start with **X only** per recommended 
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 4.1 | X publisher client | `azure-functions/lib/social/platforms/x.js` (publish fn) | ☐ | Publishes text post; returns `{platformPostId, rawResponse}` |
-| 4.2 | Publishing worker | `azure-functions/social-publisher/{index.js,function.json}` | ☐ | Timer `0 */15 * * * *`; batch ≤20; status in APPROVED/SCHEDULED |
-| 4.3 | Publish idempotency | in 4.2 | ☐ | Checks `platform_post_id is null`; marks `PUBLISHING` before API call (§12.3) |
-| 4.4 | Success/failure persistence | in 4.2 | ☐ | Stores `platform_post_id`, `platform_response`; failures store `error_message` |
-| 4.5 | Env vars wired | `.env` / Azure config | ☐ | `X_API_KEY/SECRET`, `X_ACCESS_TOKEN/SECRET`, `SOCIAL_AUTO_PUBLISH_ENABLED=false`, per-day caps |
-| 4.6 | Failures visible in admin | Phase 3 UI | ☐ | Failed posts shown with error |
-| 4.7 | Facebook publisher | `platforms/facebook.js` | ☐ | After X verified; CTA required |
+| 4.1 | X publisher client | `azure-functions/lib/social/platforms/x.js` `publish()` | ☑ | X API v2 `POST /2/tweets`, OAuth2 Bearer; returns `{platformPostId, rawResponse}`; unit-tested |
+| 4.2 | Publishing worker | `azure-functions/social-publisher/{index.js,function.json}` | ☑ | Timer `0 */15 * * * *`; batch ≤20; due APPROVED/SCHEDULED |
+| 4.3 | Publish idempotency | `lib/social/social-publisher.js` | ☑ | Conditional claim APPROVED/SCHEDULED+`platform_post_id IS NULL` → `PUBLISHING` before API call (§12.3) |
+| 4.4 | Success/failure persistence | in 4.3 | ☑ | Success: `platform_post_id`+`platform_response`+`published_at`; failure: `error_message`+`failed_at` |
+| 4.5 | Env vars wired | function app settings | ◐ | Consumed in code (`X_CLIENT_ID/SECRET`, `X_REDIRECT_URI`, `X_ACCESS_TOKEN`/`X_REFRESH_TOKEN`, `SOCIAL_MAX_X_POSTS_PER_DAY`). **Owner must set** (X OAuth2 app + token). Auth = OAuth2 PKCE (`lib/social/x-auth.js` + `scripts/x-oauth-setup.js`) |
+| 4.6 | Failures visible in admin | Phase 3 UI | ☑ | Failed section renders `error_message` (already in `adminSocial.js`) |
+| 4.7 | Facebook publisher | `platforms/facebook.js` | ☐ | Deferred until X live-verified |
 
-**Phase 4 exit:** approved X posts publish, `platform_post_id` stored, errors visible, no double-posting.
+**Phase 4 exit:** ◐ Code complete + unit-tested (6 tests: publish, claim/idempotency, success/failure persistence, per-day cap, IG media gate). **Live publish blocked on owner**: register an X OAuth2 app (scopes `tweet.read tweet.write users.read offline.access`), run `scripts/x-oauth-setup.js` to get a token, set env, then `node test/run-social-publisher.js` after approving one X draft.
+**Verification:** `node --test test/social-publisher.test.js` (6 pass).
 
 ---
 
