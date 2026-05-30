@@ -29,8 +29,8 @@ test("weightedLength: counts each URL as 23 chars", () => {
   assert.equal(weightedLength("a https://example.com/very/long/path b"), "a  b".length + 23);
 });
 
-test("x.format: X-weighted length within 280 and CTA URL always present", () => {
-  // A long story that previously pushed the CTA past X's weighted 280.
+test("x.format: within weighted 280, brand CTA present, NO url", () => {
+  // A long story that previously pushed content past X's weighted 280.
   const longStory = {
     id: 7,
     headline: "Argentina Names Squad for 2026 World Cup with Messi Making Record Sixth Appearance",
@@ -41,7 +41,9 @@ test("x.format: X-weighted length within 280 and CTA URL always present", () => 
     ],
   };
   const out = x.format(longStory, "global");
-  assert.ok(/quydly\.com/.test(out.text), "CTA URL must survive");
+  assert.match(out.text, /Quydly/, "brand CTA must be present");
+  assert.ok(!/https?:\/\/|quydly\.com/i.test(out.text), "X post must carry no URL");
+  assert.equal(out.linkUrl, null);
   assert.ok(weightedLength(out.text) <= 280, `weighted ${weightedLength(out.text)} > 280`);
 });
 
