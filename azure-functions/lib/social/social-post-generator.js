@@ -98,6 +98,13 @@ export async function generateSocialPosts({ supabase, anthropic = null, candidat
   if (storyErr) throw new Error(`[social-post-generator] fetch story: ${storyErr.message}`);
   if (!story) throw new Error(`[social-post-generator] story not found: ${candidate.story_id}`);
 
+  // Phase 5: a candidate the selector marked AUTO_APPROVED produces drafts that
+  // skip human review. Instagram is excluded — it needs a media asset, so it
+  // always stays PENDING_REVIEW (and the publisher's media gate blocks it anyway).
+  const autoApproved = candidate.status === "AUTO_APPROVED";
+  const statusFor = (platform) =>
+    autoApproved && platform.PLATFORM !== "instagram" ? "APPROVED" : "PENDING_REVIEW";
+
   let created = 0;
   let skipped = 0;
 
@@ -130,7 +137,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, candidat
           post_text: post.text,
           media_url: post.mediaUrl || null,
           link_url: post.linkUrl || null,
-          status: "PENDING_REVIEW",
+          status: statusFor(platform),
         },
         { onConflict: "story_id,platform,audience_geo", ignoreDuplicates: true }
       )
@@ -155,7 +162,9 @@ export async function generateSocialPosts({ supabase, anthropic = null, candidat
   }
 
   // Advance candidate to POST_GENERATED (§7.2), unless it already moved past it.
-  if (!["POSTED", "FAILED"].includes(candidate.status)) {
+  // AUTO_APPROVED is preserved so the selector's per-day auto cap keeps counting
+  // it for the rest of the day (Phase 5); POSTED/FAILED are terminal.
+  if (!["POSTED", "FAILED", "AUTO_APPROVED"].includes(candidate.status)) {
     const { error: updErr } = await supabase
       .from("social_publication_candidates")
       .update({ status: "POST_GENERATED", updated_at: new Date().toISOString() })

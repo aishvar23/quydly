@@ -97,3 +97,62 @@ export function classifySensitivity(story) {
 export function isSensitive(story) {
   return classifySensitivity(story) !== SENSITIVITY.LOW;
 }
+
+// Count distinct source domains for a story. Prefers `source_documents`
+// (jsonb array of {domain}|{url}); falls back to `source_count` when that
+// detail isn't present. Used by the auto-approval gate (§10.3 unique_domains).
+export function countSourceDomains(story) {
+  const docs = story && story.source_documents;
+  if (Array.isArray(docs) && docs.length) {
+    const domains = new Set();
+    for (const d of docs) {
+      if (!d) continue;
+      if (typeof d === "string") { domains.add(d); continue; }
+      const dom = d.domain || d.source_domain ||
+        (d.url ? String(d.url).replace(/^https?:\/\//, "").split("/")[0] : null);
+      if (dom) domains.add(String(dom).toLowerCase());
+    }
+    if (domains.size) return domains.size;
+  }
+  return Number(story && story.source_count) || 0;
+}
+
+// Phase 5 auto-approval gate (§10.3). A post may be auto-approved ONLY when the
+// story is demonstrably low-risk AND high-quality AND in a safe category.
+// Returns { eligible, reasons } — reasons lists every failing condition so the
+// decision is auditable. This is the sole authority for auto-approval; the
+// publish toggle (SOCIAL_AUTO_PUBLISH_ENABLED) and per-day cap are enforced by
+// the caller.
+//
+//   flags = FLAGS.social.autoApprove
+export function evaluateAutoApproval(story, { flags }) {
+  const reasons = [];
+
+  // Hard block: anything not classified LOW can never auto-approve (§10.1/§15.5).
+  const sensitivity = classifySensitivity(story);
+  if (sensitivity !== SENSITIVITY.LOW) {
+    reasons.push(`sensitivity=${sensitivity} (must be LOW)`);
+  }
+
+  const confidence = Number(story.confidence_score) || 0;
+  if (confidence < flags.minConfidence) {
+    reasons.push(`confidence ${confidence} < ${flags.minConfidence}`);
+  }
+
+  const score = Number(story.story_score) || 0;
+  if (score < flags.minStoryScore) {
+    reasons.push(`story_score ${score} < ${flags.minStoryScore}`);
+  }
+
+  const domains = countSourceDomains(story);
+  if (domains < flags.minUniqueDomains) {
+    reasons.push(`unique_domains ${domains} < ${flags.minUniqueDomains}`);
+  }
+
+  const category = story.category_id || story.category;
+  if (!category || !flags.safeCategories.includes(category)) {
+    reasons.push(`category "${category}" not in safe list`);
+  }
+
+  return { eligible: reasons.length === 0, reasons };
+}

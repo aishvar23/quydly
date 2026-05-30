@@ -2,7 +2,7 @@
 
 **Design doc:** [`social-distribution-pipeline-design.md`](./social-distribution-pipeline-design.md)
 **Branch:** `feature/social-distribution-pipeline-impl` (docs already merged to `main` from `feature/social-distribution-pipeline`)
-**Status:** In progress — Phase 0–4 ☑ (all live-verified; real 276-char tweet `2060851089344205142` posted to @quydlynews) · Phase 4.7 Facebook + Phase 5 next
+**Status:** In progress — Phases 0–5 ☑ (MVP core complete; X live-verified, real tweet `2060851089344205142` posted to @quydlynews; auto-publish gated OFF by default) · remaining: 4.7 Facebook publish + post-MVP items (L1–L9)
 **Owner:** Aishvarya Suhane
 
 > One canonical story. Many platform-native assets. The social layer is added *after*
@@ -188,8 +188,8 @@ From design doc §"MVP Acceptance Criteria":
 - [x] 10. Publisher only publishes approved posts
 - [x] 11. Publisher stores `platform_post_id` after success
 - [x] 12. Publisher stores API error details after failure
-- [ ] 13. Sensitive stories are never auto-approved *(Phase 5 — not yet built)*
-- [ ] 14. Auto-publish is disabled by default *(Phase 5 — not yet built)*
+- [x] 13. Sensitive stories are never auto-approved
+- [x] 14. Auto-publish is disabled by default
 - [x] 15. No external social API call during candidate selection or draft generation
 - [x] 16. Instagram posts require a media asset before publishing
 - [x] 17. X posts satisfy length limits

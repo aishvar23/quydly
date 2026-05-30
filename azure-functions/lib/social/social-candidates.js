@@ -137,9 +137,21 @@ export function buildPublishReason(story, relevanceScore, sensitivityLevel) {
   );
 }
 
-// Idempotent insert. Returns { id } for a freshly inserted candidate, or null if
-// one already existed for (story_id, audience_geo) (UNIQUE conflict ignored).
-export async function insertCandidate(supabase, pair) {
+// Pure: decide the initial candidate status (Phase 5). Returns 'AUTO_APPROVED'
+// only when auto-publish is enabled, a per-day budget remains, AND the story
+// clears the §10.3 auto-approval gate. Otherwise 'PENDING' (human review).
+// Off by default: callers pass autoEnabled=false unless SOCIAL_AUTO_PUBLISH_ENABLED.
+export function decideCandidateStatus(story, { autoEnabled, autoFlags, autoRemaining }) {
+  if (!autoEnabled || !autoFlags || autoRemaining <= 0) return "PENDING";
+  const { eligible } = evaluateAutoApproval(story, { flags: autoFlags });
+  return eligible ? "AUTO_APPROVED" : "PENDING";
+}
+
+// Idempotent insert. Returns { id, status } for a freshly inserted candidate, or
+// null if one already existed for (story_id, audience_geo) (UNIQUE conflict).
+// `status` defaults to PENDING (review-first); the selector passes AUTO_APPROVED
+// for stories that clear the Phase 5 gate within the daily cap.
+export async function insertCandidate(supabase, pair, { status = "PENDING" } = {}) {
   const { story, audienceGeo, relevanceScore } = pair;
   const sensitivityLevel = classifySensitivity(story);
 
@@ -155,11 +167,11 @@ export async function insertCandidate(supabase, pair) {
         confidence_score: story.confidence_score,
         category: story.category_id || story.category || null,
         sensitivity_level: sensitivityLevel,
-        status: "PENDING",
+        status,
       },
       { onConflict: "story_id,audience_geo", ignoreDuplicates: true }
     )
-    .select("id")
+    .select("id, status")
     .maybeSingle();
 
   if (error) throw new Error(`[social-candidates] insert candidate: ${error.message}`);
