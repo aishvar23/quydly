@@ -18,6 +18,32 @@ import * as facebook from "../lib/social/platforms/facebook.js";
 import * as instagram from "../lib/social/platforms/instagram.js";
 import { validatePost } from "../lib/social/social-validation.js";
 import { generateSocialPosts } from "../lib/social/social-post-generator.js";
+import { weightedLength } from "../lib/social/platforms/x.js";
+
+// ── X URL-weighting (regression: live tweet dropped the quydly.com CTA) ───────
+
+test("weightedLength: counts each URL as 23 chars", () => {
+  assert.equal(weightedLength("hello"), 5);
+  // "see quydly.com" → "see " (4) + 23 = 27
+  assert.equal(weightedLength("see quydly.com"), 27);
+  assert.equal(weightedLength("a https://example.com/very/long/path b"), "a  b".length + 23);
+});
+
+test("x.format: X-weighted length within 280 and CTA URL always present", () => {
+  // A long story that previously pushed the CTA past X's weighted 280.
+  const longStory = {
+    id: 7,
+    headline: "Argentina Names Squad for 2026 World Cup with Messi Making Record Sixth Appearance",
+    summary: "Argentina named its squad.",
+    key_points: [
+      "Messi will make a record sixth FIFA World Cup appearance at age 38",
+      "Argentina retained 17 players from their 2022 World Cup-winning squad",
+    ],
+  };
+  const out = x.format(longStory, "global");
+  assert.ok(/quydly\.com/.test(out.text), "CTA URL must survive");
+  assert.ok(weightedLength(out.text) <= 280, `weighted ${weightedLength(out.text)} > 280`);
+});
 
 const STORY = {
   id: 101,

@@ -105,8 +105,10 @@ export default async function socialCandidateSelector(context, timer) {
   context.log(JSON.stringify({
     event: "social_candidates_complete",
     candidates_created,
+    candidates_auto_approved,
     candidates_skipped,
     messages_enqueued,
     enqueue_failures,
+    auto_publish_enabled: autoEnabled,
   }));
 }

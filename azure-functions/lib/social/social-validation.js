@@ -9,6 +9,8 @@
 // Note: media presence is NOT validated here — Instagram drafts are allowed to
 // exist without an asset; the publisher (Phase 4) enforces "media before publish".
 
+import { weightedLength } from "./platforms/x.js";
+
 const NUMBER_RE = /\d[\d,]*(?:\.\d+)?/g;
 
 // Numbers that are part of fixed brand/CTA phrasing, not factual claims.
@@ -36,9 +38,11 @@ export function validatePost({ platform, text, story, constraints }) {
     return { valid: false, errors: ["empty post text"] };
   }
 
-  // Length
-  if (constraints && value.length > constraints.maxLength) {
-    errors.push(`exceeds ${platform} max length ${constraints.maxLength} (got ${value.length})`);
+  // Length. X enforces a URL-weighted limit (each link counts as 23 chars), so
+  // measure X posts the way X does; other platforms use raw length.
+  const measured = platform === "x" ? weightedLength(value) : value.length;
+  if (constraints && measured > constraints.maxLength) {
+    errors.push(`exceeds ${platform} max length ${constraints.maxLength} (got ${measured})`);
   }
 
   // CTA must be present (§10.4 "must include Quydly CTA")

@@ -19,13 +19,28 @@ export const CONSTRAINTS = {
   allowHashtags: false,
 };
 
+// X counts every URL as a fixed-weight t.co link (currently 23 chars),
+// regardless of the URL's real length. A tweet whose raw length is ≤280 can
+// therefore exceed X's weighted 280 and have its trailing URL stripped — which
+// is exactly what dropped the quydly.com CTA on the first live post. Budget
+// against this weighted length so the CTA always survives.
+const TCO_URL_WEIGHT = 23;
+const URL_RE = /https?:\/\/\S+|\b[a-z0-9-]+\.(?:com|org|net|io|co)\b\S*/gi;
+
+// X-weighted length of a string: each URL contributes TCO_URL_WEIGHT.
+export function weightedLength(text) {
+  let urls = 0;
+  const stripped = String(text).replace(URL_RE, () => { urls += TCO_URL_WEIGHT; return ""; });
+  return stripped.length + urls;
+}
+
 function oneLine(s) {
   return String(s || "").replace(/\s+/g, " ").trim();
 }
 
 // Deterministic build: headline + (optional) one-line summary + (optional)
-// "Why it matters" bullets + CTA. Space for the CTA is reserved first so it is
-// never dropped.
+// "Why it matters" bullets + CTA. Budgeted by X-weighted length so the CTA
+// (which contains the URL) is never truncated by X.
 export function format(story, audienceGeo) {
   const url = QUYDLY_URL();
   const cta = `Take today's news quiz: ${url}`;
@@ -34,7 +49,8 @@ export function format(story, audienceGeo) {
   const kps = keyPointStrings(story).slice(0, 2);
   const why = kps.length ? `Why it matters:\n${bullets(kps)}` : "";
 
-  const budget = CONSTRAINTS.maxLength - cta.length - 2; // reserve "\n\n" + cta
+  // Reserve the CTA's weighted cost + the "\n\n" separator from the 280 budget.
+  const budget = CONSTRAINTS.maxLength - weightedLength(cta) - 2;
   let body = truncate(headline, budget);
 
   if (summary && summary !== headline && body.length + 2 + summary.length <= budget) {
@@ -44,7 +60,7 @@ export function format(story, audienceGeo) {
     body += `\n\n${why}`;
   }
 
-  const text = truncate(`${body}\n\n${cta}`, CONSTRAINTS.maxLength);
+  const text = `${body}\n\n${cta}`;
 
   return {
     platform: PLATFORM,
