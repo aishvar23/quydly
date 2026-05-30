@@ -9,6 +9,7 @@ import cors from "cors";
 import questionsRouter from "./routes/questions.js";
 import completeRouter from "./routes/complete.js";
 import stripeRouter from "./routes/stripe.js";
+import adminSocialRouter from "./routes/adminSocial.js";
 
 const app = express();
 app.use(cors());
@@ -17,6 +18,7 @@ app.use(express.json());
 app.use("/api/questions", questionsRouter);
 app.use("/api/complete", completeRouter);
 app.use("/api/webhook/stripe", stripeRouter);
+app.use("/admin/social", adminSocialRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

@@ -2,7 +2,7 @@
 
 **Design doc:** [`social-distribution-pipeline-design.md`](./social-distribution-pipeline-design.md)
 **Branch:** `feature/social-distribution-pipeline-impl` (docs already merged to `main` from `feature/social-distribution-pipeline`)
-**Status:** In progress — Phase 0 ☑ · Phase 1 ☑ · Phase 2 ☑ (all live-verified) · Phase 3 next
+**Status:** In progress — Phase 0–3 ☑ (all live-verified) · Phase 4 next
 **Owner:** Aishvarya Suhane
 
 > One canonical story. Many platform-native assets. The social layer is added *after*
@@ -96,13 +96,14 @@ Goal: human can approve / reject / edit posts. (Host TBD — see D3.)
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 3.1 | Decide admin host | — | ☐ | D3 resolved with owner |
-| 3.2 | Admin route/page `/admin/social` | per D3 (e.g. `backend/routes/adminSocial.js`) | ☐ | Sections: Pending / Approved-Scheduled / Posted / Failed / Rejected (§11.1) |
-| 3.3 | Post card component | per D3 (`SocialPostCard`) | ☐ | Shows story meta + 3 platform drafts (§11.2) |
-| 3.4 | Actions: approve / reject / edit-text / publish-now | `actions.js` equiv | ☐ | MVP actions per §11.4; status transitions persisted |
-| 3.5 | Auth/guard on admin route | — | ☐ | Admin-only access (Supabase auth / admin allowlist) |
+| 3.1 | Decide admin host | — | ☑ | D3 → Express server-rendered route (owner-confirmed) |
+| 3.2 | Admin route/page `/admin/social` | `backend/routes/adminSocial.js` (mounted in `backend/index.js`) | ☑ | 5 sections: Pending / Approved-Scheduled / Posted / Failed / Rejected (§11.1) |
+| 3.3 | Post card component | `renderCard` in `adminSocial.js` | ☑ | Shows story meta (headline/category/geo/scores/sensitivity) + 3 platform drafts (§11.2) |
+| 3.4 | Actions: approve / reject / edit-text / publish-now | `adminSocial.js` POST routes | ☑ | §11.4 actions; status transitions persisted w/ from-state guards (409 on invalid) |
+| 3.5 | Auth/guard on admin route | `requireAdmin` | ☑ | Shared `ADMIN_TOKEN` → httpOnly cookie (timing-safe compare); login/logout |
 
-**Phase 3 exit:** admin can list pending posts, approve, reject, and edit `post_text`.
+**Phase 3 exit:** ☑ Verified live against dev DB — auth gate (401 unauth/bad token), login sets cookie, dashboard listed all 10 cards / 30 drafts under Pending Review; approve→Approved, reject→Rejected, edit persisted `post_text`, re-approve blocked (409). Dataset reset to 30 `PENDING_REVIEW` after testing.
+**Verification:** `node backend/scripts/verify-admin-social.js` (isolated harness) + curl. **Auth host choice:** Express (D3 option a). **New env var:** `ADMIN_TOKEN` (see X3).
 
 ---
 
@@ -161,7 +162,7 @@ Goal: auto-publish only safe science/tech stories. **Off by default.**
 |---|---|---|---|
 | X1 | Create branch `feature/social-distribution-pipeline` | ☐ | |
 | X2 | Provision `social-post-generate-queue` (ServiceBus) | ☑ | Created in `quydly-pipeline` ns (rg `quydly-pipeline-rg`); lock PT5M, max-delivery 3, TTL 2d (mirrors `synthesize-queue`) |
-| X3 | Add all env vars (design "Environment Variables") | ☐ | Never hardcode keys (CLAUDE.md rule) |
+| X3 | Add all env vars (design "Environment Variables") | ◐ | `ADMIN_TOKEN` (Phase 3) required in backend env. X/FB/IG keys + `SOCIAL_*` caps still pending (Phase 4). Never hardcode keys. |
 | X4 | Confirm `host.json` concurrency fits new triggers | ☐ | `autoComplete:false`, `maxConcurrentCalls:8` |
 | X5 | Lint clean per phase | ☐ | `npm run lint` before marking any task done |
 
