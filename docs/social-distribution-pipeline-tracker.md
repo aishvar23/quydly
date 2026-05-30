@@ -2,7 +2,7 @@
 
 **Design doc:** [`social-distribution-pipeline-design.md`](./social-distribution-pipeline-design.md)
 **Branch:** `feature/social-distribution-pipeline-impl` (docs already merged to `main` from `feature/social-distribution-pipeline`)
-**Status:** In progress — Phase 0 ☑ · Phase 1 ☑ (live-verified) · Phase 2 next
+**Status:** In progress — Phase 0 ☑ · Phase 1 ☑ · Phase 2 ☑ (all live-verified) · Phase 3 next
 **Owner:** Aishvarya Suhane
 
 > One canonical story. Many platform-native assets. The social layer is added *after*
@@ -76,15 +76,17 @@ Goal: X / Facebook / Instagram drafts generated, all `PENDING_REVIEW`, no extern
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 2.1 | Platform formatters | `azure-functions/lib/social/platforms/{x,facebook,instagram}.js` | ☐ | Each exports `format(story, audienceGeo)` honoring §8 templates + length rules |
-| 2.2 | Generator orchestrator | `azure-functions/lib/social/social-post-generator.js` | ☐ | `generateSocialPosts(candidateId)` loops platforms, idempotent insert |
-| 2.3 | Text validation | `azure-functions/lib/social/social-validation.js` | ☐ | Enforces §10.4 rules (no invented facts, CTA present, length limits) |
-| 2.4 | Claude integration for drafts | reuse pattern from `backend/services/claude.js` | ☐ | Uses `claude-sonnet-4-20250514`; key via env |
-| 2.5 | ServiceBus function `social-post-generator` | `azure-functions/social-post-generator/{index.js,function.json}` | ☐ | Trigger on `social-post-generate-queue` |
-| 2.6 | Idempotent inserts | in 2.2 | ☐ | Skips existing `story_id+platform+audience_geo`; sets candidate → `POST_GENERATED` |
-| 2.7 | Instagram asset placeholder | sets `media_url` / asset row | ☐ | IG post flagged as requiring media asset before publish |
+| 2.1 | Platform formatters | `azure-functions/lib/social/platforms/{x,facebook,instagram}.js` (+ `_shared.js`) | ☑ | `format()` + `buildPrompt()` honoring §8 templates; X reserves CTA space; unit-tested |
+| 2.2 | Generator orchestrator | `azure-functions/lib/social/social-post-generator.js` | ☑ | `generateSocialPosts({supabase,anthropic,candidateId})` loops platforms, idempotent upsert |
+| 2.3 | Text validation | `azure-functions/lib/social/social-validation.js` | ☑ | §10.4: length, CTA, no "breaking", no unsupported numbers/sources (list ordinals exempt) |
+| 2.4 | Claude integration for drafts | `lib/clients.js` `getAnthropic()` | ☑ | `claude-sonnet-4-20250514`; deterministic-first, LLM copy used only if it passes validation |
+| 2.5 | ServiceBus function `social-post-generator` | `azure-functions/social-post-generator/{index.js,function.json}` | ☑ | Trigger on `social-post-generate-queue` (binding mirrors `article-scraper`) |
+| 2.6 | Idempotent inserts | in 2.2 | ☑ | Skips existing `story_id+platform+audience_geo`; candidate → `POST_GENERATED` |
+| 2.7 | Instagram asset placeholder | `requiresMedia` flag + `media_url=null` | ☑ | IG drafts carry no media; publish gate (Phase 4) enforces media-before-publish. Real cards = Phase 6/L1 |
 
-**Phase 2 exit:** drafts exist per platform as `PENDING_REVIEW`, validations pass, zero external social API calls, no duplicate posts.
+**Phase 2 exit:** ☑ Live run generated **30 drafts** (10×x/fb/ig) all `PENDING_REVIEW` via the real queue path; re-drive idempotent (0 created / 30 skipped); 0 missing CTA, 0 over-length, 0 IG with media; no external social API calls (Claude used for copy only).
+**Verification:** `node --test test/social-post-generator.test.js` (8 pass) · `node test/run-social-post-generator.js` (live, enqueue→drain→purge-DLQ).
+**Note:** an early runner bug (`logger.log` vs callable `context.log`) dead-lettered the first batch; fixed (callable-logger convention), messages re-driven, DLQ purged. Queue clean (0 active / 0 dead-letter).
 
 ---
 

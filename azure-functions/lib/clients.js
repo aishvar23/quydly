@@ -4,10 +4,12 @@
 import { createClient } from "@supabase/supabase-js";
 import { ServiceBusClient } from "@azure/service-bus";
 import Redis from "ioredis";
+import Anthropic from "@anthropic-ai/sdk";
 
-let _supabase = null;
-let _sbClient = null;
-let _redis    = null;
+let _supabase  = null;
+let _sbClient  = null;
+let _redis     = null;
+let _anthropic = null;
 
 export function getSupabase() {
   if (!_supabase) {
@@ -38,4 +40,14 @@ export function getRedis() {
     });
   }
   return _redis;
+}
+
+// Returns null when ANTHROPIC_API_KEY is unset so callers can fall back to
+// deterministic generation instead of crashing.
+export function getAnthropic() {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!_anthropic) {
+    _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return _anthropic;
 }
