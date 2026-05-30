@@ -2,7 +2,7 @@
 
 **Design doc:** [`social-distribution-pipeline-design.md`](./social-distribution-pipeline-design.md)
 **Branch:** `feature/social-distribution-pipeline-impl` (docs already merged to `main` from `feature/social-distribution-pipeline`)
-**Status:** In progress — Phase 0–3 ☑ (live-verified) · Phase 4 code ☑ (live X post blocked on owner creds) · Phase 5 next
+**Status:** In progress — Phase 0–3 ☑ (live-verified) · Phase 4 code ☑, publish path live-verified (long-post publishing blocked by non-verified-account 140-char cap; owner verifying account) · Phase 5 next
 **Owner:** Aishvarya Suhane
 
 > One canonical story. Many platform-native assets. The social layer is added *after*
@@ -117,12 +117,15 @@ Goal: approved posts publish to platform (start with **X only** per recommended 
 | 4.2 | Publishing worker | `azure-functions/social-publisher/{index.js,function.json}` | ☑ | Timer `0 */15 * * * *`; batch ≤20; due APPROVED/SCHEDULED |
 | 4.3 | Publish idempotency | `lib/social/social-publisher.js` | ☑ | Conditional claim APPROVED/SCHEDULED+`platform_post_id IS NULL` → `PUBLISHING` before API call (§12.3) |
 | 4.4 | Success/failure persistence | in 4.3 | ☑ | Success: `platform_post_id`+`platform_response`+`published_at`; failure: `error_message`+`failed_at` |
-| 4.5 | Env vars wired | function app settings | ◐ | Consumed in code: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (OAuth 1.0a — matches design doc), `SOCIAL_MAX_X_POSTS_PER_DAY`. **Owner must set** the 4 X creds (portal: enable Read+Write, then generate Access Token & Secret). No browser flow / refresh needed |
+| 4.5 | Env vars wired | function app settings | ☑ | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (OAuth 1.0a — matches design doc) + `SOCIAL_MAX_X_POSTS_PER_DAY` set in `local.settings.json`. App permissions = Read+Write (`x-access-level: read-write` confirmed on responses) |
 | 4.6 | Failures visible in admin | Phase 3 UI | ☑ | Failed section renders `error_message` (already in `adminSocial.js`) |
-| 4.7 | Facebook publisher | `platforms/facebook.js` | ☐ | Deferred until X live-verified |
+| 4.7 | Facebook publisher | `platforms/facebook.js` | ☐ | Deferred (X publish path now live-verified) |
 
-**Phase 4 exit:** ◐ Code complete + unit-tested (9 tests inc. signing-vs-canonical, claim/idempotency, success/failure persistence, per-day cap, IG media gate). **Auth = OAuth 1.0a User Context** (correct for a single app-owned account — no browser flow, non-expiring portal tokens; chosen over OAuth2 PKCE after reviewing X auth docs). **Live publish blocked on owner**: in the X portal enable Read+Write on the app, generate Access Token & Secret, set the 4 `X_*` env vars, then `node test/run-social-publisher.js` after approving one X draft.
-**Verification:** `node --test test/x-oauth1.test.js test/social-publisher.test.js` (9 pass; base string matches X's published canonical example verbatim).
+**Phase 4 exit:** ◐ Code complete + unit-tested (9 tests). **Publish path LIVE-VERIFIED:** a real <140-char post was published to **@quydlynews** via the publisher's OAuth 1.0a `POST /2/tweets` → 201, confirmed on the author timeline (`result_count:1`), then cleaned up (`DELETE /2/tweets` → `{"deleted":true}`, timeline back to 0). So auth, signing, POST, success/failure persistence, and DELETE are all proven against the live API.
+**BLOCKER (account, not code):** the **@quydlynews account is not verified**, and X caps non-verified accounts at **~140 characters** for API posts. Every Quydly draft is 240–280 chars, so `POST /2/tweets` returns the generic `403 {"detail":"You are not permitted to perform this action."}` for them (headers prove it's *not* scope/rate-limit: `x-access-level: read-write`, `x-rate-limit-remaining: 99`). Short posts succeed; long posts 403. **Owner is pursuing account verification to lift the cap; per owner decision the X formatter stays at 280 (no 140 downgrade)** — once the account is verified the existing 240–280-char drafts will post unchanged.
+**Earlier dead ends (ruled out):** 402 = pay-per-use account had no credits (fixed by loading ~$25); the "duplicate-content" theory was wrong — the real cause is the 140-char non-verified limit.
+**Auth = OAuth 1.0a User Context** (single app-owned account — no browser flow, non-expiring portal tokens; chosen over OAuth2 PKCE after reviewing X auth docs).
+**Verification:** `node --test test/x-oauth1.test.js test/social-publisher.test.js` (9 pass; base string matches X's published canonical example verbatim). Live: short post 201 + timeline-confirmed + deleted.
 
 ---
 
