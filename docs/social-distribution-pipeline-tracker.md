@@ -135,12 +135,14 @@ Goal: auto-publish only safe science/tech stories. **Off by default.**
 
 | # | Task | File(s) | Status | Acceptance check |
 |---|---|---|---|---|
-| 5.1 | Auto-approval gate | `social-safety.js` | ☐ | Implements §10.3 conditions (LOW, conf≥8, score≥30, ≥3 domains, safe category) |
-| 5.2 | Per-day auto-publish cap | flags / env | ☐ | Max 3 auto-published/day; respects `SOCIAL_AUTO_PUBLISH_ENABLED` |
-| 5.3 | Sensitive-category hard block | `social-safety.js` | ☐ | War/crime/death/etc. never auto-approved |
-| 5.4 | Auto status path | selector/generator | ☐ | Eligible candidates → `AUTO_APPROVED` → published |
+| 5.1 | Auto-approval gate | `social-safety.js` `evaluateAutoApproval` | ☑ | §10.3: LOW + conf≥8 + score≥30 + ≥3 unique domains + safe category; returns `{eligible, reasons}`; `countSourceDomains` helper; unit-tested |
+| 5.2 | Per-day auto-publish cap | `flags.js` + selector | ☑ | `SOCIAL_AUTO_PUBLISH_ENABLED` (env, default OFF) + `autoApprove.maxPerDay=3`; selector counts today's `AUTO_APPROVED`, decrements per approval |
+| 5.3 | Sensitive-category hard block | `social-safety.js` | ☑ | `evaluateAutoApproval` requires `classifySensitivity==LOW`; war/crime/death/etc. never eligible (tested even at score 80/conf 10) |
+| 5.4 | Auto status path | `social-candidates.js` `decideCandidateStatus` + generator | ☑ | Eligible → `AUTO_APPROVED`; generator sets X/FB drafts `APPROVED` (publisher posts), IG stays `PENDING_REVIEW` (needs media); candidate kept `AUTO_APPROVED` for the daily cap |
 
-**Phase 5 exit:** with flag on, only safe stories auto-publish within cap; sensitive ones still require review.
+**Phase 5 exit:** ☑ With `SOCIAL_AUTO_PUBLISH_ENABLED=true`, only stories clearing the §10.3 gate auto-publish (X/FB) within `maxPerDay`; sensitive/low-quality still require review. **OFF by default** — unset flag means every candidate is `PENDING` (current behaviour unchanged).
+**Verification:** full social suite **40 pass** (`social-candidates`, `social-post-generator`, `social-publisher`, `x-oauth1`, `social-autopublish`), `eslint .` clean. Live read-only dry run (`node test/verify-social-autopublish.js`): flag OFF, 18 stories scanned (LOW 1 / UNKNOWN 12 / HIGH 4 / MEDIUM 1), **0 auto-eligible**; no writes, nothing posted.
+**X URL-weighting fix (Phase 4 follow-up — ✅ commit `8cf77ae`):** first live tweet dropped its `quydly.com` CTA because X weights each URL as ~23 chars (t.co) → a draft ≤280 *raw* can exceed 280 *weighted* and X strips the trailing URL. Fixed: `weightedLength()` budgets the X formatter; `social-validation.js` measures X by weighted length. Regression-tested. (The already-live tweet still lacks the CTA — cosmetic, left as-is.)
 
 ---
 
