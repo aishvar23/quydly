@@ -6,7 +6,7 @@
 //   buildPrompt(story, audienceGeo) → Claude prompt to produce native copy
 
 import {
-  keyPointStrings, firstSentences, truncate, bullets,
+  keyPointStrings, firstSentences, truncate,
 } from "./_shared.js";
 import { cashtagsFor } from "./_cashtags.js";
 import { buildAuthHeader } from "../x-oauth1.js";
@@ -45,41 +45,39 @@ function oneLine(s) {
   return String(s || "").replace(/\s+/g, " ").trim();
 }
 
-// Deterministic build: headline + (optional) one-line summary + (optional)
-// "Why it matters" bullets + CTA. The X CTA carries NO URL — including a link
-// drives X API cost up, so we use a brand-only call to action ("…on Quydly").
-// Budgeted by X-weighted length (still URL-aware in case LLM copy sneaks one in).
+// Engagement-first X post: headline + one-sentence summary + a reply hook +
+// "full quiz is in our bio" CTA (no link — a URL raises API cost and pushes
+// users off X; we drive replies + profile/bio visits instead). The real
+// per-story quiz question comes from the LLM (buildPrompt); this deterministic
+// fallback can't pose a story-specific question, so it uses a generic reply hook.
+// Cashtags ($AAPL) still append for finance stories. Budgeted by X-weighted length.
+const HOOK = "\u{1F9E0} Think you know today's news? Reply with your take \u{1F447}";
+const BIO_CTA = "Today's full quiz is in our bio.";
+
 export function format(story, audienceGeo) {
-  const cta = "Take today's news quiz on Quydly";
+  const tail = `${HOOK}\n${BIO_CTA}`;
   const headline = oneLine(story.headline);
   const summary = firstSentences(story.summary, 1);
-  const kps = keyPointStrings(story).slice(0, 2);
-  const why = kps.length ? `Why it matters:\n${bullets(kps)}` : "";
 
-  // Cashtags ($AAPL) for finance stories — appended after the CTA on their own
-  // line. Reserved up front so the CTA + tags always survive the 280 budget.
   const cashtags = CONSTRAINTS.allowCashtags ? cashtagsFor(story) : [];
   const tagLine = cashtags.length ? `\n\n${cashtags.join(" ")}` : "";
 
-  // Reserve the CTA's weighted cost + the "\n\n" separator + the tag line from
+  // Reserve the tail's weighted cost + the "\n\n" separator + the tag line from
   // the 280 budget. Cashtags carry no t.co weight, so their raw length applies.
-  const budget = CONSTRAINTS.maxLength - weightedLength(cta) - 2 - tagLine.length;
+  const budget = CONSTRAINTS.maxLength - weightedLength(tail) - 2 - tagLine.length;
   let body = truncate(headline, budget);
 
   if (summary && summary !== headline && body.length + 2 + summary.length <= budget) {
     body += `\n\n${summary}`;
   }
-  if (why && body.length + 2 + why.length <= budget) {
-    body += `\n\n${why}`;
-  }
 
-  const text = `${body}\n\n${cta}${tagLine}`;
+  const text = `${body}\n\n${tail}${tagLine}`;
 
   return {
     platform: PLATFORM,
     text,
     mediaUrl: null,
-    linkUrl: null, // X posts carry no link — a URL raises X API cost
+    linkUrl: null, // X posts carry no link — drives replies + bio visits instead
     requiresMedia: false,
     audienceGeo,
   };
@@ -188,7 +186,7 @@ export function buildPrompt(story, audienceGeo) {
     ? `- You MAY end (after the CTA, on a new line) with these EXACT cashtags and no others: ${cashtags.join(" ")}`
     : `- No cashtags.`;
   const cashtagShape = cashtags.length ? `\n\n${cashtags.join(" ")}` : "";
-  return `You write concise, factual posts for Quydly, a daily news quiz, for the X (Twitter) account.
+  return `You write engaging posts for Quydly (a daily news quiz) on the X account. Your goal is REPLIES: pair a news headline with ONE short quiz question about the story that followers answer in a reply.
 
 Audience region: ${audienceGeo}
 
@@ -198,24 +196,20 @@ Summary: ${story.summary}
 Key points:
 ${facts}
 
-Write ONE X post following this shape:
+Write ONE X post in this shape:
 {headline}
 
-{one concise sentence}
+🧠 Quiz: {one short question about this story, answerable in a few words}
 
-Why it matters:
-• {point}
-• {point}
-
-Take today's news quiz on Quydly${cashtagShape}
+Reply with your answer 👇 Today's full quiz is in our bio.${cashtagShape}
 
 RULES:
 - Hard limit ${CONSTRAINTS.maxLength} characters; aim for ${CONSTRAINTS.targetLength}.
-- Must include the brand CTA "Take today's news quiz on Quydly".
-- Do NOT include any URL or link (no quydly.com, no http) — links raise X API cost.
-- No hashtags (the # symbol). No source links. No invented facts, numbers, or quotes.
+- Ask exactly ONE question, and do NOT reveal the answer.
+- Must end by inviting a reply AND saying the full quiz is "in our bio".
+- Do NOT include any URL or link (no quydly.com, no http).
+- No hashtags (the # symbol). No invented facts, numbers, or quotes. Do not say "breaking".
 ${cashtagRule}
-- Do not say "breaking". Do not overstate certainty.
 
 Respond ONLY with JSON, no markdown: { "post_text": "..." }`;
 }
