@@ -13,6 +13,7 @@ export const PLATFORM = "instagram";
 export const CONSTRAINTS = {
   maxLength: 1500,
   requiresMedia: true, // §10.3 / acceptance #16 — must have a card before publish
+  cardShape: "square", // 1:1 card satisfies the media gate
 };
 
 export function format(story, audienceGeo) {
