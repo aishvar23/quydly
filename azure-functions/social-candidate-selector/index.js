@@ -31,10 +31,14 @@ export default async function socialCandidateSelector(context, timer) {
     return;
   }
 
-  // Phase 5 — limited auto-publish. OFF unless SOCIAL_AUTO_PUBLISH_ENABLED=true.
-  // Budget = (max auto/day) − (already AUTO_APPROVED today); each auto-approval
-  // this run consumes one slot so the daily cap is never exceeded.
+  // Auto-publish (UNGATED — owner decision 2026-05-31). OFF unless
+  // SOCIAL_AUTO_PUBLISH_ENABLED=true. When on, every candidate is AUTO_APPROVED
+  // regardless of sensitivity/category/quality (see decideCandidateStatus).
+  // The only remaining limiter is a per-day ceiling — purely to avoid X's
+  // anti-spam suspension, NOT a content filter. Tune via SOCIAL_MAX_AUTO_PER_DAY
+  // (env) without a redeploy; falls back to FLAGS.social.autoApprove.maxPerDay.
   const autoEnabled = process.env.SOCIAL_AUTO_PUBLISH_ENABLED === "true";
+  const maxAutoPerDay = Number(process.env.SOCIAL_MAX_AUTO_PER_DAY) || social.autoApprove.maxPerDay;
   let autoRemaining = 0;
   if (autoEnabled) {
     const startOfDay = new Date();
@@ -44,7 +48,7 @@ export default async function socialCandidateSelector(context, timer) {
       .select("id", { count: "exact", head: true })
       .eq("status", "AUTO_APPROVED")
       .gte("selected_at", startOfDay.toISOString());
-    autoRemaining = Math.max(0, social.autoApprove.maxPerDay - (count || 0));
+    autoRemaining = Math.max(0, maxAutoPerDay - (count || 0));
   }
 
   let candidates_created = 0;

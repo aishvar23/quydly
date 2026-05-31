@@ -205,3 +205,41 @@ From design doc §"MVP Acceptance Criteria":
 
 1. Schema → 2. Candidate selector → 3. Post generator → 4. Admin review → 5. Manual X publishing
 then: 6. Facebook → 7. Instagram text-card gen → 8. Instagram publishing → 9. Limited auto-publish.
+
+---
+
+## Reach enhancements (post-MVP, X)
+
+Two levers added to lift X reach. Hashtags were deliberately *not* used — X stopped
+treating them as a discovery signal and stuffing them suppresses reach.
+
+### R1 — Cashtags from entities (shipped)
+Finance-category posts append up to 2 clickable `$TICKER` cashtags derived from
+`stories.primary_entities_enriched` (org entities) via a curated static map.
+
+| Concern | Detail |
+|---|---|
+| Map | `lib/social/platforms/_cashtags.js` — `ORG_TO_TICKER`, finance-only, skip-if-unknown (a wrong cashtag is worse than none) |
+| Budget | Appended after the CTA; reserved from the X weighted-280 budget so CTA + tags always survive |
+| Validation | `social-validation.js` rejects `#hashtags` (`allowHashtags:false`) but allows `$cashtags` (`allowCashtags:true`) |
+| Story fetch | `social-post-generator.js` `STORY_COLUMNS` now selects `primary_entities`, `primary_entities_enriched` |
+
+### R2 — Headline image card (shipped, opt-in)
+A branded PNG card (Satori → resvg, no headless browser) attached to X posts and
+available to unblock Instagram's media gate. Render once per (story, shape), stored
+in Supabase Storage, reused across platforms.
+
+| Concern | Detail |
+|---|---|
+| Renderer | `lib/social/card-renderer.js` — landscape 1600×900 (X), square 1080×1080 (IG); fonts in `assets/fonts/` (Lato, OFL) |
+| Storage | `lib/social/card-storage.js` — uploads to bucket `SOCIAL_CARDS_BUCKET` (default `social-cards`, public), memoised per (story, shape) |
+| X publish | `platforms/x.js` `uploadMedia()` → v1.1 `media/upload` (multipart, OAuth1.0a) → `media_ids` on the v2 tweet. Media failure is non-fatal (text-only fallback) |
+| Deps | `satori`, `@resvg/resvg-js` (native; all Linux binaries pinned in `package-lock.json` for `npm ci` on deploy) |
+
+**Operational requirements**
+
+- Env: `SOCIAL_CARDS_ENABLED=1` to turn cards on (default off → text-only, unchanged).
+  Optional `SOCIAL_CARDS_BUCKET` (default `social-cards`).
+- Supabase Storage: a public bucket is auto-created on first run via the service key
+  (`createBucket(..., {public:true})`); pre-create it if the service role lacks that grant.
+- X app must have **Read+Write**; media upload uses the same four OAuth 1.0a creds.

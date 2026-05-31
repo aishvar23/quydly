@@ -25,13 +25,19 @@ const FLAGS = {
     // Service Bus queue the selector enqueues generation jobs to (D4)
     generateQueue: "social-post-generate-queue",
 
-    // Phase 5 auto-approval gate (§10.3) — OFF by default, enforced elsewhere.
+    // Auto-publish config. NOTE (owner decision 2026-05-31): the content gate is
+    // BYPASSED — decideCandidateStatus auto-approves EVERY candidate when enabled.
+    // The thresholds below are retained only for evaluateAutoApproval (kept in
+    // social-safety.js for if/when the gate is restored); they are NOT enforced
+    // on the live auto-publish path. `maxPerDay` IS still enforced as the per-day
+    // ceiling (override in Azure with SOCIAL_MAX_AUTO_PER_DAY) — an anti-spam
+    // ceiling to protect the X account, not a content filter.
     autoApprove: {
       minConfidence:   8,
-      minStoryScore:  30,
+      minStoryScore:  28,
       minUniqueDomains: 3,
-      maxPerDay:        3,
-      safeCategories: ["science", "tech", "culture", "finance"],
+      maxPerDay:       25, // anti-spam ceiling (was 3 when gated). Tune via SOCIAL_MAX_AUTO_PER_DAY.
+      safeCategories: ["science", "technology", "culture", "finance"],
     },
   },
 };

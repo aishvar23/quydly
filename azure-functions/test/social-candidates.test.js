@@ -44,7 +44,7 @@ test("classifySensitivity: MEDIUM on advice/persuasion topics", () => {
 
 test("classifySensitivity: LOW on safe category with no sensitive signal", () => {
   assert.equal(
-    classifySensitivity({ category_id: "tech", headline: "New chip doubles battery life", summary: "Engineers unveil design" }),
+    classifySensitivity({ category_id: "technology", headline: "New chip doubles battery life", summary: "Engineers unveil design" }),
     SENSITIVITY.LOW
   );
   assert.equal(
@@ -65,7 +65,7 @@ test("classifySensitivity: UNKNOWN on unmapped category with no signal, and empt
 test("classifySensitivity: word-boundary avoids false positives", () => {
   // "warm" / "warranty" must not trip the "war" rule.
   assert.equal(
-    classifySensitivity({ category_id: "tech", headline: "Startup offers warranty on warm-weather gear", summary: "" }),
+    classifySensitivity({ category_id: "technology", headline: "Startup offers warranty on warm-weather gear", summary: "" }),
     SENSITIVITY.LOW
   );
 });

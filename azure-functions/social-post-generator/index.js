@@ -10,6 +10,7 @@
 
 import { getSupabase, getAnthropic } from "../lib/clients.js";
 import { generateSocialPosts } from "../lib/social/social-post-generator.js";
+import { createCardService } from "../lib/social/card-storage.js";
 
 export default async function socialPostGenerator(context, message) {
   const candidateId = message && (message.candidate_id || message.candidateId);
@@ -24,9 +25,16 @@ export default async function socialPostGenerator(context, message) {
   const supabase = getSupabase();
   const anthropic = getAnthropic(); // null when ANTHROPIC_API_KEY is unset → deterministic
 
+  // Headline cards are opt-in (render + storage cost; needs the storage bucket).
+  // When off, cardService stays null and drafts are text-only, as before.
+  const cardService = /^(1|true)$/i.test(String(process.env.SOCIAL_CARDS_ENABLED || ""))
+    ? createCardService({ supabase, logger: context.log })
+    : null;
+
   const { created, skipped } = await generateSocialPosts({
     supabase,
     anthropic,
+    cardService,
     candidateId,
     logger: context.log,
   });

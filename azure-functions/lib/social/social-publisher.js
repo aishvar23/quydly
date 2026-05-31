@@ -113,7 +113,7 @@ export async function publishApprovedPosts({
     }
 
     try {
-      const result = await publishers[post.platform](post, { creds });
+      const result = await publishers[post.platform](post, { creds, logger });
       await supabase
         .from("social_posts")
         .update({
