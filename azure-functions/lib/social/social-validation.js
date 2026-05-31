@@ -56,6 +56,12 @@ export function validatePost({ platform, text, story, constraints }) {
     errors.push("X post must not include a URL/link");
   }
 
+  // Hashtags are disallowed when the platform opts out (X). Cashtags ($AAPL) are
+  // a separate, allowed token and must NOT trip this — match # specifically.
+  if (constraints && constraints.allowHashtags === false && /(^|\s)#\w/.test(value)) {
+    errors.push(`${platform} post must not include hashtags`);
+  }
+
   // No "breaking" unless story was just updated — we have no reliable freshness
   // signal at post level, so forbid it outright in MVP.
   if (/\bbreaking\b/i.test(value)) {

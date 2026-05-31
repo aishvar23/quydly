@@ -8,6 +8,7 @@
 import {
   keyPointStrings, firstSentences, truncate, bullets,
 } from "./_shared.js";
+import { cashtagsFor } from "./_cashtags.js";
 import { buildAuthHeader } from "../x-oauth1.js";
 
 export const PLATFORM = "x";
@@ -17,6 +18,12 @@ export const CONSTRAINTS = {
   targetLength: 260,
   requiresMedia: false,
   allowHashtags: false,
+  // Cashtags ($AAPL) are allowed — they aid discovery on finance stories without
+  // the spam penalty hashtags carry. Hashtags stay off.
+  allowCashtags: true,
+  // A headline card lifts reach materially on X; attached when a card service is
+  // available, but not required (text-only posts still publish).
+  cardShape: "landscape",
 };
 
 // X counts every URL as a fixed-weight t.co link (currently 23 chars),
@@ -49,8 +56,14 @@ export function format(story, audienceGeo) {
   const kps = keyPointStrings(story).slice(0, 2);
   const why = kps.length ? `Why it matters:\n${bullets(kps)}` : "";
 
-  // Reserve the CTA's weighted cost + the "\n\n" separator from the 280 budget.
-  const budget = CONSTRAINTS.maxLength - weightedLength(cta) - 2;
+  // Cashtags ($AAPL) for finance stories — appended after the CTA on their own
+  // line. Reserved up front so the CTA + tags always survive the 280 budget.
+  const cashtags = CONSTRAINTS.allowCashtags ? cashtagsFor(story) : [];
+  const tagLine = cashtags.length ? `\n\n${cashtags.join(" ")}` : "";
+
+  // Reserve the CTA's weighted cost + the "\n\n" separator + the tag line from
+  // the 280 budget. Cashtags carry no t.co weight, so their raw length applies.
+  const budget = CONSTRAINTS.maxLength - weightedLength(cta) - 2 - tagLine.length;
   let body = truncate(headline, budget);
 
   if (summary && summary !== headline && body.length + 2 + summary.length <= budget) {
@@ -60,7 +73,7 @@ export function format(story, audienceGeo) {
     body += `\n\n${why}`;
   }
 
-  const text = `${body}\n\n${cta}`;
+  const text = `${body}\n\n${cta}${tagLine}`;
 
   return {
     platform: PLATFORM,
@@ -72,14 +85,77 @@ export function format(story, audienceGeo) {
   };
 }
 
+// Upload an image to X (v1.1 media/upload) and return its media_id_string. The
+// bytes go as multipart/form-data — which, like a JSON body, is NOT part of the
+// OAuth 1.0a signature (only the oauth_* params are), so buildAuthHeader signs
+// the bare URL. media_ids from this endpoint attach to a v2 tweet.
+const X_MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json";
+const MULTIPART_BOUNDARY = "----QuydlyCardBoundary7MA4YWxkTrZu0gW";
+
+function multipartImageBody(buffer, contentType) {
+  const head = Buffer.from(
+    `--${MULTIPART_BOUNDARY}\r\n` +
+    `Content-Disposition: form-data; name="media"; filename="card.png"\r\n` +
+    `Content-Type: ${contentType}\r\n\r\n`
+  );
+  const tail = Buffer.from(`\r\n--${MULTIPART_BOUNDARY}--\r\n`);
+  return Buffer.concat([head, buffer, tail]);
+}
+
+export async function uploadMedia(buffer, contentType, { creds, fetchImpl = fetch } = {}) {
+  if (!creds) throw new Error("X media upload: missing OAuth 1.0a creds");
+  const authHeader = buildAuthHeader({ method: "POST", url: X_MEDIA_UPLOAD_URL, creds });
+
+  const res = await fetchImpl(X_MEDIA_UPLOAD_URL, {
+    method: "POST",
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": `multipart/form-data; boundary=${MULTIPART_BOUNDARY}`,
+    },
+    body: multipartImageBody(buffer, contentType),
+  });
+
+  const raw = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = raw.errors ? JSON.stringify(raw.errors).slice(0, 300) : JSON.stringify(raw).slice(0, 300);
+    throw new Error(`X media upload failed (${res.status}): ${detail}`);
+  }
+  const id = raw.media_id_string || (raw.media_id != null ? String(raw.media_id) : null);
+  if (!id) throw new Error(`X media upload: no media_id in response: ${JSON.stringify(raw).slice(0, 200)}`);
+  return id;
+}
+
+// Fetch the rendered card bytes from its stored public URL.
+async function fetchMediaBytes(url, fetchImpl) {
+  const res = await fetchImpl(url);
+  if (!res.ok) throw new Error(`fetch media ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const contentType = res.headers?.get?.("content-type") || "image/png";
+  return { buffer: buf, contentType };
+}
+
 // Publish a post to X via API v2 POST /2/tweets using OAuth 1.0a User Context
-// (four static app-owned credentials). Returns { platformPostId, rawResponse }.
-// Throws on non-2xx so the worker can persist the failure and retry.
+// (four static app-owned credentials). When the post has a media_url, its card
+// is uploaded first and attached via media.media_ids — a media upload failure
+// is non-fatal and falls back to a text-only tweet (reach beats silence).
+// Returns { platformPostId, rawResponse }. Throws on a non-2xx tweet create.
 // The JSON body is not part of the OAuth 1.0a signature (only oauth_* params are).
-export async function publish(post, { creds, fetchImpl = fetch } = {}) {
+export async function publish(post, { creds, fetchImpl = fetch, logger } = {}) {
   if (!creds) throw new Error("X publish: missing OAuth 1.0a creds");
   const text = String(post.post_text || post.text || "");
   if (!text) throw new Error("X publish: empty post text");
+
+  const body = { text };
+  const mediaUrl = post.media_url || post.mediaUrl;
+  if (mediaUrl) {
+    try {
+      const { buffer, contentType } = await fetchMediaBytes(mediaUrl, fetchImpl);
+      const mediaId = await uploadMedia(buffer, contentType, { creds, fetchImpl });
+      body.media = { media_ids: [mediaId] };
+    } catch (mediaErr) {
+      logger?.warn?.(JSON.stringify({ event: "x_media_attach_failed", error: mediaErr.message }));
+    }
+  }
 
   const url = "https://api.x.com/2/tweets";
   const authHeader = buildAuthHeader({ method: "POST", url, creds });
@@ -90,7 +166,7 @@ export async function publish(post, { creds, fetchImpl = fetch } = {}) {
       Authorization: authHeader,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(body),
   });
 
   const raw = await res.json().catch(() => ({}));
@@ -107,6 +183,11 @@ export async function publish(post, { creds, fetchImpl = fetch } = {}) {
 
 export function buildPrompt(story, audienceGeo) {
   const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
+  const cashtags = CONSTRAINTS.allowCashtags ? cashtagsFor(story) : [];
+  const cashtagRule = cashtags.length
+    ? `- You MAY end (after the CTA, on a new line) with these EXACT cashtags and no others: ${cashtags.join(" ")}`
+    : `- No cashtags.`;
+  const cashtagShape = cashtags.length ? `\n\n${cashtags.join(" ")}` : "";
   return `You write concise, factual posts for Quydly, a daily news quiz, for the X (Twitter) account.
 
 Audience region: ${audienceGeo}
@@ -126,13 +207,14 @@ Why it matters:
 • {point}
 • {point}
 
-Take today's news quiz on Quydly
+Take today's news quiz on Quydly${cashtagShape}
 
 RULES:
 - Hard limit ${CONSTRAINTS.maxLength} characters; aim for ${CONSTRAINTS.targetLength}.
-- Must end with the brand CTA "Take today's news quiz on Quydly".
+- Must include the brand CTA "Take today's news quiz on Quydly".
 - Do NOT include any URL or link (no quydly.com, no http) — links raise X API cost.
-- No hashtags. No source links. No invented facts, numbers, or quotes.
+- No hashtags (the # symbol). No source links. No invented facts, numbers, or quotes.
+${cashtagRule}
 - Do not say "breaking". Do not overstate certainty.
 
 Respond ONLY with JSON, no markdown: { "post_text": "..." }`;

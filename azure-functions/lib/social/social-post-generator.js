@@ -18,7 +18,7 @@ const PLATFORMS = [x, facebook, instagram];
 const MODEL = "claude-sonnet-4-20250514";
 
 const STORY_COLUMNS =
-  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score";
+  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched";
 
 // Callable logger matching the Azure Functions `context.log` convention
 // (a function with .warn / .error attached), so handlers can pass context.log directly.
@@ -44,9 +44,19 @@ async function generateWithClaude(anthropic, platform, story, audienceGeo) {
 }
 
 // Build one platform draft. Deterministic by default; LLM copy only when it
-// passes validation.
-export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, logger = noopLogger }) {
+// passes validation. When a cardService is supplied and the platform declares a
+// cardShape, a rendered headline card is attached (best-effort — null on failure
+// leaves the draft text-only, exactly as before).
+export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, cardService = null, logger = noopLogger }) {
   const draft = platform.format(story, audienceGeo); // deterministic base
+
+  if (cardService && platform.CONSTRAINTS && platform.CONSTRAINTS.cardShape) {
+    const mediaUrl = await cardService.getCardUrl({ story, shape: platform.CONSTRAINTS.cardShape });
+    if (mediaUrl) {
+      draft.mediaUrl = mediaUrl;
+      draft.requiresMedia = false; // asset now present
+    }
+  }
 
   if (anthropic) {
     try {
@@ -79,7 +89,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, candidateId, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -122,7 +132,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, candidat
     if (existing) { skipped++; continue; }
 
     const post = await generatePlatformPost({
-      platform, story, audienceGeo: candidate.audience_geo, anthropic, logger,
+      platform, story, audienceGeo: candidate.audience_geo, anthropic, cardService, logger,
     });
 
     // Race-safe insert: ignoreDuplicates handles a concurrent generator.
