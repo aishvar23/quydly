@@ -79,23 +79,26 @@ test("evaluateAutoApproval: sensitive story never eligible even if scores are hi
   assert.match(r.reasons.join(), /sensitivity=HIGH/);
 });
 
-// ── decideCandidateStatus (5.2) ───────────────────────────────────────────────
+// ── decideCandidateStatus — UNGATED mode (owner decision 2026-05-31) ──────────
+// The content gate is bypassed: when enabled + budget remains, EVERY candidate
+// auto-approves regardless of sensitivity/category/quality. Only the disabled
+// flag and the per-day ceiling can return PENDING.
 
 test("decideCandidateStatus: PENDING when auto-publish disabled (default)", () => {
   assert.equal(decideCandidateStatus(goodStory(), { autoEnabled: false, autoFlags: AUTO, autoRemaining: 3 }), "PENDING");
 });
 
-test("decideCandidateStatus: PENDING when daily budget exhausted", () => {
+test("decideCandidateStatus: PENDING when daily ceiling exhausted", () => {
   assert.equal(decideCandidateStatus(goodStory(), { autoEnabled: true, autoFlags: AUTO, autoRemaining: 0 }), "PENDING");
 });
 
-test("decideCandidateStatus: AUTO_APPROVED when enabled, eligible, budget remains", () => {
+test("decideCandidateStatus: AUTO_APPROVED when enabled and budget remains", () => {
   assert.equal(decideCandidateStatus(goodStory(), { autoEnabled: true, autoFlags: AUTO, autoRemaining: 1 }), "AUTO_APPROVED");
 });
 
-test("decideCandidateStatus: PENDING when enabled but story fails the gate", () => {
+test("decideCandidateStatus: UNGATED — sensitive story is ALSO auto-approved when enabled", () => {
   const sensitive = goodStory({ headline: "Soldiers killed in border war" });
-  assert.equal(decideCandidateStatus(sensitive, { autoEnabled: true, autoFlags: AUTO, autoRemaining: 3 }), "PENDING");
+  assert.equal(decideCandidateStatus(sensitive, { autoEnabled: true, autoFlags: AUTO, autoRemaining: 3 }), "AUTO_APPROVED");
 });
 
 // ── generator auto status path (5.4) ──────────────────────────────────────────

@@ -9,7 +9,7 @@
 //
 // Reference: design doc §7.1 (candidate selection rules + pseudocode).
 
-import { classifySensitivity, evaluateAutoApproval } from "./social-safety.js";
+import { classifySensitivity } from "./social-safety.js";
 
 // Columns the selector needs from `stories` (sensitivity scan + snapshot fields).
 const STORY_COLUMNS =
@@ -137,14 +137,24 @@ export function buildPublishReason(story, relevanceScore, sensitivityLevel) {
   );
 }
 
-// Pure: decide the initial candidate status (Phase 5). Returns 'AUTO_APPROVED'
-// only when auto-publish is enabled, a per-day budget remains, AND the story
-// clears the §10.3 auto-approval gate. Otherwise 'PENDING' (human review).
-// Off by default: callers pass autoEnabled=false unless SOCIAL_AUTO_PUBLISH_ENABLED.
+// Pure: decide the initial candidate status.
+//
+// ⚠️ UNGATED MODE (owner decision 2026-05-31): when auto-publish is enabled,
+// EVERY candidate is AUTO_APPROVED — no sensitivity / category / quality gate.
+// This means sensitive stories (war/crime/death/etc.) auto-post unattended.
+// The §10.3 safety gate (`evaluateAutoApproval`) is intentionally NOT called
+// here; it remains in social-safety.js so it can be re-enabled by restoring the
+// commented line below.
+//
+// `autoRemaining` is the ONLY remaining limiter — a per-day ceiling kept solely
+// to avoid tripping X's anti-spam limits (which would suspend the account), not
+// a content filter. Off by default: autoEnabled=false unless SOCIAL_AUTO_PUBLISH_ENABLED.
 export function decideCandidateStatus(story, { autoEnabled, autoFlags, autoRemaining }) {
-  if (!autoEnabled || !autoFlags || autoRemaining <= 0) return "PENDING";
-  const { eligible } = evaluateAutoApproval(story, { flags: autoFlags });
-  return eligible ? "AUTO_APPROVED" : "PENDING";
+  if (!autoEnabled || autoRemaining <= 0) return "PENDING";
+  // Re-enable the safety gate by uncommenting:
+  // const { eligible } = evaluateAutoApproval(story, { flags: autoFlags });
+  // return eligible ? "AUTO_APPROVED" : "PENDING";
+  return "AUTO_APPROVED";
 }
 
 // Idempotent insert. Returns { id, status } for a freshly inserted candidate, or
