@@ -10,8 +10,13 @@
 // exist without an asset; the publisher (Phase 4) enforces "media before publish".
 
 import { weightedLength } from "./platforms/x.js";
+import { cashtagsFor } from "./platforms/_cashtags.js";
 
 const NUMBER_RE = /\d[\d,]*(?:\.\d+)?/g;
+
+// A $cashtag token: '$' + 1–6 letters, optional class suffix (e.g. $BRK.B).
+// Requires a leading letter so dollar amounts ("$5") are NOT matched.
+const CASHTAG_RE = /\$[A-Za-z]{1,6}(?:\.[A-Za-z])?/g;
 
 // Numbers that are part of fixed brand/CTA phrasing, not factual claims.
 const WHITELISTED_NUMBERS = new Set(["5"]); // "5-question quiz"
@@ -60,6 +65,19 @@ export function validatePost({ platform, text, story, constraints }) {
   // a separate, allowed token and must NOT trip this — match # specifically.
   if (constraints && constraints.allowHashtags === false && /(^|\s)#\w/.test(value)) {
     errors.push(`${platform} post must not include hashtags`);
+  }
+
+  // Cashtags must be exactly the curated set for this story — LLM copy could
+  // otherwise emit a plausible-but-wrong ticker (e.g. $TSLA for an Nvidia story),
+  // sending readers to the wrong ticker page, which is what the curation avoids.
+  // A non-finance story has an empty set, so any $cashtag is rejected there.
+  if (constraints && constraints.allowCashtags) {
+    const allowed = new Set(cashtagsFor(story).map((c) => c.toUpperCase()));
+    for (const tag of value.match(CASHTAG_RE) || []) {
+      if (!allowed.has(tag.toUpperCase())) {
+        errors.push(`unexpected cashtag "${tag}"`);
+      }
+    }
   }
 
   // No "breaking" unless story was just updated — we have no reliable freshness

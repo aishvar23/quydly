@@ -109,3 +109,33 @@ test("validatePost: rejects hashtags on X but allows cashtags", () => {
     "cashtags should be allowed"
   );
 });
+
+test("validatePost: rejects cashtags not in the story's curated set (LLM safety)", () => {
+  const base = { story: FINANCE_STORY, constraints: x.CONSTRAINTS, platform: "x" };
+  // FINANCE_STORY maps to $NVDA / $AMD only — a hallucinated $TSLA must fail so
+  // the orchestrator falls back to the safe deterministic draft.
+  const bad = validatePost({ ...base, text: "Chips up. Take today's news quiz on Quydly\n\n$TSLA" });
+  assert.equal(bad.valid, false);
+  assert.ok(bad.errors.some((e) => /unexpected cashtag "\$TSLA"/.test(e)), bad.errors.join(", "));
+
+  // A correct subset still passes.
+  assert.equal(
+    validatePost({ ...base, text: "Chips up. Take today's news quiz on Quydly\n\n$NVDA" }).valid,
+    true
+  );
+});
+
+test("validatePost: rejects any cashtag on a non-finance X post", () => {
+  const story = { ...FINANCE_STORY, category_id: "world" }; // empty allowed set
+  const v = validatePost({ platform: "x", constraints: x.CONSTRAINTS, story,
+    text: "Markets move. Take today's news quiz on Quydly\n\n$NVDA" });
+  assert.equal(v.valid, false);
+});
+
+test("validatePost: dollar amounts are not mistaken for cashtags", () => {
+  // "$5" is a number, not a cashtag — must not trip the cashtag allowlist.
+  const story = { ...FINANCE_STORY, summary: FINANCE_STORY.summary + " The fund raised $5 today." };
+  const v = validatePost({ platform: "x", constraints: x.CONSTRAINTS, story,
+    text: "A fund raised $5. Take today's news quiz on Quydly\n\n$NVDA" });
+  assert.ok(v.valid, v.errors.join(", "));
+});
