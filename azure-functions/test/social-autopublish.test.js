@@ -64,7 +64,7 @@ test("evaluateAutoApproval: eligible when all §10.3 conditions met", () => {
 
 test("evaluateAutoApproval: each failing condition is reported", () => {
   assert.match(evaluateAutoApproval(goodStory({ confidence_score: 7 }), { flags: AUTO }).reasons.join(), /confidence/);
-  assert.match(evaluateAutoApproval(goodStory({ story_score: 29 }), { flags: AUTO }).reasons.join(), /story_score/);
+  assert.match(evaluateAutoApproval(goodStory({ story_score: 27 }), { flags: AUTO }).reasons.join(), /story_score/);
   assert.match(evaluateAutoApproval(goodStory({ source_count: 2, source_documents: [] }), { flags: AUTO }).reasons.join(), /unique_domains/);
   assert.match(evaluateAutoApproval(goodStory({ category_id: "world" }), { flags: AUTO }).reasons.join(), /not in safe list/);
 });

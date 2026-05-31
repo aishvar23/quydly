@@ -15,8 +15,9 @@ export const SENSITIVITY = {
 };
 
 // Categories that are inherently low brand-risk when no sensitive signal is found.
-// Matches config/categories.js ids (world is intentionally excluded — it needs a scan).
-export const SAFE_CATEGORIES = new Set(["science", "tech", "culture", "finance"]);
+// Must match stories.category_id values (the pipeline uses "technology", not "tech";
+// "world" is intentionally excluded — it needs a keyword scan).
+export const SAFE_CATEGORIES = new Set(["science", "technology", "culture", "finance"]);
 
 // HIGH — must always go through human review (§10.1 sensitive categories +
 // §10.2 auto-reject signals). Word-boundary matched, case-insensitive.

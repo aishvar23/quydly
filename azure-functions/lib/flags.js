@@ -28,10 +28,11 @@ const FLAGS = {
     // Phase 5 auto-approval gate (§10.3) — OFF by default, enforced elsewhere.
     autoApprove: {
       minConfidence:   8,
-      minStoryScore:  30,
+      minStoryScore:  28, // lowered from 30 (owner, 2026-05-31) to let strong safe stories auto-post
       minUniqueDomains: 3,
       maxPerDay:        3,
-      safeCategories: ["science", "tech", "culture", "finance"],
+      // Must match stories.category_id values (pipeline uses "technology", not "tech").
+      safeCategories: ["science", "technology", "culture", "finance"],
     },
   },
 };
