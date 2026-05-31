@@ -10,7 +10,12 @@
 
 import { getSupabase, getAnthropic } from "../lib/clients.js";
 import { generateSocialPosts } from "../lib/social/social-post-generator.js";
-import { createCardService } from "../lib/social/card-storage.js";
+// NOTE: card-storage (→ card-renderer → @resvg/resvg-js native binary) is
+// imported LAZILY below, only when SOCIAL_CARDS_ENABLED is on. A static import
+// here loads the resvg binary at module load; on hosts whose arch lacks a
+// matching prebuilt (e.g. Azure Windows win32-ia32) that throws and the whole
+// function fails to load. Keeping it lazy means the generator runs everywhere
+// when cards are off.
 
 export default async function socialPostGenerator(context, message) {
   const candidateId = message && (message.candidate_id || message.candidateId);
@@ -25,11 +30,14 @@ export default async function socialPostGenerator(context, message) {
   const supabase = getSupabase();
   const anthropic = getAnthropic(); // null when ANTHROPIC_API_KEY is unset → deterministic
 
-  // Headline cards are opt-in (render + storage cost; needs the storage bucket).
-  // When off, cardService stays null and drafts are text-only, as before.
-  const cardService = /^(1|true)$/i.test(String(process.env.SOCIAL_CARDS_ENABLED || ""))
-    ? createCardService({ supabase, logger: context.log })
-    : null;
+  // Headline cards are opt-in (render + storage cost; needs the storage bucket
+  // AND a resvg prebuilt for the host arch). When off, cardService stays null,
+  // the resvg/satori modules are never imported, and drafts are text-only.
+  let cardService = null;
+  if (/^(1|true)$/i.test(String(process.env.SOCIAL_CARDS_ENABLED || ""))) {
+    const { createCardService } = await import("../lib/social/card-storage.js");
+    cardService = createCardService({ supabase, logger: context.log });
+  }
 
   const { created, skipped } = await generateSocialPosts({
     supabase,

@@ -149,10 +149,10 @@ export function buildPublishReason(story, relevanceScore, sensitivityLevel) {
 // `autoRemaining` is the ONLY remaining limiter — a per-day ceiling kept solely
 // to avoid tripping X's anti-spam limits (which would suspend the account), not
 // a content filter. Off by default: autoEnabled=false unless SOCIAL_AUTO_PUBLISH_ENABLED.
-export function decideCandidateStatus(story, { autoEnabled, autoFlags, autoRemaining }) {
+export function decideCandidateStatus(story, { autoEnabled, autoFlags: _autoFlags, autoRemaining }) {
   if (!autoEnabled || autoRemaining <= 0) return "PENDING";
-  // Re-enable the safety gate by uncommenting:
-  // const { eligible } = evaluateAutoApproval(story, { flags: autoFlags });
+  // Re-enable the safety gate by uncommenting (and rename _autoFlags → autoFlags):
+  // const { eligible } = evaluateAutoApproval(story, { flags: _autoFlags });
   // return eligible ? "AUTO_APPROVED" : "PENDING";
   return "AUTO_APPROVED";
 }

@@ -50,8 +50,12 @@ export function validatePost({ platform, text, story, constraints }) {
     errors.push(`exceeds ${platform} max length ${constraints.maxLength} (got ${measured})`);
   }
 
-  // CTA must be present (§10.4 "must include Quydly CTA")
-  if (!/quydly/i.test(value)) {
+  // CTA must be present. X posts use an engagement CTA ("…full quiz is in our
+  // bio", no link, to drive replies + profile visits); other platforms link to
+  // Quydly.
+  if (platform === "x") {
+    if (!/\bbio\b/i.test(value)) errors.push("missing 'in our bio' CTA");
+  } else if (!/quydly/i.test(value)) {
     errors.push("missing Quydly CTA");
   }
 

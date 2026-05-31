@@ -41,7 +41,8 @@ test("x.format: within weighted 280, brand CTA present, NO url", () => {
     ],
   };
   const out = x.format(longStory, "global");
-  assert.match(out.text, /Quydly/, "brand CTA must be present");
+  assert.match(out.text, /in our bio/i, "bio CTA must be present");
+  assert.match(out.text, /reply/i, "reply hook must be present");
   assert.ok(!/https?:\/\/|quydly\.com/i.test(out.text), "X post must carry no URL");
   assert.equal(out.linkUrl, null);
   assert.ok(weightedLength(out.text) <= 280, `weighted ${weightedLength(out.text)} > 280`);
@@ -64,10 +65,10 @@ const STORY = {
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 
-test("x.format: within 280 chars, ends with CTA, no media", () => {
+test("x.format: within 280 chars, bio CTA, no media", () => {
   const out = x.format(STORY, "global");
   assert.ok(out.text.length <= 280, `len ${out.text.length}`);
-  assert.match(out.text, /quydly/i);
+  assert.match(out.text, /in our bio/i);
   assert.equal(out.requiresMedia, false);
   assert.equal(out.mediaUrl, null);
 });
