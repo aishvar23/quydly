@@ -28,6 +28,33 @@ const STORY = {
 
 const IG_CREDS = { igUserId: "17841400000000000", accessToken: "PAGE_TOKEN", graphVersion: "v21.0" };
 
+// A story whose lead entity is a person with a licensed Wikipedia portrait.
+const STORY_PERSON = {
+  ...STORY,
+  primary_entities_enriched: [
+    {
+      name: "Jane Doe", type: "person",
+      wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png",
+      image_license: "Wikipedia: see source page",
+    },
+  ],
+};
+
+// Smallest valid PNG (1×1) — enough for Satori to decode dimensions when it
+// embeds the portrait data URI. Returned by the fake image fetch below.
+const PNG_1x1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64"
+);
+function imgResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (h) => (String(h).toLowerCase() === "content-type" ? "image/png" : null) },
+    arrayBuffer: async () => PNG_1x1.buffer.slice(PNG_1x1.byteOffset, PNG_1x1.byteOffset + PNG_1x1.byteLength),
+  };
+}
+
 // ── renderer ─────────────────────────────────────────────────────────────────
 
 test("renderCarouselSlides: 4 ordered square JPEG slides (cover/what/why/cta)", async () => {
@@ -41,6 +68,102 @@ test("renderCarouselSlides: 4 ordered square JPEG slides (cover/what/why/cta)", 
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
   });
+});
+
+// ── renderer: lead-person portrait on the cover (L4 portrait feature) ──────────
+
+test("renderCarouselSlides: withPortrait fetches the lead person's licensed photo; still 4 JPEG slides", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
+  assert.equal(slides.length, 4);
+  assert.deepEqual(slides.map((s) => s.slideType), CAROUSEL_SLIDES);
+  slides.forEach((s) => assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8])); // valid JPEGs
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/jane.png"]); // fetched exactly the portrait
+});
+
+test("renderCarouselSlides: portrait disabled by default → no fetch even with a person", async () => {
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  const slides = await renderCarouselSlides(STORY_PERSON, { fetchImpl }); // withPortrait omitted
+  assert.equal(called, false);
+  assert.equal(slides.length, 4);
+});
+
+test("renderCarouselSlides: withPortrait but no person entity → no fetch, text-only cover", async () => {
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  const slides = await renderCarouselSlides(STORY, { withPortrait: true, fetchImpl });
+  assert.equal(called, false);
+  assert.equal(slides.length, 4);
+});
+
+test("renderCarouselSlides: non-person entities (org/place) are ignored", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
+  assert.equal(called, false);
+});
+
+test("renderCarouselSlides: non-HTTPS portrait url is skipped (no fetch)", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "http://insecure/jane.png" },
+  ] };
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
+  assert.equal(called, false);
+});
+
+test("renderCarouselSlides: editor portrait override wins over Wikipedia thumbnail", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    {
+      name: "Jane Doe", type: "person", portrait_source: "override",
+      portrait_image_url: "https://cdn.test/press/jane.png",
+      portrait_attribution: "AP Photo/Jane", portrait_license: "AP",
+      wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png",
+    },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
+  assert.deepEqual(calls, ["https://cdn.test/press/jane.png"]); // override, not the wiki thumb
+});
+
+test("renderCarouselSlides: portrait fetch failure falls back to a text-only cover", async () => {
+  const fetchImpl = async () => ({ ok: false, status: 500, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) });
+  const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
+  assert.equal(slides.length, 4);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
+});
+
+test("renderCarouselSlides: oversize portrait (content-length over cap) → text-only cover", async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    headers: { get: (h) => {
+      const k = String(h).toLowerCase();
+      if (k === "content-type") return "image/png";
+      if (k === "content-length") return String(50 * 1024 * 1024); // 50 MB, over the 6 MB cap
+      return null;
+    } },
+    arrayBuffer: async () => PNG_1x1.buffer.slice(0),
+  });
+  const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
+  assert.equal(slides.length, 4);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
+});
+
+test("renderCarouselSlides: non-image content-type is rejected (text-only cover)", async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    headers: { get: (h) => (String(h).toLowerCase() === "content-type" ? "text/html" : null) },
+    arrayBuffer: async () => PNG_1x1.buffer.slice(0),
+  });
+  const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
+  assert.equal(slides.length, 4);
 });
 
 // ── slide storage ──────────────────────────────────────────────────────────────

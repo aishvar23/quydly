@@ -59,10 +59,21 @@ than guessing.
   Carousel is 2–10 slides; 1 slide falls back to a single image.
 
 ## Card rendering & storage
-- `lib/social/card-renderer.js` — `renderCarouselSlides(story)` produces 4 ordered 1080×1080 JPEG
-  slides: **cover / what / why / cta**. `renderStoryCard(story, {shape, format})` renders a single
-  card (square 1080×1080 for IG, landscape 1600×900 for X). Uses Satori (JSX→SVG) + resvg (SVG→PNG) +
-  PNG→JPEG transcode. Fonts: Lato Regular/Bold from `assets/fonts/`. Category-accent colors on a dark bg.
+- `lib/social/card-renderer.js` — `renderCarouselSlides(story, {withPortrait, fetchImpl})` produces 4
+  ordered 1080×1080 JPEG slides: **cover / what / why / cta**. `renderStoryCard(story, {shape, format})`
+  renders a single card (square 1080×1080 for IG, landscape 1600×900 for X). Uses Satori (JSX→SVG) +
+  resvg (SVG→PNG) + PNG→JPEG transcode. Fonts: Lato Regular/Bold from `assets/fonts/`. Category-accent
+  colors on a dark bg.
+- **Lead-person portrait on the cover** (`SOCIAL_IG_PORTRAIT_ENABLED`) — when on and the story is about a
+  person, the cover slide gains a circular portrait inset (photo + name + "Photo: <credit>"). The image
+  is NOT fetched fresh: `leadPersonPortrait(story)` picks the first `primary_entities_enriched` entry with
+  `type:"person"` and a licensed HTTPS image, preferring the editor `portrait_image_url`/`portrait_thumbnail_url`
+  override (from `entity_portrait_overrides`, attached by the synthesiser's `attachWikipediaToEntities`) over
+  `wikipedia_thumbnail_url`. `fetchImageDataUri()` pulls it into a base64 data URI (4s timeout, ≤6 MB,
+  `image/*` only) so Satori embeds it with no network at rasterise time. **Best-effort everywhere:** no
+  person, no licensed photo, non-HTTPS url, or any fetch failure → text-only cover (the pre-feature
+  layout). Licensed sources only — never a news-article image — and a credit line always renders. The flag
+  is threaded `card-storage.js createCardService` → `buildCarousel` → `renderCarouselSlides`.
 - `lib/social/card-storage.js` — `createCardService({supabase, env})`, `getCarouselSlideUrls()`,
   `getCardUrl()`. Uploads to Supabase Storage bucket `SOCIAL_CARDS_BUCKET` (default `social-cards`),
   paths like `cards/{storyId}/carousel/{index}-{type}.jpg`. Returns public HTTPS URLs. Memoized per
@@ -84,7 +95,8 @@ than guessing.
 - **Required for IG publish:** `INSTAGRAM_BUSINESS_ACCOUNT_ID`, `META_PAGE_ACCESS_TOKEN`,
   `META_GRAPH_VERSION` (optional, default `v21.0`).
 - **Rendering/storage:** `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SOCIAL_CARDS_BUCKET` (default
-  `social-cards`), `SOCIAL_CARDS_ENABLED`, `SOCIAL_IG_CAROUSEL_ENABLED`.
+  `social-cards`), `SOCIAL_CARDS_ENABLED`, `SOCIAL_IG_CAROUSEL_ENABLED`, `SOCIAL_IG_PORTRAIT_ENABLED`
+  (cover-slide person photo; off = text-only cover).
 - **Caps:** `SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY` (publisher per-day cap). When unset, `dailyCap()` in
   `social-publisher.js` falls back to **10** for IG (`DEFAULT_DAILY_CAP`) — IG deliberately does NOT
   inherit X's raised 24 default (`PLATFORM_DAILY_CAP_DEFAULTS` only bumps `x`), since IG auto-posts
