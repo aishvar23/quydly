@@ -72,6 +72,22 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
     }
   }
 
+  // Platforms that support a posed quiz question (X) generate + persist a
+  // STRUCTURED MCQ (downstream) so the publisher's reply can link to the answer
+  // page; the tweet wording IS the persisted question, so tweet and page stay
+  // identical. The question tweet is TEXT-ONLY — never the headline card, which
+  // would reveal the answer in the same tweet. On generation failure we fall
+  // back to the deterministic draft (no second LLM call, no answer link), not
+  // the generic engagement copy below.
+  if (anthropic && platform.generateQuizQuestion) {
+    const question = await platform.generateQuizQuestion({ anthropic, story, audienceGeo, logger });
+    if (question) {
+      const qDraft = platform.formatQuestionTweet(question, story, audienceGeo);
+      return { ...draft, text: qDraft.text, mediaUrl: null, requiresMedia: false, question };
+    }
+    return draft;
+  }
+
   if (anthropic) {
     try {
       const llmText = await generateWithClaude(anthropic, platform, story, audienceGeo);
@@ -178,6 +194,44 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
 
     if (inserted) {
       created++;
+
+      // Persist the tweeted question so quydly.com/question/<id> can serve it,
+      // and link it to the post so the publisher's reply can build the URL.
+      // Only X sets post.question; runs after a confirmed insert (no orphans).
+      // NON-FATAL: this is an additive enhancement — a failure here must not
+      // abort the run (the post is already committed and will still publish,
+      // just without an answer-link reply) nor block the candidate's advance.
+      if (post.question) {
+        try {
+          const { data: sq, error: sqErr } = await supabase
+            .from("social_questions")
+            .insert({
+              story_id: story.id,
+              audience_geo: candidate.audience_geo,
+              question: post.question.question,
+              options: post.question.options,
+              correct_index: post.question.correctIndex,
+              tldr: post.question.tldr,
+              category_id: story.category_id,
+            })
+            .select("id")
+            .single();
+          if (sqErr) throw sqErr;
+
+          const { error: linkErr } = await supabase
+            .from("social_posts")
+            .update({ social_question_id: sq.id })
+            .eq("id", inserted.id);
+          if (linkErr) throw linkErr;
+        } catch (qErr) {
+          logger.warn(JSON.stringify({
+            event: "social_question_persist_failed",
+            post_id: inserted.id,
+            story_id: story.id,
+            error: qErr.message,
+          }));
+        }
+      }
 
       // Persist carousel slides as ordered social_media_assets rows (the
       // publisher reads these by position). Idempotent on (post, position).
