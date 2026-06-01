@@ -47,14 +47,28 @@ async function generateWithClaude(anthropic, platform, story, audienceGeo) {
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
 // leaves the draft text-only, exactly as before).
-export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, cardService = null, logger = noopLogger }) {
+export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, cardService = null, igCarousel = false, logger = noopLogger }) {
   const draft = platform.format(story, audienceGeo); // deterministic base
 
-  if (cardService && platform.CONSTRAINTS && platform.CONSTRAINTS.cardShape) {
-    const mediaUrl = await cardService.getCardUrl({ story, shape: platform.CONSTRAINTS.cardShape });
-    if (mediaUrl) {
-      draft.mediaUrl = mediaUrl;
-      draft.requiresMedia = false; // asset now present
+  if (cardService && platform.CONSTRAINTS) {
+    // Instagram carousel (L4): a 4-slide set replaces the single square card.
+    // The cover slide doubles as media_url (admin preview + single-image
+    // fallback); the full ordered set is persisted as social_media_assets rows.
+    if (igCarousel && platform.CONSTRAINTS.carousel && cardService.getCarouselSlideUrls) {
+      const slides = await cardService.getCarouselSlideUrls({ story });
+      if (slides && slides.length) {
+        draft.carouselSlides = slides;
+        draft.mediaUrl = slides[0].url;
+        draft.requiresMedia = false;
+      }
+    } else if (platform.CONSTRAINTS.cardShape) {
+      // Single card. Instagram needs JPEG (its Graph API rejects PNG); X uses PNG.
+      const format = platform.PLATFORM === "instagram" ? "jpeg" : "png";
+      const mediaUrl = await cardService.getCardUrl({ story, shape: platform.CONSTRAINTS.cardShape, format });
+      if (mediaUrl) {
+        draft.mediaUrl = mediaUrl;
+        draft.requiresMedia = false; // asset now present
+      }
     }
   }
 
@@ -89,7 +103,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, candidateId, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -108,12 +122,18 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   if (storyErr) throw new Error(`[social-post-generator] fetch story: ${storyErr.message}`);
   if (!story) throw new Error(`[social-post-generator] story not found: ${candidate.story_id}`);
 
-  // Phase 5: a candidate the selector marked AUTO_APPROVED produces drafts that
-  // skip human review. Instagram is excluded — it needs a media asset, so it
-  // always stays PENDING_REVIEW (and the publisher's media gate blocks it anyway).
+  // Phase 5 + L4: a candidate the selector marked AUTO_APPROVED produces drafts
+  // that skip human review. Instagram auto-approves ONLY once it has a media
+  // asset (its carousel slides / square card → post.mediaUrl is set). The earlier
+  // blanket IG exclusion existed because IG had no media; the carousel now
+  // provides it. Without media, IG stays PENDING_REVIEW and the publisher's media
+  // gate (#16) blocks it anyway.
   const autoApproved = candidate.status === "AUTO_APPROVED";
-  const statusFor = (platform) =>
-    autoApproved && platform.PLATFORM !== "instagram" ? "APPROVED" : "PENDING_REVIEW";
+  const statusFor = (platform, post) => {
+    if (!autoApproved) return "PENDING_REVIEW";
+    if (platform.PLATFORM === "instagram" && !post.mediaUrl) return "PENDING_REVIEW";
+    return "APPROVED";
+  };
 
   let created = 0;
   let skipped = 0;
@@ -132,7 +152,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     if (existing) { skipped++; continue; }
 
     const post = await generatePlatformPost({
-      platform, story, audienceGeo: candidate.audience_geo, anthropic, cardService, logger,
+      platform, story, audienceGeo: candidate.audience_geo, anthropic, cardService, igCarousel, logger,
     });
 
     // Race-safe insert: ignoreDuplicates handles a concurrent generator.
@@ -147,7 +167,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
           post_text: post.text,
           media_url: post.mediaUrl || null,
           link_url: post.linkUrl || null,
-          status: statusFor(platform),
+          status: statusFor(platform, post),
         },
         { onConflict: "story_id,platform,audience_geo", ignoreDuplicates: true }
       )
@@ -158,6 +178,27 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
 
     if (inserted) {
       created++;
+
+      // Persist carousel slides as ordered social_media_assets rows (the
+      // publisher reads these by position). Idempotent on (post, position).
+      if (post.carouselSlides && post.carouselSlides.length) {
+        const assetRows = post.carouselSlides.map((s) => ({
+          story_id: story.id,
+          social_post_id: inserted.id,
+          asset_type: "instagram_carousel_slide",
+          asset_url: s.url,
+          position: s.index,
+          width: s.width,
+          height: s.height,
+          format: "jpeg",
+          status: "READY",
+        }));
+        const { error: assetErr } = await supabase
+          .from("social_media_assets")
+          .upsert(assetRows, { onConflict: "social_post_id,position", ignoreDuplicates: true });
+        if (assetErr) throw new Error(`[social-post-generator] insert carousel assets: ${assetErr.message}`);
+      }
+
       logger(JSON.stringify({
         event: "social_post_generated",
         post_id: inserted.id,
@@ -165,6 +206,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
         platform: platform.PLATFORM,
         audience_geo: candidate.audience_geo,
         requires_media: !!post.requiresMedia,
+        carousel_slides: post.carouselSlides ? post.carouselSlides.length : 0,
       }));
     } else {
       skipped++;

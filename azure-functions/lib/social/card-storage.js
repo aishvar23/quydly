@@ -10,7 +10,7 @@
 // getCardUrl is memoised per (story.id, shape) for the lifetime of the service
 // so one story renders each shape at most once across the platform loop.
 
-import { renderStoryCard } from "./card-renderer.js";
+import { renderStoryCard, renderCarouselSlides } from "./card-renderer.js";
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -33,11 +33,9 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     return bucketReady;
   }
 
-  async function build({ story, shape }) {
+  // Upload one rendered image and return its public URL.
+  async function upload({ path, buffer, contentType }) {
     await ensureBucket();
-    const { buffer, contentType } = await renderStoryCard(story, { shape });
-    const path = `cards/${story.id}/${shape}.png`;
-
     const { error: upErr } = await supabase.storage
       .from(bucket)
       .upload(path, buffer, { contentType, upsert: true });
@@ -49,16 +47,52 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     return url;
   }
 
+  async function buildCard({ story, shape, format }) {
+    const ext = format === "jpeg" || format === "jpg" ? "jpg" : "png";
+    const { buffer, contentType } = await renderStoryCard(story, { shape, format });
+    return upload({ path: `cards/${story.id}/${shape}.${ext}`, buffer, contentType });
+  }
+
+  // Render + upload every carousel slide. Returns an ordered array of
+  // { url, index, slideType, width, height, contentType } — order IS publish order.
+  async function buildCarousel({ story }) {
+    const slides = await renderCarouselSlides(story); // JPEG (Instagram requires it)
+    const out = [];
+    for (const s of slides) {
+      const path = `cards/${story.id}/carousel/${s.index}-${s.slideType}.jpg`;
+      const url = await upload({ path, buffer: s.buffer, contentType: s.contentType });
+      out.push({ url, index: s.index, slideType: s.slideType, width: s.width, height: s.height, contentType: s.contentType });
+    }
+    return out;
+  }
+
   return {
     // Returns a public card URL, or null on any failure (caller proceeds without
     // media — X posts text-only; Instagram stays media-gated, as before).
-    async getCardUrl({ story, shape = "landscape" }) {
+    async getCardUrl({ story, shape = "landscape", format = "png" }) {
       if (!story || story.id == null) return null;
-      const key = `${story.id}:${shape}`;
+      const key = `${story.id}:${shape}:${format}`;
       if (cache.has(key)) return cache.get(key);
-      const p = build({ story, shape }).catch((err) => {
+      const p = buildCard({ story, shape, format }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_card_failed", story_id: story.id, shape, error: err.message,
+        }));
+        return null;
+      });
+      cache.set(key, p);
+      return p;
+    },
+
+    // Returns the ordered carousel slide descriptors, or null on any failure
+    // (caller proceeds without media — Instagram stays media-gated). Memoised
+    // per story for the service's lifetime.
+    async getCarouselSlideUrls({ story }) {
+      if (!story || story.id == null) return null;
+      const key = `${story.id}:carousel`;
+      if (cache.has(key)) return cache.get(key);
+      const p = buildCarousel({ story }).catch((err) => {
+        logger.warn(JSON.stringify({
+          event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));
         return null;
       });

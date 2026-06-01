@@ -39,10 +39,15 @@ export default async function socialPostGenerator(context, message) {
     cardService = createCardService({ supabase, logger: context.log });
   }
 
+  // Instagram carousel (L4): a 4-slide set instead of a single square card.
+  // Opt-in and requires cards to be on (the slides ARE cards).
+  const igCarousel = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_CAROUSEL_ENABLED || ""));
+
   const { created, skipped } = await generateSocialPosts({
     supabase,
     anthropic,
     cardService,
+    igCarousel,
     candidateId,
     logger: context.log,
   });
