@@ -150,10 +150,10 @@ Goal: auto-publish only safe science/tech stories. **Off by default.**
 
 | # | Item | Notes |
 |---|---|---|
-| L1 | Instagram visual text-cards (Phase 6) | 1080×1080 square card, no AI fake scenes; admin preview |
-| L2 | Instagram publishing | requires media asset (§ acceptance #16) |
+| L1 | Instagram visual text-cards (Phase 6) | ☑ 1080×1080 square card (JPEG for IG). Single-card path renders JPEG; carousel (L4) is the default IG asset when enabled |
+| L2 | Instagram publishing | ☑ **LIVE-VERIFIED** — Meta Graph API publisher `lib/social/instagram-graph.js` (container→[carousel]→publish, status_code poll, single+carousel). Wired into `social-publisher.js` (per-platform creds + ordered-slide fetch); media gate (#16) intact. First real carousel posted to @quydlyenglish 2026-06-01 (story #629, media_id `18427683688121952`, [permalink](https://www.instagram.com/p/DZCEXKqDCDB/), media_type CAROUSEL_ALBUM, read back from Graph API). Creds = Page token in env (INSTAGRAM_BUSINESS_ACCOUNT_ID=17841434306705196, META_PAGE_ACCESS_TOKEN, META_GRAPH_VERSION=v25.0); Page token expires 2026-07-31 — swap to a System User token or refresh before then. Helpers: `test/fetch-ig-account.js`, `test/verify-ig-carousel.js` (dry-run), `test/post-ig-story-carousel.js <id> [--live]` |
 | L3 | Scheduling action (v1.1) | `scheduled_for` already in schema |
-| L4 | Carousel slides | headline / what happened / why it matters / CTA |
+| L4 | Carousel slides | ☑ 4 square JPEG slides (cover / what happened / why it matters / CTA) via `renderCarouselSlides`; stored as ordered `social_media_assets` rows (migration adds `position`). Opt-in `SOCIAL_IG_CAROUSEL_ENABLED` (needs `SOCIAL_CARDS_ENABLED`). 15 unit tests + live dry-run pass |
 | L5 | Observability metrics + alerts | §13 metrics, failure-rate / no-output alerts |
 | L6 | Extended retry statuses | `FAILED_VALIDATION`, `RATE_LIMITED`, `NEEDS_MANUAL_CHECK` |
 | L7 | Additional platforms | LinkedIn, Threads, Telegram, etc. |

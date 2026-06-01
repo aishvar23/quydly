@@ -12,10 +12,14 @@
 // Dependencies (publishers, getToken) are injected so tests never hit the network.
 
 import { publish as xPublish } from "./platforms/x.js";
-import { credsFromEnv } from "./x-oauth1.js";
+import { credsFromEnv as xCredsFromEnv } from "./x-oauth1.js";
+import { publish as igPublish, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
 
 const BATCH = 20;
-const DEFAULT_PUBLISHERS = { x: xPublish };
+const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish };
+// Per-platform credential resolvers (env → creds). Each is called at most once,
+// lazily, the first time a post for that platform is published.
+const DEFAULT_CREDS_RESOLVERS = { x: xCredsFromEnv, instagram: igCredsFromEnv };
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -33,12 +37,48 @@ function dailyCap(env, platform) {
 export async function publishApprovedPosts({
   supabase,
   publishers = DEFAULT_PUBLISHERS,
-  getCreds = credsFromEnv,
+  // X creds resolver (kept named `getCreds` for back-compat); IG uses getIgCreds.
+  getCreds = xCredsFromEnv,
+  getIgCreds = igCredsFromEnv,
   env = process.env,
   logger = noopLogger,
   now = new Date(),
 } = {}) {
   const enabledPlatforms = Object.keys(publishers);
+
+  // Lazy, per-platform credential resolution. A platform whose creds are
+  // unavailable (not configured) has its posts released + skipped — it does not
+  // block other platforms (e.g. missing IG creds must not stop X publishing).
+  const credsResolvers = { ...DEFAULT_CREDS_RESOLVERS, x: getCreds, instagram: getIgCreds };
+  const credsCache = new Map();
+  const credsUnavailable = new Map();
+  function resolveCreds(platform) {
+    if (credsCache.has(platform)) return credsCache.get(platform);
+    if (credsUnavailable.has(platform)) return null;
+    const fn = credsResolvers[platform];
+    if (!fn) { credsUnavailable.set(platform, "no resolver"); return null; }
+    try {
+      const c = fn(env);
+      credsCache.set(platform, c);
+      return c;
+    } catch (err) {
+      credsUnavailable.set(platform, err.message);
+      logger.error(JSON.stringify({ event: "social_publish_creds_unavailable", platform, error: err.message }));
+      return null;
+    }
+  }
+
+  // Fetch a post's ordered Instagram carousel slides, if any.
+  async function carouselSlidesFor(postId) {
+    const { data: assets, error: aErr } = await supabase
+      .from("social_media_assets")
+      .select("asset_url, position")
+      .eq("social_post_id", postId)
+      .eq("asset_type", "instagram_carousel_slide")
+      .order("position", { ascending: true });
+    if (aErr) throw new Error(`[social-publisher] fetch slides ${postId}: ${aErr.message}`);
+    return (assets || []).map((a) => ({ url: a.asset_url }));
+  }
 
   // Due, unpublished posts for supported platforms.
   const { data: posts, error } = await supabase
@@ -70,9 +110,6 @@ export async function publishApprovedPosts({
     remaining[p] = dailyCap(env, p) - (count || 0);
   }
 
-  // Resolve the static X credentials lazily on first publishable post.
-  let creds = null;
-
   let published = 0, failed = 0, skipped = 0;
 
   for (const post of posts) {
@@ -102,18 +139,20 @@ export async function publishApprovedPosts({
     if (claimErr) throw new Error(`[social-publisher] claim ${post.id}: ${claimErr.message}`);
     if (!claimed) { skipped++; continue; } // lost the race / already moved
 
+    // Resolve this platform's creds. If unavailable, release the claim back to
+    // its pre-claim status and skip — other platforms still publish.
+    const creds = resolveCreds(post.platform);
     if (!creds) {
-      try {
-        creds = getCreds(env);
-      } catch (authErr) {
-        // Can't authenticate — release the claim and stop; nothing will publish.
-        await supabase.from("social_posts").update({ status: "APPROVED" }).eq("id", post.id);
-        throw new Error(`[social-publisher] auth: ${authErr.message}`);
-      }
+      await supabase.from("social_posts").update({ status: post.status }).eq("id", post.id);
+      skipped++;
+      logger.warn(JSON.stringify({ event: "social_publish_skip_no_creds", platform: post.platform, post_id: post.id }));
+      continue;
     }
 
     try {
-      const result = await publishers[post.platform](post, { creds, logger });
+      // Instagram may publish a multi-slide carousel — pass its ordered slides.
+      const slides = post.platform === "instagram" ? await carouselSlidesFor(post.id) : null;
+      const result = await publishers[post.platform](post, { creds, slides, logger });
       await supabase
         .from("social_posts")
         .update({
