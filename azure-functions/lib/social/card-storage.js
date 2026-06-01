@@ -16,6 +16,9 @@ const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
+  // When on, carousel cover slides for person-led stories carry a licensed
+  // portrait inset (card-renderer leadPersonPortrait). Off → text-only covers.
+  const igPortrait = /^(1|true)$/i.test(String(env.SOCIAL_IG_PORTRAIT_ENABLED || ""));
   const cache = new Map(); // `${storyId}:${shape}` → Promise<string|null>
   let bucketReady = null;
 
@@ -56,7 +59,7 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Render + upload every carousel slide. Returns an ordered array of
   // { url, index, slideType, width, height, contentType } — order IS publish order.
   async function buildCarousel({ story }) {
-    const slides = await renderCarouselSlides(story); // JPEG (Instagram requires it)
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${s.index}-${s.slideType}.jpg`;

@@ -85,6 +85,69 @@ function firstSentences(text, n = 2) {
   return parts.slice(0, n).join(" ").trim();
 }
 
+// ── Lead-person portrait (cover-slide inset) ─────────────────────────────────
+//
+// When a story is about a person, surface their photo on the cover slide. The
+// licensed portrait is already attached upstream by the synthesiser's
+// attachWikipediaToEntities step: every `primary_entities_enriched` person
+// entry carries either an editor `portrait_*` override (a press photo with
+// explicit attribution+license) or a Wikipedia lead image. We use ONLY those
+// already-licensed sources — never a news-article image — and always render a
+// credit line. Source order matches the synthesiser's preference: override wins.
+
+const PORTRAIT_FETCH_TIMEOUT_MS = 4000;
+const PORTRAIT_MAX_BYTES = 6_000_000;
+const PORTRAIT_CREDIT_MAX = 64;
+
+// Short credit string for an enriched entity's portrait. Overrides require
+// attribution (migration_data_quality_p2_5: "never render without telling the
+// viewer where it came from"); the Wikipedia path falls back to its license.
+function portraitCredit(entity) {
+  const raw = entity.portrait_source === "override"
+    ? (entity.portrait_attribution || entity.portrait_license || "")
+    : (entity.image_license || "Wikipedia");
+  const credit = oneLine(raw);
+  return credit.length > PORTRAIT_CREDIT_MAX
+    ? `${credit.slice(0, PORTRAIT_CREDIT_MAX - 1).trimEnd()}…`
+    : credit;
+}
+
+// Pick the first person entity that has a usable, licensed, HTTPS portrait.
+// primary_entities_enriched is already ordered by primacy, so the first such
+// person is the story's lead subject. Returns null when no person qualifies.
+function leadPersonPortrait(story) {
+  const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
+  for (const e of ents) {
+    if (!e || e.type !== "person") continue;
+    const url = e.portrait_image_url || e.portrait_thumbnail_url || e.wikipedia_thumbnail_url;
+    if (typeof url !== "string" || !/^https:\/\//i.test(url)) continue;
+    return { url, name: oneLine(e.name), credit: portraitCredit(e) };
+  }
+  return null;
+}
+
+// Fetch a remote image into a base64 data URI so Satori can embed it inline
+// (no network during rasterisation). Best-effort: any problem — timeout,
+// non-image, oversize, network error — returns null and the caller falls back
+// to the text-only cover. HTTPS-only is enforced by leadPersonPortrait.
+async function fetchImageDataUri(url, { fetchImpl = fetch, timeoutMs = PORTRAIT_FETCH_TIMEOUT_MS, maxBytes = PORTRAIT_MAX_BYTES } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(url, { signal: controller.signal, redirect: "follow" });
+    if (!res || !res.ok) return null;
+    const ct = (res.headers?.get?.("content-type") || "").toLowerCase();
+    if (!ct.startsWith("image/")) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > maxBytes) return null;
+    return `data:${ct};base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Satori accepts a React-element-shaped object literal ({ type, props }), so we
 // build the tree by hand and avoid a JSX/build step.
 function el(type, props, children) {
@@ -208,17 +271,50 @@ function bulletRow(text, accent, size) {
   ]);
 }
 
+// The cover headline block, sized to its length.
+function coverHeadline(headline, size) {
+  return el("div", {
+    style: {
+      display: "flex", color: FG, fontWeight: 700,
+      fontSize: Math.round(size * (headline.length > 90 ? 0.058 : 0.072)), lineHeight: 1.15,
+    },
+  }, headline);
+}
+
+// Circular portrait + name + credit, shown above the headline on the cover when
+// the story is about a person and a licensed photo resolved.
+function coverPortraitBlock({ portrait, accent, size }) {
+  const photo = Math.round(size * 0.3);
+  const meta = [];
+  if (portrait.name) {
+    meta.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG } }, portrait.name));
+  }
+  if (portrait.credit) {
+    meta.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: 6 } }, `Photo: ${portrait.credit}`));
+  }
+  return el("div", { style: { display: "flex", alignItems: "center", marginBottom: Math.round(size * 0.05) } }, [
+    el("img", {
+      src: portrait.dataUri, width: photo, height: photo,
+      style: {
+        width: photo, height: photo, borderRadius: 999, objectFit: "cover",
+        marginRight: Math.round(size * 0.045), border: `${Math.round(size * 0.006)}px solid ${accent}`,
+      },
+    }),
+    el("div", { style: { display: "flex", flexDirection: "column" } }, meta),
+  ]);
+}
+
 // Build the inner body for one slide kind. `size` is the square edge length.
-function slideBody({ kind, story, accent, size }) {
+// `portrait` (cover only) is { dataUri, name, credit } or null.
+function slideBody({ kind, story, accent, size, portrait }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
 
   if (kind === "cover") {
-    return el("div", {
-      style: {
-        display: "flex", color: FG, fontWeight: 700,
-        fontSize: Math.round(size * (headline.length > 90 ? 0.058 : 0.072)), lineHeight: 1.15,
-      },
-    }, headline);
+    if (!portrait || !portrait.dataUri) return coverHeadline(headline, size);
+    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+      coverPortraitBlock({ portrait, accent, size }),
+      coverHeadline(headline, size),
+    ]);
   }
 
   if (kind === "what") {
@@ -251,7 +347,7 @@ function slideBody({ kind, story, accent, size }) {
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size }) {
+function slideTree({ kind, story, accent, category, index, total, size, portrait }) {
   const pad = Math.round(size * 0.075);
   const hint = kind === "cta" ? "quydly.com" : (kind === "cover" ? "Swipe to read →" : "");
   return el("div", {
@@ -262,7 +358,7 @@ function slideTree({ kind, story, accent, category, index, total, size }) {
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size }),
+      slideBody({ kind, story, accent, size, portrait }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -270,18 +366,32 @@ function slideTree({ kind, story, accent, category, index, total, size }) {
 
 // Render the full Instagram carousel as ordered JPEG slides. Defaults to JPEG
 // because the Instagram Graph API rejects non-JPEG media containers.
-export async function renderCarouselSlides(story, { format = "jpeg", slides = CAROUSEL_SLIDES } = {}) {
+//
+// When `withPortrait` is on and the story is about a person, the cover slide
+// gains a circular portrait inset (licensed photo + credit). Resolving the
+// portrait is best-effort and happens once up front; any failure leaves the
+// cover text-only. `fetchImpl` is injectable for tests.
+export async function renderCarouselSlides(story, { format = "jpeg", slides = CAROUSEL_SLIDES, withPortrait = false, fetchImpl } = {}) {
   const { width: size } = SHAPES.square;
   const accent = ACCENT[story?.category_id] || DEFAULT_ACCENT;
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
   const total = slides.length;
 
+  let portrait = null;
+  if (withPortrait && slides.includes("cover")) {
+    const lead = leadPersonPortrait(story);
+    if (lead) {
+      const dataUri = await fetchImageDataUri(lead.url, fetchImpl ? { fetchImpl } : {});
+      if (dataUri) portrait = { dataUri, name: lead.name, credit: lead.credit };
+    }
+  }
+
   const out = [];
   for (let index = 0; index < slides.length; index++) {
     const kind = slides[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size }),
+      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null }),
       { width: size, height: size, fonts }
     );
     const { buffer, contentType } = rasterize(svg, { width: size, format });
