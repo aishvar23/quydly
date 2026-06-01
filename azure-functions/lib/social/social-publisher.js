@@ -28,10 +28,20 @@ function startOfUtcDayIso(now) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
 }
 
+// Per-platform default daily caps when SOCIAL_MAX_<P>_POSTS_PER_DAY is unset.
+// X is raised to 24 to match the candidate-selector's per-geo daily ceiling so
+// the publisher never re-caps X below what the selector approves. Other
+// platforms keep the conservative default — Instagram in particular auto-posts
+// carousels when media is present, and its intended initial volume is far lower
+// than X's, so it must NOT inherit X's 24. Override any platform via its env var.
+const DEFAULT_DAILY_CAP = 10;
+const PLATFORM_DAILY_CAP_DEFAULTS = { x: 24 };
+
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
   const v = Number(env[key]);
-  return Number.isFinite(v) && v > 0 ? v : 10;
+  if (Number.isFinite(v) && v > 0) return v;
+  return PLATFORM_DAILY_CAP_DEFAULTS[platform] ?? DEFAULT_DAILY_CAP;
 }
 
 export async function publishApprovedPosts({

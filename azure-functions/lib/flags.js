@@ -20,7 +20,13 @@ const FLAGS = {
     minConfidence:    7, // confidence_score >= this (stories store 1–10 int)
     minRelevance:    20, // story_audiences.relevance_score >= this
     freshnessHours:  36, // story published within this window
-    maxCandidatesPerDayPerGeo: 10, // hard cap on new candidates per geo per day
+    maxCandidatesPerDayPerGeo: 24, // hard ceiling on new candidates per geo per day
+    // Per-run drip: the selector runs hourly, so capping how many candidates a
+    // single run creates per geo spreads the daily quota across the day instead
+    // of front-loading the whole allotment into the 00:00 UTC run (which made
+    // every post fire in one midnight burst, then go silent for ~24h). With the
+    // hourly cadence, 1/run ≈ 1 post/hour ≈ maxCandidatesPerDayPerGeo per day.
+    maxCandidatesPerRunPerGeo: 1,
 
     // Service Bus queue the selector enqueues generation jobs to (D4)
     generateQueue: "social-post-generate-queue",
