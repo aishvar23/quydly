@@ -34,9 +34,12 @@ function pairKey(storyId, audienceGeo) {
 //   storyById      Map<story_id, storyRow>
 //   existingKeys   Set<"storyId::geo"> already-present candidates
 //   countsByGeo    { [geo]: number } candidates already created today for that geo
-//   cap            max candidates per day per geo
-export function buildEligiblePairs({ audiences, storyById, existingKeys, countsByGeo, cap }) {
-  const remaining = { ...countsByGeo };
+//   cap            max candidates per day per geo (daily ceiling)
+//   perRunCap      max candidates to create per geo in THIS run (drip across the
+//                  day via the hourly cadence). Defaults to no limit.
+export function buildEligiblePairs({ audiences, storyById, existingKeys, countsByGeo, cap, perRunCap = Infinity }) {
+  const dayUsed = { ...countsByGeo };
+  const runUsed = {};
 
   const eligible = (audiences || [])
     .filter((a) => storyById.has(a.story_id))
@@ -56,9 +59,11 @@ export function buildEligiblePairs({ audiences, storyById, existingKeys, countsB
 
   const selected = [];
   for (const pair of eligible) {
-    const used = remaining[pair.audienceGeo] || 0;
-    if (used >= cap) continue;
-    remaining[pair.audienceGeo] = used + 1;
+    const geo = pair.audienceGeo;
+    if ((dayUsed[geo] || 0) >= cap) continue;        // daily ceiling
+    if ((runUsed[geo] || 0) >= perRunCap) continue;  // this-run drip
+    dayUsed[geo] = (dayUsed[geo] || 0) + 1;
+    runUsed[geo] = (runUsed[geo] || 0) + 1;
     selected.push(pair);
   }
   return selected;
@@ -124,6 +129,7 @@ export async function selectEligibleStories(supabase, { now = new Date(), flags 
     existingKeys,
     countsByGeo,
     cap: flags.maxCandidatesPerDayPerGeo,
+    perRunCap: flags.maxCandidatesPerRunPerGeo ?? Infinity,
   });
 }
 

@@ -31,7 +31,10 @@ function startOfUtcDayIso(now) {
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
   const v = Number(env[key]);
-  return Number.isFinite(v) && v > 0 ? v : 10;
+  // Fallback matches the candidate-selector's per-geo daily ceiling (24) so the
+  // publisher never re-caps X below what the selector approves. Override per
+  // platform via the env var above without a redeploy.
+  return Number.isFinite(v) && v > 0 ? v : 24;
 }
 
 export async function publishApprovedPosts({

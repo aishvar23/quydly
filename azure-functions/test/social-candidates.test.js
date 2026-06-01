@@ -112,6 +112,45 @@ test("buildEligiblePairs: enforces per-geo daily cap accounting for today's coun
   assert.equal(out[0].story.id, 1); // highest relevance first
 });
 
+test("buildEligiblePairs: perRunCap drips a subset per run while staying under the daily cap", () => {
+  const storyById = new Map([[1, story(1, 50)], [2, story(2, 40)], [3, story(3, 30)]]);
+  const audiences = [
+    { story_id: 1, audience_geo: "global", relevance_score: 30 },
+    { story_id: 2, audience_geo: "global", relevance_score: 28 },
+    { story_id: 3, audience_geo: "global", relevance_score: 26 },
+  ];
+  // Daily cap 24, but only 1 may be created this run → highest relevance wins.
+  const out = buildEligiblePairs({
+    audiences,
+    storyById,
+    existingKeys: new Set(),
+    countsByGeo: {},
+    cap: 24,
+    perRunCap: 1,
+  });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].story.id, 1);
+});
+
+test("buildEligiblePairs: perRunCap is bounded by the remaining daily cap", () => {
+  const storyById = new Map([[1, story(1, 50)], [2, story(2, 40)]]);
+  const audiences = [
+    { story_id: 1, audience_geo: "global", relevance_score: 30 },
+    { story_id: 2, audience_geo: "global", relevance_score: 28 },
+  ];
+  // perRunCap 5 would allow both, but only 1 daily slot remains (cap 24, 23 used).
+  const out = buildEligiblePairs({
+    audiences,
+    storyById,
+    existingKeys: new Set(),
+    countsByGeo: { global: 23 },
+    cap: 24,
+    perRunCap: 5,
+  });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].story.id, 1);
+});
+
 test("buildEligiblePairs: orders by geo, then relevance desc, then story_score desc", () => {
   const storyById = new Map([[1, story(1, 10)], [2, story(2, 90)], [3, story(3, 50)]]);
   const audiences = [
