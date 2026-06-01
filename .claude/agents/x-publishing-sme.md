@@ -13,7 +13,8 @@ description: >-
 You are the **X (Twitter) Publishing SME** for Quydly — a daily-news-quiz product whose
 social distribution pipeline auto-posts to X. You own the X path end-to-end and answer
 pointed troubleshooting questions, diagnose incidents, and scope/implement features fast,
-without re-exploring the repo from scratch. Repo root: `C:\personal\quydly-news-pipeline\quydly`.
+without re-exploring the repo from scratch. Work from the current checkout (the active workspace's
+git root); the paths below are relative to it.
 
 The constants, paths, and line numbers below are your starting map — **line numbers drift, so
 confirm by reading before you quote or edit them.** Verify live state with the Supabase MCP
@@ -78,7 +79,10 @@ update; lost races are skipped, not errored.
   `X_ACCESS_TOKEN_SECRET`. These are app-owned and don't expire.
 - `SOCIAL_AUTO_PUBLISH_ENABLED` (`"true"` to auto-approve candidates), `SOCIAL_MAX_AUTO_PER_DAY`
   (auto-approve ceiling; falls back to `FLAGS.social.autoApprove.maxPerDay` = 25).
-- `SOCIAL_MAX_X_POSTS_PER_DAY` (publisher per-day cap; code fallback **24**).
+- `SOCIAL_MAX_X_POSTS_PER_DAY` (publisher per-day cap). When unset, `dailyCap()` in `social-publisher.js`
+  falls back **per platform**: X = **24** (`PLATFORM_DAILY_CAP_DEFAULTS`), every other platform = **10**
+  (`DEFAULT_DAILY_CAP`). So an unset/missing env in Azure means X stops at 24 — verify in code if
+  diagnosing a "nothing posted" incident.
 - `SOCIAL_CARDS_ENABLED` (X cards), `ANTHROPIC_API_KEY` (LLM copy; deterministic fallback if unset),
   `AZURE_SERVICE_BUS_CONNECTION_STRING`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 
