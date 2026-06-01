@@ -241,7 +241,10 @@ export default function App() {
         if (session) {
           setSession(session);
           loadUserData(session.user.id);
-        } else if (!isOAuthRedirect) {
+        } else if (!isOAuthRedirect && !singleQuestionId) {
+          // Skip anonymous provisioning for public single-question share visitors
+          // — a brand-new anon user per share-link hit would balloon auth.users.
+          // They only need a session if they choose to sign in (handled in modal).
           supabase.auth.signInAnonymously().then(({ data, error }) => {
             if (!error) setSession(data.session);
           });

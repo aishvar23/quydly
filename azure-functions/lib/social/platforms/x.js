@@ -258,6 +258,7 @@ Write the question:
 - Exactly 4 options: 1 correct, 3 plausible but clearly distinct distractors of the same kind (don't mix a number among names).
 - correctIndex is the 0-based index of the correct option.
 - tldr: exactly 2 sentences of story context (the "answer" reveal).
+- The question must contain NO URL/link, NO hashtag, and not the word "breaking".
 
 Respond ONLY with valid JSON, no markdown:
 { "question": "...", "options": ["A","B","C","D"], "correctIndex": 0, "tldr": "Two sentence string." }`;
@@ -310,19 +311,27 @@ export async function generateQuizQuestion({ anthropic, story, audienceGeo, logg
 // the SAME question. The answer-link is posted separately as a reply (URLs in the
 // main tweet get t.co-weighted + push users off X), so this body carries none.
 export function formatQuestionTweet(question, story, audienceGeo) {
+  const emoji = "\u{1F9E0} ";
   const tail = "Reply with your answer \u{1F447}";
   const headline = oneLine(story.headline);
-  const q = `\u{1F9E0} ${oneLine(question.question)}`;
+  // Strip any URL the model slipped into the question — X posts carry no link
+  // (t.co-weighted + pushes users off X; the answer link is posted as the reply).
+  const questionText = oneLine(question.question).replace(URL_RE, "").replace(/\s+/g, " ").trim();
 
   const cashtags = CONSTRAINTS.allowCashtags ? cashtagsFor(story) : [];
   const tagLine = cashtags.length ? `\n\n${cashtags.join(" ")}` : "";
 
-  // Reserve the question block + tail + separators + cashtags from the budget,
-  // then fit the headline into whatever remains (drop it if it won't fit).
+  // The question is the priority content. Reserve the tail + cashtags + emoji and
+  // HARD-CAP the question to what remains, so a long LLM question can never push
+  // the tweet over X's weighted 280 (which would fail the whole publish).
+  const reserved = weightedLength(tail) + 2 + tagLine.length + emoji.length; // 2 = "\n\n"
+  const qBudget = Math.max(0, CONSTRAINTS.maxLength - reserved);
+  const q = `${emoji}${truncate(questionText, qBudget)}`;
+
+  // Prepend the headline only if it still fits in whatever is left.
   const fixed = `${q}\n\n${tail}${tagLine}`;
-  const budget = CONSTRAINTS.maxLength - weightedLength(fixed) - 2; // 2 = "\n\n"
-  let head = "";
-  if (headline && budget > 20) head = truncate(headline, budget);
+  const headBudget = CONSTRAINTS.maxLength - weightedLength(fixed) - 2; // 2 = "\n\n"
+  const head = headline && headBudget > 20 ? truncate(headline, headBudget) : "";
 
   const text = head ? `${head}\n\n${fixed}` : fixed;
   return {

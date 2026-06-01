@@ -17,7 +17,9 @@ import {
   formatQuestionTweet,
   weightedLength,
 } from "../lib/social/platforms/x.js";
+import * as x from "../lib/social/platforms/x.js";
 import { publishApprovedPosts } from "../lib/social/social-publisher.js";
+import { generatePlatformPost } from "../lib/social/social-post-generator.js";
 
 const CREDS = { consumerKey: "k", consumerSecret: "s", token: "t", tokenSecret: "ts" };
 const STORY = {
@@ -100,6 +102,45 @@ test("formatQuestionTweet: includes the question, carries no URL, stays within 2
   assert.equal(draft.linkUrl, null);
   assert.doesNotMatch(draft.text, /https?:\/\//);
   assert.ok(weightedLength(draft.text) <= 280, `weighted length ${weightedLength(draft.text)} > 280`);
+});
+
+test("formatQuestionTweet: hard-caps a very long question to stay within 280 weighted", () => {
+  const longQ = `Which ${"extremely ".repeat(60)}long-winded question is this?`;
+  const draft = formatQuestionTweet({ question: longQ, options: ["a","b","c","d"], correctIndex: 0, tldr: "x. y." }, STORY, "global");
+  assert.ok(weightedLength(draft.text) <= 280, `weighted length ${weightedLength(draft.text)} > 280`);
+  assert.match(draft.text, /Reply with your answer/);
+});
+
+test("formatQuestionTweet: strips a URL embedded in the question (X carries no link)", () => {
+  const draft = formatQuestionTweet(
+    { question: "See https://evil.example.com/x — who won the vote?", options: ["a","b","c","d"], correctIndex: 0, tldr: "x. y." },
+    STORY, "global"
+  );
+  assert.doesNotMatch(draft.text, /https?:\/\//);
+  assert.doesNotMatch(draft.text, /evil\.example\.com/);
+});
+
+// ── generatePlatformPost X branch (card leak + fallback) ────────────────────────
+
+test("generatePlatformPost: X question draft is TEXT-ONLY (never the headline card, which would leak the answer)", async () => {
+  const anthropic = fakeAnthropic(JSON.stringify({
+    question: "What did the central bank do to rates?", options: ["Held","Cut","Raised","Ended"], correctIndex: 0, tldr: "x. y.",
+  }));
+  const cardService = { getCardUrl: async () => "https://cards.example/headline-card.png" };
+  const draft = await generatePlatformPost({ platform: x, story: STORY, audienceGeo: "global", anthropic, cardService });
+  assert.equal(draft.mediaUrl, null);       // card discarded — answer not revealed
+  assert.equal(draft.requiresMedia, false);
+  assert.ok(draft.question);                // structured question carried for persistence
+  assert.match(draft.text, /central bank do to rates/);
+});
+
+test("generatePlatformPost: X falls back to deterministic draft with a SINGLE LLM call when question-gen fails", async () => {
+  let calls = 0;
+  const anthropic = { messages: { create: async () => { calls++; return { content: [{ text: "not json" }] }; } } };
+  const draft = await generatePlatformPost({ platform: x, story: STORY, audienceGeo: "global", anthropic });
+  assert.equal(calls, 1);                   // no second (engagement-copy) completion
+  assert.equal(draft.question, undefined);  // no question persisted
+  assert.ok(draft.text);                    // deterministic format() tweet still produced
 });
 
 // ── Publisher posts the reply after an X publish ────────────────────────────────
