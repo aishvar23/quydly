@@ -103,9 +103,11 @@ const PORTRAIT_CREDIT_MAX = 64;
 // attribution (migration_data_quality_p2_5: "never render without telling the
 // viewer where it came from"); the Wikipedia path falls back to its license.
 function portraitCredit(entity) {
+  // Overrides carry a real attribution string; the Wikipedia path is always
+  // credited simply as "Wikipedia" (rendered "Photo: Wikipedia").
   const raw = entity.portrait_source === "override"
     ? (entity.portrait_attribution || entity.portrait_license || "")
-    : (entity.image_license || "Wikipedia");
+    : "Wikipedia";
   const credit = oneLine(raw);
   return credit.length > PORTRAIT_CREDIT_MAX
     ? `${credit.slice(0, PORTRAIT_CREDIT_MAX - 1).trimEnd()}…`
