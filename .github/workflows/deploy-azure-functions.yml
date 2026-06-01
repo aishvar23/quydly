@@ -10,7 +10,11 @@ on:
 
 jobs:
   lint-and-deploy:
-    runs-on: ubuntu-latest
+    # MUST run on Windows: the target Function App is a Windows host, and
+    # @resvg/resvg-js installs a platform-specific native binary. Building on
+    # Linux bundles only the linux-x64 binary, so the function crashes at
+    # runtime on Windows with "Cannot find module '@resvg/resvg-js-win32-x64-msvc'".
+    runs-on: windows-latest
     environment: production
 
     steps:
