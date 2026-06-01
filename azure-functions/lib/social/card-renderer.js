@@ -121,17 +121,47 @@ function leadPersonPortrait(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
   for (const e of ents) {
     if (!e || e.type !== "person") continue;
-    const url = e.portrait_image_url || e.portrait_thumbnail_url || e.wikipedia_thumbnail_url;
+    // Cover inset is small (~0.3× the card edge), so prefer the thumbnail over
+    // the full-resolution override image — a large press photo would otherwise
+    // download only to be rejected by PORTRAIT_MAX_BYTES.
+    const url = e.portrait_thumbnail_url || e.portrait_image_url || e.wikipedia_thumbnail_url;
     if (typeof url !== "string" || !/^https:\/\//i.test(url)) continue;
     return { url, name: oneLine(e.name), credit: portraitCredit(e) };
   }
   return null;
 }
 
+// Read a fetch Response body, aborting once it exceeds maxBytes. Streams via
+// res.body when the runtime exposes it (real fetch) so an oversize or lying
+// content-length can't buffer unbounded into Function memory; falls back to
+// arrayBuffer for response doubles that lack a stream, still enforcing the cap.
+async function readCapped(res, maxBytes) {
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length && buf.length <= maxBytes ? buf : null;
+  }
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* best-effort abort */ }
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return total ? Buffer.concat(chunks) : null;
+}
+
 // Fetch a remote image into a base64 data URI so Satori can embed it inline
 // (no network during rasterisation). Best-effort: any problem — timeout,
 // non-image, oversize, network error — returns null and the caller falls back
-// to the text-only cover. HTTPS-only is enforced by leadPersonPortrait.
+// to the text-only cover. HTTPS-only is enforced by leadPersonPortrait. The
+// PORTRAIT_MAX_BYTES cap is enforced first via content-length (when advertised)
+// and then during the streamed download, so it holds even without the header.
 async function fetchImageDataUri(url, { fetchImpl = fetch, timeoutMs = PORTRAIT_FETCH_TIMEOUT_MS, maxBytes = PORTRAIT_MAX_BYTES } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -140,8 +170,10 @@ async function fetchImageDataUri(url, { fetchImpl = fetch, timeoutMs = PORTRAIT_
     if (!res || !res.ok) return null;
     const ct = (res.headers?.get?.("content-type") || "").toLowerCase();
     if (!ct.startsWith("image/")) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (!buf.length || buf.length > maxBytes) return null;
+    const declared = Number(res.headers?.get?.("content-length"));
+    if (Number.isFinite(declared) && declared > maxBytes) return null;
+    const buf = await readCapped(res, maxBytes);
+    if (!buf) return null;
     return `data:${ct};base64,${buf.toString("base64")}`;
   } catch {
     return null;

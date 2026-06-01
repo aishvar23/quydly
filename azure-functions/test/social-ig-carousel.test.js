@@ -140,6 +140,22 @@ test("renderCarouselSlides: portrait fetch failure falls back to a text-only cov
   assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
 });
 
+test("renderCarouselSlides: oversize portrait (content-length over cap) → text-only cover", async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    headers: { get: (h) => {
+      const k = String(h).toLowerCase();
+      if (k === "content-type") return "image/png";
+      if (k === "content-length") return String(50 * 1024 * 1024); // 50 MB, over the 6 MB cap
+      return null;
+    } },
+    arrayBuffer: async () => PNG_1x1.buffer.slice(0),
+  });
+  const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
+  assert.equal(slides.length, 4);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
+});
+
 test("renderCarouselSlides: non-image content-type is rejected (text-only cover)", async () => {
   const fetchImpl = async () => ({
     ok: true, status: 200,
