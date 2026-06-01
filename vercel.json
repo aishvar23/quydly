@@ -6,6 +6,9 @@
   "env": {
     "NODE_ENV": "production"
   },
+  "rewrites": [
+    { "source": "/question/:id", "destination": "/index.html" }
+  ],
   "crons": [
     {
       "path": "/api/cron/generate",

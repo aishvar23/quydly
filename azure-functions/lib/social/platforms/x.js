@@ -155,6 +155,13 @@ export async function publish(post, { creds, fetchImpl = fetch, logger } = {}) {
     }
   }
 
+  return createTweet(body, { creds, fetchImpl });
+}
+
+// POST a tweet body to /2/tweets and return { platformPostId, rawResponse }.
+// Shared by publish() and publishReply(). The JSON body (incl. any reply field)
+// is NOT part of the OAuth 1.0a signature — only the oauth_* params are.
+async function createTweet(body, { creds, fetchImpl = fetch } = {}) {
   const url = "https://api.x.com/2/tweets";
   const authHeader = buildAuthHeader({ method: "POST", url, creds });
 
@@ -177,6 +184,20 @@ export async function publish(post, { creds, fetchImpl = fetch, logger } = {}) {
   if (!platformPostId) throw new Error(`X publish: no tweet id in response: ${JSON.stringify(raw).slice(0, 200)}`);
 
   return { platformPostId, rawResponse: raw };
+}
+
+// Post a reply tweet under a parent (used for the "answer here" link comment).
+// Fire-and-forget from the publisher's perspective — it throws on failure so the
+// caller can log-and-continue without affecting the already-published parent.
+// Returns { platformPostId, rawResponse } for the reply tweet.
+export async function publishReply({ text, inReplyToTweetId, creds, fetchImpl = fetch } = {}) {
+  if (!creds) throw new Error("X reply: missing OAuth 1.0a creds");
+  if (!text) throw new Error("X reply: empty reply text");
+  if (!inReplyToTweetId) throw new Error("X reply: missing parent tweet id");
+  return createTweet(
+    { text, reply: { in_reply_to_tweet_id: String(inReplyToTweetId) } },
+    { creds, fetchImpl }
+  );
 }
 
 export function buildPrompt(story, audienceGeo) {
@@ -212,4 +233,104 @@ RULES:
 ${cashtagRule}
 
 Respond ONLY with JSON, no markdown: { "post_text": "..." }`;
+}
+
+// ── Structured quiz question (for the shareable answer page) ────────────────────
+// Model kept in sync with the daily-quiz generator (backend/services/claude.js).
+const QUESTION_MODEL = "claude-sonnet-4-20250514";
+
+function buildQuestionPrompt(story, audienceGeo) {
+  const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
+  return `You write a single multiple-choice quiz question for Quydly (a daily news quiz) from a verified news story. The question is tweeted to the X account and answered on a one-question web page.
+
+Audience region: ${audienceGeo}
+
+VERIFIED STORY (use ONLY these facts — invent nothing):
+Headline: ${story.headline}
+Summary: ${story.summary}
+Key points:
+${facts}
+
+The player is a busy, reasonably informed non-expert who remembers WHO did WHAT, to WHOM, WHY it matters, and the DIRECTION of a change — NOT exact figures. Never test recall of a number, date, percentage, or amount; test the qualitative takeaway instead.
+
+Write the question:
+- Punchy, jargon-free, answerable a day later from the gist of the story.
+- Exactly 4 options: 1 correct, 3 plausible but clearly distinct distractors of the same kind (don't mix a number among names).
+- correctIndex is the 0-based index of the correct option.
+- tldr: exactly 2 sentences of story context (the "answer" reveal).
+
+Respond ONLY with valid JSON, no markdown:
+{ "question": "...", "options": ["A","B","C","D"], "correctIndex": 0, "tldr": "Two sentence string." }`;
+}
+
+// Generate ONE structured MCQ from a story via Claude. Returns
+// { question, options, correctIndex, tldr } or null on any failure (the caller
+// then posts a normal tweet with no answer-page link). Never throws.
+export async function generateQuizQuestion({ anthropic, story, audienceGeo, logger } = {}) {
+  if (!anthropic) return null;
+  try {
+    const msg = await anthropic.messages.create({
+      model: QUESTION_MODEL,
+      max_tokens: 768,
+      messages: [{ role: "user", content: buildQuestionPrompt(story, audienceGeo) }],
+    });
+
+    let raw = String(msg?.content?.[0]?.text || "").trim();
+    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const q = JSON.parse(raw);
+
+    const tldr = q.tldr || q.insight_tldr;
+    const valid =
+      q &&
+      typeof q.question === "string" && q.question.trim() &&
+      Array.isArray(q.options) && q.options.length === 4 &&
+      q.options.every((o) => typeof o === "string" && o.trim()) &&
+      Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3 &&
+      typeof tldr === "string" && tldr.trim();
+
+    if (!valid) {
+      logger?.warn?.(JSON.stringify({ event: "x_question_invalid", story_id: story?.id }));
+      return null;
+    }
+
+    return {
+      question: q.question.trim(),
+      options: q.options.map((o) => o.trim()),
+      correctIndex: q.correctIndex,
+      tldr: tldr.trim(),
+    };
+  } catch (err) {
+    logger?.warn?.(JSON.stringify({ event: "x_question_generation_failed", story_id: story?.id, error: err.message }));
+    return null;
+  }
+}
+
+// Build the tweet text that POSES a structured question. The question wording is
+// the one persisted to social_questions, so the tweet and the answer page show
+// the SAME question. The answer-link is posted separately as a reply (URLs in the
+// main tweet get t.co-weighted + push users off X), so this body carries none.
+export function formatQuestionTweet(question, story, audienceGeo) {
+  const tail = "Reply with your answer \u{1F447}";
+  const headline = oneLine(story.headline);
+  const q = `\u{1F9E0} ${oneLine(question.question)}`;
+
+  const cashtags = CONSTRAINTS.allowCashtags ? cashtagsFor(story) : [];
+  const tagLine = cashtags.length ? `\n\n${cashtags.join(" ")}` : "";
+
+  // Reserve the question block + tail + separators + cashtags from the budget,
+  // then fit the headline into whatever remains (drop it if it won't fit).
+  const fixed = `${q}\n\n${tail}${tagLine}`;
+  const budget = CONSTRAINTS.maxLength - weightedLength(fixed) - 2; // 2 = "\n\n"
+  let head = "";
+  if (headline && budget > 20) head = truncate(headline, budget);
+
+  const text = head ? `${head}\n\n${fixed}` : fixed;
+  return {
+    platform: PLATFORM,
+    text,
+    mediaUrl: null,
+    linkUrl: null,
+    requiresMedia: false,
+    audienceGeo,
+  };
 }

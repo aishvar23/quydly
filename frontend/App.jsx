@@ -13,6 +13,7 @@ import HomeScreen from "./screens/HomeScreen";
 import QuestionScreen from "./screens/QuestionScreen";
 import EndScreen from "./screens/EndScreen";
 import GateScreen from "./screens/GateScreen";
+import SingleQuestionScreen from "./screens/SingleQuestionScreen";
 import { getActiveStrategy } from "./services/contentStrategy";
 import { isIdentityConflict, readOAuthErrorFromUrl } from "./services/authConflicts";
 import FLAGS from "../config/flags";
@@ -27,6 +28,15 @@ const supabase = createClient(
 );
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:3000";
+
+// Detect the shareable single-question deep link (web only): /question/<uuid>.
+// Returns the question id, or null for the normal app. X reply links point here.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function readSingleQuestionId() {
+  if (Platform.OS !== "web" || typeof window === "undefined") return null;
+  const m = window.location.pathname.match(/^\/question\/([^/?#]+)/i);
+  return m && UUID_RE.test(m[1]) ? m[1] : null;
+}
 
 // ── UserBar ───────────────────────────────────────────────────────────────────
 // Extensible top-right user area. Add preference/settings buttons here in v2.
@@ -122,6 +132,7 @@ export default function App() {
   const strategy = getActiveStrategy();
 
   const [session,     setSession]     = useState(null);
+  const [singleQuestionId] = useState(readSingleQuestionId); // non-null → shareable single-question page
   const [screen,      setScreen]      = useState("home");
   const [questions,   setQuestions]   = useState([]);
   const [currentQ,    setCurrentQ]    = useState(0);
@@ -434,20 +445,34 @@ export default function App() {
         onBeforeOAuth={handleBeforeOAuth}
       />
 
-      {screen === "loading" && (
+      {singleQuestionId && (
+        <SingleQuestionScreen
+          questionId={singleQuestionId}
+          apiBase={API_BASE}
+          isSignedIn={isSignedIn}
+          onPlayFull={() => {
+            if (Platform.OS === "web" && typeof window !== "undefined") {
+              window.location.assign(`${window.location.origin}/`);
+            }
+          }}
+          onSignIn={() => setShowLoginModal(true)}
+        />
+      )}
+
+      {!singleQuestionId && screen === "loading" && (
         <View style={styles.loadingWrap}>
           <Text style={styles.loadingText}>Scanning headlines...</Text>
           <Text style={styles.loadingSub}>Loading today's edition</Text>
         </View>
       )}
 
-      {loadError && screen === "home" && (
+      {!singleQuestionId && loadError && screen === "home" && (
         <View style={styles.errorBanner}>
           <Text style={styles.errorText}>{loadError}</Text>
         </View>
       )}
 
-      {screen === "home" && (
+      {!singleQuestionId && screen === "home" && (
         <HomeScreen
           onStart={() => handleStart(0)}
           credits={isSignedIn ? Infinity : credits}
@@ -458,7 +483,7 @@ export default function App() {
         />
       )}
 
-      {screen === "gate" && (
+      {!singleQuestionId && screen === "gate" && (
         <GateScreen
           onReset={() => { setCredits(FLAGS.freeQuestionsPerDay); setScreen("home"); }}
           promptSaveStreak={promptSaveStreak}
@@ -467,7 +492,7 @@ export default function App() {
         />
       )}
 
-      {screen === "end" && (
+      {!singleQuestionId && screen === "end" && (
         <EndScreen
           score={results.reduce((acc, r) => acc + Math.max(0, r.delta), 0)}
           maxScore={results.filter((r) => !r.skipped).length * 100}
@@ -501,7 +526,7 @@ export default function App() {
         />
       )}
 
-      {screen === "quiz" && currentQ < questions.length && questions[currentQ] && (
+      {!singleQuestionId && screen === "quiz" && currentQ < questions.length && questions[currentQ] && (
         <QuestionScreen
           question={questions[currentQ]}
           onAnswer={handleAnswer}

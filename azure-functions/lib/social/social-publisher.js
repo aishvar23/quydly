@@ -11,7 +11,7 @@
 //
 // Dependencies (publishers, getToken) are injected so tests never hit the network.
 
-import { publish as xPublish } from "./platforms/x.js";
+import { publish as xPublish, publishReply as xPublishReply } from "./platforms/x.js";
 import { credsFromEnv as xCredsFromEnv } from "./x-oauth1.js";
 import { publish as igPublish, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
 
@@ -29,13 +29,15 @@ function startOfUtcDayIso(now) {
 }
 
 // Per-platform default daily caps when SOCIAL_MAX_<P>_POSTS_PER_DAY is unset.
-// X is raised to 24 to match the candidate-selector's per-geo daily ceiling so
-// the publisher never re-caps X below what the selector approves. Other
-// platforms keep the conservative default — Instagram in particular auto-posts
-// carousels when media is present, and its intended initial volume is far lower
-// than X's, so it must NOT inherit X's 24. Override any platform via its env var.
+// X is 12 (not 24): every published X post now emits a SECOND real tweet — the
+// fire-and-forget "answer here" reply — which is NOT counted by this cap. So 12
+// primary posts ≈ 24 real tweets/day, matching the prior anti-spam ceiling.
+// If SOCIAL_MAX_X_POSTS_PER_DAY is set in Azure, halve it for the same reason.
+// (The selector's maxCandidatesPerDayPerGeo is platform-agnostic — shared by
+// FB/IG — so it stays at 24; X-only volume is bounded here.) Other platforms
+// keep the conservative default. Override any platform via its env var.
 const DEFAULT_DAILY_CAP = 10;
-const PLATFORM_DAILY_CAP_DEFAULTS = { x: 24 };
+const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12 };
 
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
@@ -50,10 +52,16 @@ export async function publishApprovedPosts({
   // X creds resolver (kept named `getCreds` for back-compat); IG uses getIgCreds.
   getCreds = xCredsFromEnv,
   getIgCreds = igCredsFromEnv,
+  // X reply publisher (the "answer here" link comment). Injectable for tests.
+  xReplyPublish = xPublishReply,
   env = process.env,
   logger = noopLogger,
   now = new Date(),
 } = {}) {
+  // Public base for the shareable answer page: <base>/question/<social_question_id>.
+  // Defaults to the production host so no env config is needed; override only to
+  // point at a non-prod domain.
+  const publicBase = String(env.QUYDLY_PUBLIC_BASE_URL || "https://www.quydly.com").replace(/\/+$/, "");
   const enabledPlatforms = Object.keys(publishers);
 
   // Lazy, per-platform credential resolution. A platform whose creds are
@@ -93,7 +101,7 @@ export async function publishApprovedPosts({
   // Due, unpublished posts for supported platforms.
   const { data: posts, error } = await supabase
     .from("social_posts")
-    .select("id, story_id, platform, audience_geo, post_text, media_url, status, scheduled_for, platform_post_id")
+    .select("id, story_id, platform, audience_geo, post_text, media_url, status, scheduled_for, platform_post_id, social_question_id")
     .in("status", ["APPROVED", "SCHEDULED"])
     .in("platform", enabledPlatforms)
     .is("platform_post_id", null)
@@ -182,6 +190,33 @@ export async function publishApprovedPosts({
         platform: post.platform,
         platform_post_id: result.platformPostId,
       }));
+
+      // Fire-and-forget: reply to the just-published X tweet with the answer-page
+      // link. Non-fatal — the parent is already POSTED, so a reply failure only
+      // costs the link comment. Not counted against the daily cap by design.
+      if (post.platform === "x" && post.social_question_id) {
+        try {
+          const replyText = `\u{1F440} Check out the answer here: ${publicBase}/question/${post.social_question_id}`;
+          const reply = await xReplyPublish({
+            text: replyText,
+            inReplyToTweetId: result.platformPostId,
+            creds,
+          });
+          logger(JSON.stringify({
+            event: "social_reply_published",
+            post_id: post.id,
+            parent_tweet_id: result.platformPostId,
+            reply_tweet_id: reply?.platformPostId,
+          }));
+        } catch (replyErr) {
+          logger.warn(JSON.stringify({
+            event: "social_reply_failed",
+            post_id: post.id,
+            parent_tweet_id: result.platformPostId,
+            error: replyErr.message,
+          }));
+        }
+      }
     } catch (pubErr) {
       await supabase
         .from("social_posts")

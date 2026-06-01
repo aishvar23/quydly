@@ -252,7 +252,7 @@ function QuestionCard({ question, onAnswer, answered, skipped, selectedIndex, wa
 }
 
 // ── QuestionScreen ────────────────────────────────────────────────────────────
-export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQuit, answered, skipped, selectedIndex, wager, setWager, currentQ, totalQ, unlimited, strategyLabel }) {
+export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQuit, answered, skipped, selectedIndex, wager, setWager, currentQ, totalQ, unlimited, strategyLabel, nextLabel }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -294,7 +294,7 @@ export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQ
 
       {answered && (
         <TouchableOpacity style={styles.nextBtn} onPress={onNext} activeOpacity={0.85}>
-          <Text style={styles.nextBtnText}>{isLast ? "See Results →" : "Next Question →"}</Text>
+          <Text style={styles.nextBtnText}>{nextLabel || (isLast ? "See Results →" : "Next Question →")}</Text>
         </TouchableOpacity>
       )}
     </ScrollView>
