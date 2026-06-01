@@ -122,12 +122,18 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   if (storyErr) throw new Error(`[social-post-generator] fetch story: ${storyErr.message}`);
   if (!story) throw new Error(`[social-post-generator] story not found: ${candidate.story_id}`);
 
-  // Phase 5: a candidate the selector marked AUTO_APPROVED produces drafts that
-  // skip human review. Instagram is excluded — it needs a media asset, so it
-  // always stays PENDING_REVIEW (and the publisher's media gate blocks it anyway).
+  // Phase 5 + L4: a candidate the selector marked AUTO_APPROVED produces drafts
+  // that skip human review. Instagram auto-approves ONLY once it has a media
+  // asset (its carousel slides / square card → post.mediaUrl is set). The earlier
+  // blanket IG exclusion existed because IG had no media; the carousel now
+  // provides it. Without media, IG stays PENDING_REVIEW and the publisher's media
+  // gate (#16) blocks it anyway.
   const autoApproved = candidate.status === "AUTO_APPROVED";
-  const statusFor = (platform) =>
-    autoApproved && platform.PLATFORM !== "instagram" ? "APPROVED" : "PENDING_REVIEW";
+  const statusFor = (platform, post) => {
+    if (!autoApproved) return "PENDING_REVIEW";
+    if (platform.PLATFORM === "instagram" && !post.mediaUrl) return "PENDING_REVIEW";
+    return "APPROVED";
+  };
 
   let created = 0;
   let skipped = 0;
@@ -161,7 +167,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
           post_text: post.text,
           media_url: post.mediaUrl || null,
           link_url: post.linkUrl || null,
-          status: statusFor(platform),
+          status: statusFor(platform, post),
         },
         { onConflict: "story_id,platform,audience_geo", ignoreDuplicates: true }
       )

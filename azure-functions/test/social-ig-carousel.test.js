@@ -214,7 +214,7 @@ test("generatePlatformPost: IG without carousel flag falls back to a single JPEG
 });
 
 // Mock Supabase capturing inserts into social_posts + social_media_assets.
-function makeGenSupabase() {
+function makeGenSupabase({ candidateStatus = "PENDING" } = {}) {
   const assets = [];
   const posts = [];
   let seq = 0;
@@ -227,7 +227,7 @@ function makeGenSupabase() {
       q.update = (payload) => { q._op = "update"; q._payload = payload; return q; };
       q.maybeSingle = async () => {
         if (q.table === "social_publication_candidates") {
-          return { data: { id: "cand-1", story_id: STORY.id, audience_geo: "global", status: "PENDING" }, error: null };
+          return { data: { id: "cand-1", story_id: STORY.id, audience_geo: "global", status: candidateStatus }, error: null };
         }
         if (q.table === "stories") return { data: STORY, error: null };
         if (q.table === "social_posts") {
@@ -251,6 +251,30 @@ function makeGenSupabase() {
   };
   return { client, assets, posts };
 }
+
+test("generateSocialPosts: AUTO_APPROVED + carousel media → IG post APPROVED (auto-publishes)", async () => {
+  const sb = makeGenSupabase({ candidateStatus: "AUTO_APPROVED" });
+  const cardService = {
+    getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`,
+    getCarouselSlideUrls: async () => [
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1080 },
+    ],
+  };
+  await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1" });
+  const ig = sb.posts.find((p) => p.platform === "instagram");
+  assert.equal(ig.status, "APPROVED");          // has carousel media → eligible to auto-publish
+  assert.equal(ig.media_url, "https://cdn.test/0.jpg");
+});
+
+test("generateSocialPosts: AUTO_APPROVED but NO media → IG stays PENDING_REVIEW", async () => {
+  const sb = makeGenSupabase({ candidateStatus: "AUTO_APPROVED" });
+  // No cardService → IG draft has no media_url.
+  await generateSocialPosts({ supabase: sb.client, candidateId: "cand-1" });
+  const ig = sb.posts.find((p) => p.platform === "instagram");
+  assert.equal(ig.status, "PENDING_REVIEW");
+  assert.equal(sb.posts.find((p) => p.platform === "x").status, "APPROVED"); // X still auto-approves
+});
 
 test("generateSocialPosts: carousel slides persist as ordered instagram_carousel_slide rows", async () => {
   const sb = makeGenSupabase();
