@@ -1,8 +1,9 @@
 // Azure Timer Function: discover
 // Trigger: every 30 minutes — "0 */30 * * * *"
 //
-// Parses 65+ RSS feeds, canonicalises URLs, deduplicates via scrape_queue,
-// inserts new rows, and sends each new URL as a message to scrape-queue.
+// Parses 65+ RSS feeds, canonicalises URLs, deduplicates within the run and
+// via scrape_queue, inserts new rows, and sends each new URL as a message to
+// scrape-queue.
 
 import Parser from "rss-parser";
 import { canonicalise, hashUrl } from "../lib/canonicalise.js";
@@ -80,9 +81,22 @@ export default async function discover(context, timer) {
     }
   }
 
+  // ── 1b. Collapse within-run duplicates by url_hash ────────────────────────
+  // The same article can surface in two feeds in a single run (e.g. a domain's
+  // broad feed and its narrower AI sub-feed). RSS_FEEDS lists the AI feeds
+  // first, so keeping the FIRST occurrence makes the `ai` categorisation
+  // deterministic and avoids enqueuing — and scraping — the same URL twice.
+  const seenHashes       = new Set();
+  const uniqueCandidates = [];
+  for (const c of candidates) {
+    if (seenHashes.has(c.url_hash)) continue;
+    seenHashes.add(c.url_hash);
+    uniqueCandidates.push(c);
+  }
+
   // ── 2. Dedup: check which url_hashes already exist in scrape_queue ─────────
   // Process in batches to avoid IN clause limits.
-  const allHashes  = candidates.map(c => c.url_hash);
+  const allHashes  = uniqueCandidates.map(c => c.url_hash);
   const knownHashes = new Set();
 
   for (let i = 0; i < allHashes.length; i += BATCH_SIZE) {
@@ -101,7 +115,7 @@ export default async function discover(context, timer) {
     }
   }
 
-  const newCandidates = candidates.filter(c => !knownHashes.has(c.url_hash));
+  const newCandidates = uniqueCandidates.filter(c => !knownHashes.has(c.url_hash));
 
   // ── 3. Insert new rows into scrape_queue ──────────────────────────────────
   for (let i = 0; i < newCandidates.length; i += BATCH_SIZE) {

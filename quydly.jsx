@@ -9,9 +9,10 @@ const CATEGORIES = [
   { id: "finance", label: "Finance", emoji: "💰", newsDataTag: "business"      },
   { id: "culture", label: "Culture", emoji: "🎭", newsDataTag: "entertainment" },
   { id: "science", label: "Science", emoji: "⚡", newsDataTag: "science"       },
+  { id: "ai",      label: "AI",      emoji: "🤖", newsDataTag: "technology"    },
 ];
 
-const EDITORIAL_MIX = { world: 2, tech: 1, finance: 1, culture: 1 };
+const EDITORIAL_MIX = { world: 1, tech: 1, finance: 1, culture: 1, ai: 1 };
 
 const FLAGS = {
   activeStrategy:          "editorial", // "editorial" | "beat" | "custom"
