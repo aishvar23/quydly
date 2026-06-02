@@ -30,6 +30,7 @@ const CATEGORY_DECAY_DAYS = Object.freeze({
   finance: 30,   // markets move fast; quarterly earnings cycle
   culture: 21,   // entertainment news cools quickly after release week
   science: 90,   // papers and findings hold for the news cycle
+  ai:      30,   // fast-moving release/model cycle; align with finance
 });
 
 // Default applied when category is missing or unrecognised. Roughly

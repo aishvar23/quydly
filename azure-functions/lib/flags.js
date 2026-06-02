@@ -20,6 +20,10 @@ const FLAGS = {
     minConfidence:    7, // confidence_score >= this (stories store 1–10 int)
     minRelevance:    20, // story_audiences.relevance_score >= this
     freshnessHours:  36, // story published within this window
+    // Categories the EXISTING handles (@quydly / @quydlyenglish) must NOT post.
+    // The `ai` vertical gets its own X/IG handles (future milestone); until that
+    // dedicated path exists, keep AI stories off the current accounts.
+    excludeCategories: ["ai"],
     maxCandidatesPerDayPerGeo: 24, // hard ceiling on new candidates per geo per day
     // Per-run drip: the selector runs hourly, so capping how many candidates a
     // single run creates per geo spreads the daily quota across the day instead

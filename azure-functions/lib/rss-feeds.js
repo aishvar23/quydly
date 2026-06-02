@@ -6,6 +6,51 @@
 //                     (Reuters/AP/BBC World/Guardian World); false for US/UK-domestic blogs
 
 const RSS_FEEDS = [
+  // ── AI ─────────────────────────────────────────────────────────────────────
+  // Dedicated AI/ML vertical. Listed FIRST so that for articles also carried by a
+  // shared domain's broader feed (techcrunch/theverge/wired/technologyreview/
+  // venturebeat/arstechnica/zdnet/livemint/economictimes), the AI sub-feed wins
+  // the discover url_hash dedup → the article is tagged `ai` rather than
+  // tech/finance. Geo is domain-invariant, so lookupFeedByDomain stays correct.
+  //
+  // Volume note: synthesis needs ≥2 distinct domains per cluster (cluster_score
+  // effectively wants ~3), so breadth of outlets covering the SAME AI event is
+  // what turns coverage into stories. We favour AI-dedicated outlets and AI
+  // sub-feeds (not broad general-tech feeds) to keep the vertical genuinely AI.
+
+  // AI news outlets & AI sub-feeds
+  { url: "https://techcrunch.com/category/artificial-intelligence/feed/",         domain: "techcrunch.com",        category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",     domain: "theverge.com",          category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://www.technologyreview.com/topic/artificial-intelligence/feed",   domain: "technologyreview.com",  category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://venturebeat.com/category/ai/feed/",                             domain: "venturebeat.com",       category: "ai", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
+  { url: "https://www.wired.com/feed/tag/ai/latest/rss",                          domain: "wired.com",             category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://arstechnica.com/ai/feed/",                                      domain: "arstechnica.com",       category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",           domain: "zdnet.com",             category: "ai", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
+  { url: "https://www.theregister.com/software/ai_ml/headlines.atom",             domain: "theregister.com",       category: "ai", authority_score: 0.6, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
+  { url: "https://the-decoder.com/feed/",                                         domain: "the-decoder.com",       category: "ai", authority_score: 0.4, source_country: "de", source_region: "western_europe", language: "en", is_global_source: true  },
+  { url: "https://www.marktechpost.com/feed/",                                    domain: "marktechpost.com",      category: "ai", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://www.artificialintelligence-news.com/feed/",                     domain: "artificialintelligence-news.com", category: "ai", authority_score: 0.4, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
+  { url: "https://syncedreview.com/feed/",                                        domain: "syncedreview.com",      category: "ai", authority_score: 0.4, source_country: "ca", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss",     domain: "spectrum.ieee.org",     category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://www.kdnuggets.com/feed",                                        domain: "kdnuggets.com",         category: "ai", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+
+  // AI company / research blogs (primary-source announcements)
+  { url: "https://blog.google/technology/ai/rss/",                                domain: "blog.google",           category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
+  { url: "https://deepmind.google/blog/rss.xml",                                  domain: "deepmind.google",       category: "ai", authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
+  { url: "https://openai.com/news/rss.xml",                                       domain: "openai.com",            category: "ai", authority_score: 0.8, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://blogs.microsoft.com/ai/feed/",                                  domain: "blogs.microsoft.com",   category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://blogs.nvidia.com/feed/",                                        domain: "blogs.nvidia.com",      category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://huggingface.co/blog/feed.xml",                                  domain: "huggingface.co",        category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://aws.amazon.com/blogs/machine-learning/feed/",                   domain: "aws.amazon.com",        category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+  { url: "https://news.mit.edu/rss/topic/artificial-intelligence2",               domain: "news.mit.edu",          category: "ai", authority_score: 0.8, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
+
+  // India-origin AI/tech feeds
+  { url: "https://www.livemint.com/rss/technology",                               domain: "livemint.com",          category: "ai", authority_score: 0.6, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://inc42.com/feed/",                                               domain: "inc42.com",             category: "ai", authority_score: 0.4, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://yourstory.com/feed/",                                           domain: "yourstory.com",         category: "ai", authority_score: 0.4, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+  { url: "https://economictimes.indiatimes.com/tech/rssfeeds/78570530.cms",       domain: "economictimes.indiatimes.com", category: "ai", authority_score: 0.6, source_country: "in", source_region: "south_asia", language: "en", is_global_source: false },
+  { url: "https://www.analyticsvidhya.com/feed/",                                 domain: "analyticsvidhya.com",   category: "ai", authority_score: 0.4, source_country: "in", source_region: "south_asia",     language: "en", is_global_source: false },
+
   // ── World ──────────────────────────────────────────────────────────────────
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml",                   domain: "bbc.com",              category: "world",   authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
   { url: "https://www.theguardian.com/world/rss",                         domain: "theguardian.com",      category: "world",   authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
