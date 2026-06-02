@@ -75,12 +75,21 @@ export async function selectEligibleStories(supabase, { now = new Date(), flags 
   const sinceIso = new Date(nowMs - flags.freshnessHours * 60 * 60 * 1000).toISOString();
 
   // 1. Candidate stories: fresh + score/confidence floors.
-  const { data: stories, error: storyErr } = await supabase
+  let query = supabase
     .from("stories")
     .select(STORY_COLUMNS)
     .gte("published_at", sinceIso)
     .gte("story_score", flags.minStoryScore)
-    .gte("confidence_score", flags.minConfidence)
+    .gte("confidence_score", flags.minConfidence);
+
+  // Verticals with their own dedicated handles (e.g. `ai`) must never post to the
+  // existing accounts. Excluded here at the source so they can't become candidates.
+  const excludeCategories = flags.excludeCategories || [];
+  if (excludeCategories.length) {
+    query = query.not("category_id", "in", `(${excludeCategories.join(",")})`);
+  }
+
+  const { data: stories, error: storyErr } = await query
     .order("story_score", { ascending: false })
     .limit(STORY_FETCH_LIMIT);
 
