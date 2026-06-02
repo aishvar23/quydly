@@ -21,9 +21,11 @@ export const CONSTRAINTS = {
   // Cashtags ($AAPL) are allowed — they aid discovery on finance stories without
   // the spam penalty hashtags carry. Hashtags stay off.
   allowCashtags: true,
-  // A headline card lifts reach materially on X; attached when a card service is
-  // available, but not required (text-only posts still publish).
-  cardShape: "landscape",
+  // X is TEXT-ONLY by design. The question-first strategy poses a quiz question in
+  // the tweet and links the answer page in a reply; a headline card here would
+  // either reveal the answer or just be noise, so X declares NO cardShape and the
+  // generator never attaches an image. (publish() still supports media_ids for any
+  // future explicitly-mediated post, but the generator produces none.)
 };
 
 // X counts every URL as a fixed-weight t.co link (currently 23 chars),
