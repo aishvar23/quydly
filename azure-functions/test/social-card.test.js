@@ -82,10 +82,12 @@ test("cardService.getCardUrl: returns null (non-fatal) when upload fails", async
 
 // ── generator attaches media when a card service is supplied ──────────────────
 
-test("generatePlatformPost: attaches card media_url for X when cardService present", async () => {
+test("generatePlatformPost: X stays TEXT-ONLY even when a cardService is present (no cardShape)", async () => {
+  // X declares no cardShape, so the single-card branch never runs — even with
+  // cards globally enabled, X must never attach an image (question-first strategy).
   const cardService = { getCardUrl: async ({ shape }) => `https://cdn.test/${shape}.png` };
   const post = await generatePlatformPost({ platform: x, story: STORY, audienceGeo: "global", cardService });
-  assert.equal(post.mediaUrl, "https://cdn.test/landscape.png");
+  assert.equal(post.mediaUrl, null);
 });
 
 test("generatePlatformPost: Instagram card clears requiresMedia", async () => {
