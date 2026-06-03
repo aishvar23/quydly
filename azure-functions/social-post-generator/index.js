@@ -43,11 +43,16 @@ export default async function socialPostGenerator(context, message) {
   // Opt-in and requires cards to be on (the slides ARE cards).
   const igCarousel = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_CAROUSEL_ENABLED || ""));
 
+  // Instagram hashtags (reach §8.3): append a curated hashtag block to IG
+  // captions. Opt-in so it can be live-verified before going wide.
+  const igHashtags = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_HASHTAGS_ENABLED || ""));
+
   const { created, skipped } = await generateSocialPosts({
     supabase,
     anthropic,
     cardService,
     igCarousel,
+    igHashtags,
     candidateId,
     logger: context.log,
   });

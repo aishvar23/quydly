@@ -17,6 +17,10 @@ export const CONSTRAINTS = {
   // L4 carousel: when enabled, the media asset is a 4-slide carousel
   // (cover / what happened / why it matters / CTA) rather than a single card.
   carousel: true,
+  // Unlike X, Instagram treats hashtags as a discovery surface. A curated block
+  // is appended downstream (see _hashtags.js, gated by SOCIAL_IG_HASHTAGS_ENABLED);
+  // validation must not reject the '#' token here.
+  allowHashtags: true,
 };
 
 export function format(story, audienceGeo) {
@@ -71,6 +75,7 @@ RULES:
 - Max ${CONSTRAINTS.maxLength} characters. No source links in the caption.
 - Must include the "Visit ${QUYDLY_URL()}" CTA. No invented facts or numbers.
 - Neutral tone for any sensitive subject. No clickbait.
+- Do NOT add hashtags yourself — a curated hashtag block is appended automatically.
 
 Respond ONLY with JSON, no markdown: { "post_text": "..." }`;
 }
