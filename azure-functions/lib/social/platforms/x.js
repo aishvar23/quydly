@@ -253,10 +253,15 @@ Summary: ${story.summary}
 Key points:
 ${facts}
 
+The tweet shows the HEADLINE directly above your question, so the reader can see it while answering. This is the single most important rule: your question must NOT be answerable from the headline alone. Never ask the reader to name a person, place, body, organisation, or thing that the headline already states — that is trivial and reads as stupid. (Bad: headline "Teen whistleblower testifies to Parliament about the CBSE marking row" → "Which body did the teen testify before?" — the headline already says Parliament.)
+
+Instead, ask about something a reader only knows if they actually read the STORY beneath the headline: the cause behind the event, what is at stake, the consequence or what happens next, the central conflict, or why it matters. Draw the correct answer from the Summary or Key points — never from a word that already appears in the headline.
+
 The player is a busy, reasonably informed non-expert who remembers WHO did WHAT, to WHOM, WHY it matters, and the DIRECTION of a change — NOT exact figures. Never test recall of a number, date, percentage, or amount; test the qualitative takeaway instead.
 
 Write the question:
 - Punchy, jargon-free, answerable a day later from the gist of the story.
+- The correct answer must come from the Summary or Key points, not from wording already in the headline.
 - Exactly 4 options: 1 correct, 3 plausible but clearly distinct distractors of the same kind (don't mix a number among names).
 - correctIndex is the 0-based index of the correct option.
 - tldr: exactly 2 sentences of story context (the "answer" reveal).
