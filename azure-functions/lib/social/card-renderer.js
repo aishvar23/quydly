@@ -114,21 +114,21 @@ function portraitCredit(entity) {
     : credit;
 }
 
-// Pick the first person entity that has a usable, licensed, HTTPS portrait.
-// primary_entities_enriched is already ordered by primacy, so the first such
-// person is the story's lead subject. Returns null when no person qualifies.
+// Surface the portrait of the story's LEAD person only. primary_entities_enriched
+// is ordered by primacy, so the first `type:"person"` entry is the lead subject.
+// We consider ONLY that lead person — we never fall through to a later person, as
+// that would put the wrong face on the cover. Returns null when there is no person
+// entity, or the lead person has no usable licensed HTTPS portrait (text-only cover).
 function leadPersonPortrait(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
-  for (const e of ents) {
-    if (!e || e.type !== "person") continue;
-    // Cover inset is small (~0.3× the card edge), so prefer the thumbnail over
-    // the full-resolution override image — a large press photo would otherwise
-    // download only to be rejected by PORTRAIT_MAX_BYTES.
-    const url = e.portrait_thumbnail_url || e.portrait_image_url || e.wikipedia_thumbnail_url;
-    if (typeof url !== "string" || !/^https:\/\//i.test(url)) continue;
-    return { url, name: oneLine(e.name), credit: portraitCredit(e) };
-  }
-  return null;
+  const lead = ents.find((e) => e && e.type === "person");
+  if (!lead) return null;
+  // Cover inset is small (~0.3× the card edge), so prefer the thumbnail over
+  // the full-resolution override image — a large press photo would otherwise
+  // download only to be rejected by PORTRAIT_MAX_BYTES.
+  const url = lead.portrait_thumbnail_url || lead.portrait_image_url || lead.wikipedia_thumbnail_url;
+  if (typeof url !== "string" || !/^https:\/\//i.test(url)) return null;
+  return { url, name: oneLine(lead.name), credit: portraitCredit(lead) };
 }
 
 // Read a fetch Response body, aborting once it exceeds maxBytes. Streams via

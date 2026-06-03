@@ -108,6 +108,22 @@ test("renderCarouselSlides: non-person entities (org/place) are ignored", async 
   assert.equal(called, false);
 });
 
+test("renderCarouselSlides: lead person has no photo → text-only cover even if a LATER person does", async () => {
+  // First person entity is the lead subject; it has no portrait. A later person
+  // entity does — but we must NOT fall through to it (that put the wrong face on
+  // the cover). Expect no fetch at all and a text-only cover.
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Lead Person", type: "person" }, // no portrait_* / wikipedia_thumbnail_url
+    { name: "Other Person", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/other.png" },
+  ] };
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  const slides = await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
+  assert.equal(called, false); // never fetched the later person's photo
+  assert.equal(slides.length, 4);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
+});
+
 test("renderCarouselSlides: non-HTTPS portrait url is skipped (no fetch)", async () => {
   const story = { ...STORY, primary_entities_enriched: [
     { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "http://insecure/jane.png" },
