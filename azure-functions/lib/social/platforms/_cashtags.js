@@ -11,6 +11,8 @@
 // The map is intentionally conservative (well-known, unambiguous large caps).
 // Source of names: stories.primary_entities_enriched (typed) + primary_entities.
 
+import { entityNames } from "./_shared.js";
+
 // Normalised org name → ticker. Keys are the output of normaliseOrg().
 const ORG_TO_TICKER = {
   // Mega-cap tech
@@ -176,27 +178,15 @@ function tickerFor(name) {
   return ORG_TO_TICKER[alt] || null;
 }
 
-// Collect candidate org names from the enriched (typed) entities first, then the
-// flat primary_entities array. Membership in the ticker map implies the name is a
-// tradable company, so flat names are safe to look up too.
-function candidateNames(story) {
-  const names = [];
-  const enriched = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
-  for (const e of enriched) {
-    if (e && e.name && (e.type === "org" || !e.type)) names.push(e.name);
-  }
-  const flat = Array.isArray(story?.primary_entities) ? story.primary_entities : [];
-  for (const n of flat) if (typeof n === "string") names.push(n);
-  return names;
-}
-
 // Cashtags for a story, in entity order, deduped, capped. Empty unless the story
-// is finance-category and at least one org maps to a known ticker.
+// is finance-category and at least one org maps to a known ticker. Only org-typed
+// (and legacy untyped) entities are considered — membership in the ticker map
+// implies the name is a tradable company, so flat names are safe to look up too.
 export function cashtagsFor(story, { max = 2 } = {}) {
   if (!story || story.category_id !== "finance") return [];
   const seen = new Set();
   const out = [];
-  for (const name of candidateNames(story)) {
+  for (const name of entityNames(story, ["org"])) {
     const ticker = tickerFor(name);
     if (!ticker || seen.has(ticker)) continue;
     seen.add(ticker);

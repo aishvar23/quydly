@@ -81,8 +81,15 @@ test("hashtagsFor: dedups case-insensitively across groups", () => {
   assert.equal(tags.filter((t) => t.toLowerCase() === "#tech").length, 1);
 });
 
+test("hashtagsFor: unknown category falls back to a derived tag (never silently untagged)", () => {
+  // A category not in the curated overrides (e.g. a new vertical added to
+  // config/categories.js) still gets a generic tag derived from its id.
+  const tags = hashtagsFor({ category_id: "sports", primary_entities: [], primary_entities_enriched: [] });
+  assert.deepEqual(tags, ["#Sports", "#Quydly", "#NewsQuiz", "#DailyNews"]);
+});
+
 test("hashtagsFor: brand tags always present even with no category/entities", () => {
-  const tags = hashtagsFor({ category_id: "unknown", primary_entities: [], primary_entities_enriched: [] });
+  const tags = hashtagsFor({ primary_entities: [], primary_entities_enriched: [] });
   assert.deepEqual(tags, ["#Quydly", "#NewsQuiz", "#DailyNews"]);
 });
 

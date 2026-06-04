@@ -3,6 +3,22 @@
 
 export const QUYDLY_URL = () => process.env.QUYDLY_URL || "quydly.com";
 
+// Collect entity names from a story: typed enriched entities first, then the
+// flat primary_entities array as a fallback. Untyped enriched entities always
+// pass (legacy rows pre-enrichment have no type); `allowedTypes` (when given)
+// further restricts which typed entities are kept. Shared by the cashtag and
+// hashtag derivations so both read entities the same way.
+export function entityNames(story, allowedTypes = null) {
+  const names = [];
+  const enriched = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
+  for (const e of enriched) {
+    if (e && e.name && (!e.type || !allowedTypes || allowedTypes.includes(e.type))) names.push(e.name);
+  }
+  const flat = Array.isArray(story?.primary_entities) ? story.primary_entities : [];
+  for (const n of flat) if (typeof n === "string") names.push(n);
+  return names;
+}
+
 // stories.key_points is jsonb — usually string[], occasionally [{text}].
 export function keyPointStrings(story) {
   const kp = story && story.key_points;
