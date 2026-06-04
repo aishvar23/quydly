@@ -107,6 +107,58 @@ test("hashtagsFor: ignores entity types other than person/org/place", () => {
   assert.ok(!tags.includes("#HiggsBoson"));
 });
 
+test("hashtagsFor: does NOT tag dirty flat primary_entities (enrichment-failure path)", () => {
+  // When enrichment fails, primary_entities_enriched is empty and the flat
+  // primary_entities holds the dirty regex-extracted cluster names. Those must
+  // never become hashtags — only typed enriched entities do.
+  const story = {
+    category_id: "world",
+    primary_entities_enriched: [],
+    primary_entities: ["two india", "hormuz the", "correspondent", "washington"],
+  };
+  const tags = hashtagsFor(story);
+  assert.deepEqual(tags, ["#WorldNews", "#Quydly", "#NewsQuiz", "#DailyNews"]);
+});
+
+test("hashtagsFor: entity tags come from enriched even when flat duplicates exist", () => {
+  // Flat array is ignored entirely; the type filter is not defeated by it.
+  const story = {
+    category_id: "tech",
+    primary_entities_enriched: [{ name: "CERN", type: "org" }],
+    primary_entities: ["CERN", "Climate Change"], // flat junk must not leak
+  };
+  const tags = hashtagsFor(story);
+  assert.ok(tags.includes("#CERN"));
+  assert.ok(!tags.includes("#ClimateChange"));
+});
+
+test("hashtagsFor: unknown hyphenated category sanitises to a single clean tag", () => {
+  // A multi-word/hyphenated id must not emit "#Us-politics" (IG truncates at
+  // the hyphen) — it PascalCases to one valid tag.
+  const tags = hashtagsFor({ category_id: "us-politics", primary_entities: [], primary_entities_enriched: [] });
+  assert.deepEqual(tags, ["#UsPolitics", "#Quydly", "#NewsQuiz", "#DailyNews"]);
+});
+
+test("hashtagsFor: never exceeds Instagram's 30-hashtag ceiling", () => {
+  // Unique alphabetic suffixes (digits would be stripped by entityTag and
+  // collapse to duplicates) so each entity yields a distinct tag.
+  const alpha = (n) => {
+    let s = "";
+    do { s = String.fromCharCode(97 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
+    return s;
+  };
+  const story = {
+    category_id: "world",
+    primary_entities_enriched: Array.from({ length: 50 }, (_, i) => ({
+      name: `Person ${alpha(i)}`, type: "person",
+    })),
+    primary_entities: [],
+  };
+  // Even with an absurd caller-supplied max, the hard 30-tag ceiling holds.
+  const tags = hashtagsFor(story, { maxEntities: 100, max: 100 });
+  assert.ok(tags.length <= 30, `got ${tags.length} tags`);
+});
+
 // ── appendHashtags ────────────────────────────────────────────────────────────
 
 test("appendHashtags: appends a blank-line-separated block", () => {

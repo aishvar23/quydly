@@ -4,16 +4,24 @@
 export const QUYDLY_URL = () => process.env.QUYDLY_URL || "quydly.com";
 
 // Collect entity names from a story: typed enriched entities first, then the
-// flat primary_entities array as a fallback. Untyped enriched entities always
-// pass (legacy rows pre-enrichment have no type); `allowedTypes` (when given)
-// further restricts which typed entities are kept. Shared by the cashtag and
-// hashtag derivations so both read entities the same way.
-export function entityNames(story, allowedTypes = null) {
+// flat primary_entities array. Untyped enriched entities always pass (legacy
+// rows pre-enrichment have no type); `allowedTypes` (when given) further
+// restricts which typed entities are kept.
+//
+// NOTE: the flat primary_entities array carries NO type, so `allowedTypes`
+// cannot be applied to it — and on the enrichment-failure path it holds the
+// dirty, regex-extracted cluster names (e.g. "correspondent", "two india";
+// see story-synthesizer cleanPrimaryEntities). Callers that need a clean,
+// type-filtered set (hashtags) pass `{ includeFlat: false }`; callers that
+// gate names downstream and want maximum recall (cashtags, where the ticker
+// map rejects non-companies) keep the default flat fallback.
+export function entityNames(story, allowedTypes = null, { includeFlat = true } = {}) {
   const names = [];
   const enriched = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
   for (const e of enriched) {
     if (e && e.name && (!e.type || !allowedTypes || allowedTypes.includes(e.type))) names.push(e.name);
   }
+  if (!includeFlat) return names;
   const flat = Array.isArray(story?.primary_entities) ? story.primary_entities : [];
   for (const n of flat) if (typeof n === "string") names.push(n);
   return names;
