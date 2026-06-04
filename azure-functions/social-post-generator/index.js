@@ -44,8 +44,9 @@ export default async function socialPostGenerator(context, message) {
   const igCarousel = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_CAROUSEL_ENABLED || ""));
 
   // Instagram hashtags (reach §8.3): append a curated hashtag block to IG
-  // captions. Opt-in so it can be live-verified before going wide.
-  const igHashtags = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_HASHTAGS_ENABLED || ""));
+  // captions. ON by default after live verification — set
+  // SOCIAL_IG_HASHTAGS_ENABLED=false (or 0) to disable.
+  const igHashtags = !/^(0|false)$/i.test(String(process.env.SOCIAL_IG_HASHTAGS_ENABLED ?? "true"));
 
   const { created, skipped } = await generateSocialPosts({
     supabase,
