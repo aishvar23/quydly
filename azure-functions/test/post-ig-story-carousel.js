@@ -35,7 +35,7 @@ try {
 
   const { data: story, error } = await supabase
     .from("stories")
-    .select("id, headline, summary, category_id, key_points")
+    .select("id, headline, summary, category_id, key_points, published_at, primary_entities_enriched")
     .eq("id", storyId)
     .maybeSingle();
   if (error) throw new Error(error.message);
