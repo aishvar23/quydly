@@ -19,7 +19,7 @@ const PLATFORMS = [x, facebook, instagram];
 const MODEL = "claude-sonnet-4-20250514";
 
 const STORY_COLUMNS =
-  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched";
+  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at";
 
 // Callable logger matching the Azure Functions `context.log` convention
 // (a function with .warn / .error attached), so handlers can pass context.log directly.

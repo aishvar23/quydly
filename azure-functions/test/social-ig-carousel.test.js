@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderCarouselSlides, CAROUSEL_SLIDES } from "../lib/social/card-renderer.js";
+import { renderCarouselSlides, CAROUSEL_SLIDES, coverDateLine } from "../lib/social/card-renderer.js";
 import { createCardService } from "../lib/social/card-storage.js";
 import * as ig from "../lib/social/instagram-graph.js";
 import { generatePlatformPost, generateSocialPosts } from "../lib/social/social-post-generator.js";
@@ -68,6 +68,48 @@ test("renderCarouselSlides: 4 ordered square JPEG slides (cover/what/why/cta)", 
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
   });
+});
+
+test("coverDateLine: formats published_at as an IST (Asia/Kolkata) day", async () => {
+  // Mid-day UTC, comfortably inside the same IST day: 09:30Z → 15:00 IST on
+  // 2026-06-02 (a Tuesday). Style is en-GB with the brand middot separator.
+  assert.equal(
+    coverDateLine({ published_at: "2026-06-02T09:30:00.000Z" }),
+    "Tuesday · 2 June 2026"
+  );
+});
+
+test("coverDateLine: late-UTC timestamp rolls forward to the next IST day", async () => {
+  // 2026-06-02T20:00:00Z is Tuesday 2 June in UTC, but +05:30 pushes it to
+  // 2026-06-03T01:30 IST → Wednesday 3 June. This proves the IST offset is
+  // applied (UTC would have rendered "Tuesday · 2 June 2026").
+  assert.equal(
+    coverDateLine({ published_at: "2026-06-02T20:00:00.000Z" }),
+    "Wednesday · 3 June 2026"
+  );
+});
+
+test("coverDateLine: missing/invalid published_at → empty (headline-only cover)", async () => {
+  assert.equal(coverDateLine({}), "");
+  assert.equal(coverDateLine({ published_at: "not-a-date" }), "");
+  assert.equal(coverDateLine(null), "");
+});
+
+test("renderCarouselSlides: cover renders an IST date line when published_at is set", async () => {
+  // published_at mid-day UTC → "Tuesday · 2 June 2026" in IST. We assert it still
+  // produces a valid JPEG cover (exercises the dated cover branch).
+  const dated = { ...STORY, published_at: "2026-06-02T09:30:00.000Z" };
+  const slides = await renderCarouselSlides(dated);
+  assert.equal(slides.length, 4);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover JPEG
+});
+
+test("renderCarouselSlides: missing/invalid published_at → cover renders headline-only", async () => {
+  // No date and a bogus date both fall back to the bare-headline cover.
+  for (const story of [STORY, { ...STORY, published_at: "not-a-date" }]) {
+    const slides = await renderCarouselSlides(story);
+    assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]);
+  }
 });
 
 // ── renderer: lead-person portrait on the cover (L4 portrait feature) ──────────

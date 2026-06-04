@@ -42,6 +42,58 @@ const SHAPES = {
 const CAROUSEL_SLIDES = ["cover", "what", "why", "cta"];
 const JPEG_QUALITY = 85;
 
+// ── Instagram-grid safe zone ─────────────────────────────────────────────────
+//
+// The Instagram PROFILE GRID renders a centred square thumbnail of each post and
+// trims a few percent off every edge for the tile gutter. Content that sits hard
+// against the old 7.5% padding got sliced in the grid (left edge of the wordmark
+// and headline lost their first glyph: "QUYDLY"→"QYDLY", "JEE…"→"EE…"). We pull
+// all text inside a wider HORIZONTAL safe zone (~12.5% / 135px on a 1080 card) so
+// nothing the grid crop touches carries meaning, while keeping VERTICAL padding
+// at the original 7.5% so the opened post stays well-balanced top-to-bottom.
+const PAD_X_RATIO = 0.125; // horizontal — grid-crop safe
+const PAD_Y_RATIO = 0.075; // vertical — unchanged, opened-post look
+
+// Headlines longer than this render in the compact font so they stay inside the
+// card. Tuned to the horizontal safe zone: the grid-safe PAD_X_RATIO narrows the
+// text column ~12% vs the old 7.5% padding, so a headline wraps as if ~13%
+// longer. Dropping to the smaller size sooner keeps long headlines — especially
+// when the cover also stacks a date line and a portrait — from overflowing.
+const HEADLINE_COMPACT_CHARS = 80;
+
+// ── Cover date line ──────────────────────────────────────────────────────────
+//
+// "Tuesday · 3 June 2026" rendered on the cover slide, derived from the story's
+// publish date (stories.published_at — the canonical pipeline timestamp, and the
+// only timestamp the stories table carries; there is no stories.created_at). We
+// label in IST (+05:30) because the audience is India-heavy, so the displayed day
+// reads as the viewer's local day rather than UTC. Near a day boundary this can
+// differ from the pipeline's UTC day (a late-UTC timestamp renders as the next
+// IST day), which is intentional. Returns "" when there is no usable date — the
+// cover then renders headline-only.
+//
+// We format from explicit English names against a manually IST-shifted instant,
+// not Intl + timeZone:"Asia/Kolkata". Intl's timezone support needs full-ICU tz
+// data in the runtime, and the en-GB date order needs that locale to ship too; a
+// small-ICU host would silently format in UTC and/or US order. The card text is
+// English-only, so fixed name tables are both dependency-free and deterministic.
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000; // +05:30
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+function coverDateLine(story) {
+  const raw = story && story.published_at;
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+  // Shift the UTC instant by +05:30, then read its UTC wall-clock parts — those
+  // parts ARE the IST date. Produces "Tuesday · 3 June 2026".
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  return `${WEEKDAYS[ist.getUTCDay()]} · ${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]} ${ist.getUTCFullYear()}`;
+}
+
 let _fonts = null;
 async function loadFonts() {
   if (_fonts) return _fonts;
@@ -203,12 +255,13 @@ function rasterize(svg, { width, format }) {
 // ── Single headline card (X landscape / IG square) ───────────────────────────
 
 function cardTree({ headline, category, accent, width, height }) {
-  const pad = Math.round(width * 0.075);
+  const padX = Math.round(width * PAD_X_RATIO);
+  const padY = Math.round(width * PAD_Y_RATIO);
   return el("div", {
     style: {
       width, height, display: "flex", flexDirection: "column",
       justifyContent: "space-between", backgroundColor: BG,
-      padding: pad, fontFamily: "Lato",
+      padding: `${padY}px ${padX}px`, fontFamily: "Lato",
     },
   }, [
     // Top: brand + category chip
@@ -226,7 +279,7 @@ function cardTree({ headline, category, accent, width, height }) {
     el("div", {
       style: {
         display: "flex", color: FG, fontWeight: 700,
-        fontSize: Math.round(width * (headline.length > 90 ? 0.052 : 0.066)),
+        fontSize: Math.round(width * (headline.length > HEADLINE_COMPACT_CHARS ? 0.052 : 0.066)),
         lineHeight: 1.15,
       },
     }, headline),
@@ -304,9 +357,22 @@ function coverHeadline(headline, size) {
   return el("div", {
     style: {
       display: "flex", color: FG, fontWeight: 700,
-      fontSize: Math.round(size * (headline.length > 90 ? 0.058 : 0.072)), lineHeight: 1.15,
+      fontSize: Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072)), lineHeight: 1.15,
     },
   }, headline);
+}
+
+// "Tuesday · 3 June 2026" eyebrow above the cover headline. Returns null when
+// the story has no usable publish date (cover then renders headline-only).
+function coverDateRow(story, accent, size) {
+  const text = coverDateLine(story);
+  if (!text) return null;
+  return el("div", {
+    style: {
+      display: "flex", fontSize: Math.round(size * 0.026), fontWeight: 700,
+      color: accent, letterSpacing: 1, marginBottom: Math.round(size * 0.035),
+    },
+  }, text);
 }
 
 // Circular portrait + name + credit, shown above the headline on the cover when
@@ -338,11 +404,15 @@ function slideBody({ kind, story, accent, size, portrait }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
 
   if (kind === "cover") {
-    if (!portrait || !portrait.dataUri) return coverHeadline(headline, size);
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      coverPortraitBlock({ portrait, accent, size }),
-      coverHeadline(headline, size),
-    ]);
+    const dateRow = coverDateRow(story, accent, size);
+    const children = [];
+    if (dateRow) children.push(dateRow);
+    if (portrait && portrait.dataUri) children.push(coverPortraitBlock({ portrait, accent, size }));
+    children.push(coverHeadline(headline, size));
+    // Single child and no date → keep the original bare-headline node (matches
+    // the pre-feature layout exactly for stories with no publish date).
+    if (children.length === 1) return children[0];
+    return el("div", { style: { display: "flex", flexDirection: "column" } }, children);
   }
 
   if (kind === "what") {
@@ -376,12 +446,14 @@ function slideBody({ kind, story, accent, size, portrait }) {
 }
 
 function slideTree({ kind, story, accent, category, index, total, size, portrait }) {
-  const pad = Math.round(size * 0.075);
+  const padX = Math.round(size * PAD_X_RATIO);
+  const padY = Math.round(size * PAD_Y_RATIO);
   const hint = kind === "cta" ? "quydly.com" : (kind === "cover" ? "Swipe to read →" : "");
   return el("div", {
     style: {
       width: size, height: size, display: "flex", flexDirection: "column",
-      justifyContent: "space-between", backgroundColor: BG, padding: pad, fontFamily: "Lato",
+      justifyContent: "space-between", backgroundColor: BG,
+      padding: `${padY}px ${padX}px`, fontFamily: "Lato",
     },
   }, [
     slideHeader({ category, accent, size }),
@@ -428,4 +500,4 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides = CA
   return out;
 }
 
-export { SHAPES, CAROUSEL_SLIDES };
+export { SHAPES, CAROUSEL_SLIDES, coverDateLine };
