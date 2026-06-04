@@ -60,25 +60,44 @@ const JPEG_QUALITY = 85;
 const PAD_X_RATIO = 0.125; // horizontal — grid-crop safe
 const PAD_Y_RATIO = 0.075; // vertical — unchanged, opened-post look
 
+// Headlines longer than this render in the compact font so they stay inside the
+// card. Tuned to the horizontal safe zone: the grid-safe PAD_X_RATIO narrows the
+// text column ~12% vs the old 7.5% padding, so a headline wraps as if ~13%
+// longer. Dropping to the smaller size sooner keeps long headlines — especially
+// when the cover also stacks a date line and a portrait — from overflowing.
+const HEADLINE_COMPACT_CHARS = 80;
+
 // ── Cover date line ──────────────────────────────────────────────────────────
 //
 // "Tuesday · 3 June 2026" rendered on the cover slide, derived from the story's
-// publish date (stories.published_at, the canonical pipeline timestamp). We label
-// in IST (Asia/Kolkata, +05:30) because the audience is India-heavy, so the
-// displayed day should read as the viewer's local day rather than UTC. Note this
-// can differ from the pipeline's UTC day near a day boundary (a late-UTC
-// timestamp renders as the next IST day), which is intentional. Returns "" when
-// there is no usable date.
-const DATE_FMT = new Intl.DateTimeFormat("en-GB", {
-  weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata",
-});
+// publish date (stories.published_at — the canonical pipeline timestamp, and the
+// only timestamp the stories table carries; there is no stories.created_at). We
+// label in IST (+05:30) because the audience is India-heavy, so the displayed day
+// reads as the viewer's local day rather than UTC. Near a day boundary this can
+// differ from the pipeline's UTC day (a late-UTC timestamp renders as the next
+// IST day), which is intentional. Returns "" when there is no usable date — the
+// cover then renders headline-only.
+//
+// We format from explicit English names against a manually IST-shifted instant,
+// not Intl + timeZone:"Asia/Kolkata". Intl's timezone support needs full-ICU tz
+// data in the runtime, and the en-GB date order needs that locale to ship too; a
+// small-ICU host would silently format in UTC and/or US order. The card text is
+// English-only, so fixed name tables are both dependency-free and deterministic.
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000; // +05:30
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 function coverDateLine(story) {
-  const raw = story && (story.published_at || story.created_at);
+  const raw = story && story.published_at;
   if (!raw) return "";
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return "";
-  // en-GB gives "Tuesday, 3 June 2026"; swap the comma for the brand middot.
-  return DATE_FMT.format(d).replace(",", " ·");
+  // Shift the UTC instant by +05:30, then read its UTC wall-clock parts — those
+  // parts ARE the IST date. Produces "Tuesday · 3 June 2026".
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  return `${WEEKDAYS[ist.getUTCDay()]} · ${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]} ${ist.getUTCFullYear()}`;
 }
 
 let _fonts = null;
@@ -266,7 +285,7 @@ function cardTree({ headline, category, accent, width, height }) {
     el("div", {
       style: {
         display: "flex", color: FG, fontWeight: 700,
-        fontSize: Math.round(width * (headline.length > 90 ? 0.052 : 0.066)),
+        fontSize: Math.round(width * (headline.length > HEADLINE_COMPACT_CHARS ? 0.052 : 0.066)),
         lineHeight: 1.15,
       },
     }, headline),
@@ -344,7 +363,7 @@ function coverHeadline(headline, size) {
   return el("div", {
     style: {
       display: "flex", color: FG, fontWeight: 700,
-      fontSize: Math.round(size * (headline.length > 90 ? 0.058 : 0.072)), lineHeight: 1.15,
+      fontSize: Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072)), lineHeight: 1.15,
     },
   }, headline);
 }
