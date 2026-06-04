@@ -65,9 +65,13 @@ export function validatePost({ platform, text, story, constraints }) {
     errors.push("X post must not include a URL/link");
   }
 
-  // Hashtags are disallowed when the platform opts out (X). Cashtags ($AAPL) are
-  // a separate, allowed token and must NOT trip this — match # specifically.
-  if (constraints && constraints.allowHashtags === false && /(^|\s)#\w/.test(value)) {
+  // Hashtags are disallowed when the platform opts out (X, and IG before the
+  // curated block is appended downstream). Cashtags ($AAPL) use '$' and are a
+  // separate, allowed token, so match '#' specifically. A negative lookbehind
+  // catches a tag wherever it starts — at the start, after whitespace, OR
+  // adjacent to punctuation like "(#trending)" or ".#trending" — while a '#'
+  // that follows a word char (a URL fragment such as page#section) is left alone.
+  if (constraints && constraints.allowHashtags === false && /(?<!\w)#\w/.test(value)) {
     errors.push(`${platform} post must not include hashtags`);
   }
 

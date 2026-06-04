@@ -208,6 +208,28 @@ test("IG rejects an LLM caption that emits its own hashtag (allowHashtags: false
   assert.ok(v.errors.some((e) => /hashtag/i.test(e)), v.errors.join(", "));
 });
 
+test("IG rejects punctuation-adjacent hashtags, not just whitespace-prefixed ones", () => {
+  const base = instagram.format(TECH_STORY, "global").text;
+  for (const stray of ["(#trending)", ".#trending", "word,#trending", "#trending"]) {
+    const v = validatePost({
+      platform: "instagram", text: `${base} ${stray}`, story: TECH_STORY, constraints: instagram.CONSTRAINTS,
+    });
+    assert.ok(!v.valid, `expected rejection for ${stray}`);
+    assert.ok(v.errors.some((e) => /hashtag/i.test(e)), v.errors.join(", "));
+  }
+});
+
+test("IG hashtag check leaves a URL fragment (page#section) alone", () => {
+  // '#' after a word char is a fragment, not a tag — must not be flagged.
+  const v = validatePost({
+    platform: "instagram",
+    text: "Today's quiz recap. Visit quydly.com/daily#recap",
+    story: TECH_STORY,
+    constraints: instagram.CONSTRAINTS,
+  });
+  assert.ok(!v.errors.some((e) => /hashtag/i.test(e)), v.errors.join(", "));
+});
+
 test("curated block still validates: append runs post-validation, body stays clean", () => {
   // The block is added after validation, but sanity-check that a caption WITH the
   // curated block does not itself contain anything else the validator forbids
