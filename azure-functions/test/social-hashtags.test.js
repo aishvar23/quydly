@@ -186,11 +186,34 @@ test("appendHashtags: no-op-safe on empty/edge stories", () => {
   );
 });
 
-// ── integration: IG caption + hashtags passes validation ──────────────────────
+// ── integration: validation vs the curated block ─────────────────────────────
+//
+// The curated block is appended AFTER validation (social-post-generator.js), so
+// validation runs on the hashtag-free caption body. The deterministic draft must
+// validate, and an LLM caption that sneaks in its own hashtag must be REJECTED so
+// it falls back to the clean draft before the curated block is appended.
 
-test("IG caption with hashtags passes validation (allowHashtags: true)", () => {
+test("IG deterministic draft (no hashtags) passes validation", () => {
   const draft = instagram.format(TECH_STORY, "global");
-  const text = appendHashtags(draft.text, TECH_STORY);
-  const v = validatePost({ platform: "instagram", text, story: TECH_STORY, constraints: instagram.CONSTRAINTS });
+  const v = validatePost({ platform: "instagram", text: draft.text, story: TECH_STORY, constraints: instagram.CONSTRAINTS });
   assert.ok(v.valid, v.errors.join(", "));
+});
+
+test("IG rejects an LLM caption that emits its own hashtag (allowHashtags: false)", () => {
+  // A model caption with a stray #tag must not validate — otherwise it would be
+  // saved alongside the curated block, duplicating/contaminating the tag set.
+  const llmText = `${instagram.format(TECH_STORY, "global").text} #trending`;
+  const v = validatePost({ platform: "instagram", text: llmText, story: TECH_STORY, constraints: instagram.CONSTRAINTS });
+  assert.ok(!v.valid);
+  assert.ok(v.errors.some((e) => /hashtag/i.test(e)), v.errors.join(", "));
+});
+
+test("curated block still validates: append runs post-validation, body stays clean", () => {
+  // The block is added after validation, but sanity-check that a caption WITH the
+  // curated block does not itself contain anything else the validator forbids
+  // (the '#' check is the only hashtag gate, and it is bypassed by design here).
+  const draft = instagram.format(TECH_STORY, "global");
+  const withTags = appendHashtags(draft.text, TECH_STORY);
+  assert.ok(withTags.includes("#Quydly"));
+  assert.ok(withTags.startsWith(draft.text)); // body preserved verbatim, tags appended
 });
