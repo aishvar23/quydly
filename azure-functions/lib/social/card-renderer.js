@@ -22,18 +22,12 @@ import satori from "satori";
 import { Resvg } from "@resvg/resvg-js";
 import { PNG } from "pngjs";
 import jpeg from "jpeg-js";
+import { accentFor } from "./_categories.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
-// Per-category accent colour (matches config/categories.js ids).
-const ACCENT = {
-  world: "#2563EB",
-  tech: "#7C3AED",
-  finance: "#059669",
-  culture: "#DB2777",
-  science: "#D97706",
-};
-const DEFAULT_ACCENT = "#1D4ED8";
+// Per-category accent colour lives in _categories.js (single source of truth,
+// shared with the hashtag derivation) so the id set can't drift between them.
 const BG = "#0B0F1A";
 const FG = "#FFFFFF";
 const MUTED = "#9CA3AF";
@@ -246,7 +240,7 @@ function cardTree({ headline, category, accent, width, height }) {
 
 export async function renderStoryCard(story, { shape = "landscape", format = "png" } = {}) {
   const { width, height } = SHAPES[shape] || SHAPES.landscape;
-  const accent = ACCENT[story?.category_id] || DEFAULT_ACCENT;
+  const accent = accentFor(story?.category_id);
   const headline = oneLine(story?.headline) || "Today's news quiz";
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
@@ -407,7 +401,7 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
 // cover text-only. `fetchImpl` is injectable for tests.
 export async function renderCarouselSlides(story, { format = "jpeg", slides = CAROUSEL_SLIDES, withPortrait = false, fetchImpl } = {}) {
   const { width: size } = SHAPES.square;
-  const accent = ACCENT[story?.category_id] || DEFAULT_ACCENT;
+  const accent = accentFor(story?.category_id);
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
   const total = slides.length;

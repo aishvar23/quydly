@@ -13,6 +13,7 @@ import * as x from "./platforms/x.js";
 import * as facebook from "./platforms/facebook.js";
 import * as instagram from "./platforms/instagram.js";
 import { validatePost } from "./social-validation.js";
+import { appendHashtags } from "./platforms/_hashtags.js";
 
 const PLATFORMS = [x, facebook, instagram];
 const MODEL = "claude-sonnet-4-20250514";
@@ -119,7 +120,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igHashtags = false, candidateId, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -170,6 +171,14 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     const post = await generatePlatformPost({
       platform, story, audienceGeo: candidate.audience_geo, anthropic, cardService, igCarousel, logger,
     });
+
+    // Append the curated hashtag block to IG captions (reach §8.3). Done here —
+    // after generatePlatformPost (so it covers the LLM, validation-fallback, and
+    // deterministic paths uniformly) and after validation (so hashtags never trip
+    // the validator). IG-only; X/Facebook are untouched.
+    if (igHashtags && platform.PLATFORM === "instagram") {
+      post.text = appendHashtags(post.text, story);
+    }
 
     // Race-safe insert: ignoreDuplicates handles a concurrent generator.
     const { data: inserted, error: insErr } = await supabase
