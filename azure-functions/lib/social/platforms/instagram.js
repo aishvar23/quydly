@@ -17,10 +17,15 @@ export const CONSTRAINTS = {
   // L4 carousel: when enabled, the media asset is a 4-slide carousel
   // (cover / what happened / why it matters / CTA) rather than a single card.
   carousel: true,
-  // Unlike X, Instagram treats hashtags as a discovery surface. A curated block
-  // is appended downstream (see _hashtags.js, gated by SOCIAL_IG_HASHTAGS_ENABLED);
-  // validation must not reject the '#' token here.
-  allowHashtags: true,
+  // Instagram treats hashtags as a discovery surface, but the curated block is
+  // appended DOWNSTREAM — after validation (see _hashtags.js /
+  // social-post-generator.js), so the validator never sees it. We therefore
+  // still reject hashtags the LLM puts in the caption BODY: a stray model #tag
+  // would otherwise survive beside the curated set, producing duplicate/
+  // uncurated tags and defeating the "curated block" guarantee. Rejection falls
+  // back to the deterministic draft (hashtag-free), onto which the curated block
+  // is then appended cleanly.
+  allowHashtags: false,
 };
 
 export function format(story, audienceGeo) {
