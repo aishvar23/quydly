@@ -34,16 +34,25 @@ function startOfUtcDayIso(now) {
 // primary posts ≈ 24 real tweets/day, matching the prior anti-spam ceiling.
 // If SOCIAL_MAX_X_POSTS_PER_DAY is set in Azure, halve it for the same reason.
 // (The selector's maxCandidatesPerDayPerGeo is platform-agnostic — shared by
-// FB/IG — so it stays at 24; X-only volume is bounded here.) Other platforms
-// keep the conservative default. Override any platform via its env var.
+// FB/IG — so it stays at 24; X-only volume is bounded here.)
+//
+// Instagram is UNCAPPED (null): posts publish as soon as they're approved, so
+// volume tracks the pipeline's supply and spreads naturally across the day. A
+// fixed daily cap caused the opposite — supply (~17/day) exceeded the cap (10),
+// posts piled up as APPROVED, and the per-UTC-day counter reset at 00:00Z
+// released the whole backlog in one ~18-minute burst. Removing the cap removes
+// the pile-up, so there is nothing to burst. Set SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY
+// to re-impose a ceiling. Other platforms keep the conservative default.
 const DEFAULT_DAILY_CAP = 10;
-const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12 };
+const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12, instagram: null };
 
+// Returns the per-day cap, or null for uncapped.
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
   const v = Number(env[key]);
   if (Number.isFinite(v) && v > 0) return v;
-  return PLATFORM_DAILY_CAP_DEFAULTS[platform] ?? DEFAULT_DAILY_CAP;
+  const def = PLATFORM_DAILY_CAP_DEFAULTS[platform];
+  return def === undefined ? DEFAULT_DAILY_CAP : def; // null = uncapped
 }
 
 export async function publishApprovedPosts({
@@ -116,16 +125,19 @@ export async function publishApprovedPosts({
     return { published: 0, failed: 0, skipped: 0 };
   }
 
-  // Per-platform remaining daily budget.
+  // Per-platform remaining daily budget. Uncapped platforms (cap === null) skip
+  // the count query and never trip the cap gate below.
   const remaining = {};
   for (const p of enabledPlatforms) {
+    const cap = dailyCap(env, p);
+    if (cap == null) { remaining[p] = Infinity; continue; }
     const { count } = await supabase
       .from("social_posts")
       .select("id", { count: "exact", head: true })
       .eq("platform", p)
       .eq("status", "POSTED")
       .gte("published_at", startOfUtcDayIso(now));
-    remaining[p] = dailyCap(env, p) - (count || 0);
+    remaining[p] = cap - (count || 0);
   }
 
   let published = 0, failed = 0, skipped = 0;
