@@ -12,6 +12,7 @@ import { Readability } from "@mozilla/readability";
 import { hashUrl } from "../lib/canonicalise.js";
 import { getSupabase, getSbSender, getRedis } from "../lib/clients.js";
 import { lookupFeedByDomain } from "../lib/rss-feeds.js";
+import { retagCategory } from "../lib/ai-topic.js";
 import {
   AUDIENCES,
   extractMentionedGeos,
@@ -166,6 +167,25 @@ export default async function articleScraper(context, message) {
 
       const is_global_candidate = is_global_source && mentioned_geos.length >= 2;
 
+      // Re-tag AI-topic articles (tech/finance/world → ai) so independent AI
+      // press coverage can corroborate `ai` clusters instead of being walled off
+      // by the category-scoped clusterer. Flag-gated; ON by default — set
+      // AI_RETAG_ENABLED=false (or 0) in Azure to disable. Mirrors the
+      // SOCIAL_IG_HASHTAGS_ENABLED default-on env-toggle pattern.
+      const retagEnabled = !/^(0|false)$/i.test(String(process.env.AI_RETAG_ENABLED ?? "true"));
+      const effective_category_id = retagEnabled
+        ? retagCategory(category_id, { title, description, content })
+        : category_id;
+
+      if (effective_category_id !== category_id) {
+        context.log(JSON.stringify({
+          event:    "category_retagged",
+          url_hash,
+          from:     category_id,
+          to:       effective_category_id,
+        }));
+      }
+
       const { error: insertErr } = await supabase
         .from("raw_articles")
         .upsert(
@@ -173,7 +193,7 @@ export default async function articleScraper(context, message) {
             url_hash,
             canonical_url,
             domain:          source_domain,
-            category_id,
+            category_id:     effective_category_id,
             title,
             description,
             content,
