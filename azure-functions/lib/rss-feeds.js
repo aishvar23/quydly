@@ -9,7 +9,7 @@ const RSS_FEEDS = [
   // ── AI ─────────────────────────────────────────────────────────────────────
   // Dedicated AI/ML vertical. Listed FIRST so that for articles also carried by a
   // shared domain's broader feed (techcrunch/theverge/wired/technologyreview/
-  // venturebeat/arstechnica/zdnet/livemint/economictimes), the AI sub-feed wins
+  // arstechnica/zdnet/livemint/economictimes), the AI sub-feed wins
   // the discover url_hash dedup → the article is tagged `ai` rather than
   // tech/finance. Geo is domain-invariant, so lookupFeedByDomain stays correct.
   //
@@ -22,7 +22,6 @@ const RSS_FEEDS = [
   { url: "https://techcrunch.com/category/artificial-intelligence/feed/",         domain: "techcrunch.com",        category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
   { url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",     domain: "theverge.com",          category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
   { url: "https://www.technologyreview.com/topic/artificial-intelligence/feed",   domain: "technologyreview.com",  category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
-  { url: "https://venturebeat.com/category/ai/feed/",                             domain: "venturebeat.com",       category: "ai", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
   { url: "https://www.wired.com/feed/tag/ai/latest/rss",                          domain: "wired.com",             category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
   { url: "https://arstechnica.com/ai/feed/",                                      domain: "arstechnica.com",       category: "ai", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
   { url: "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",           domain: "zdnet.com",             category: "ai", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
@@ -82,7 +81,6 @@ const RSS_FEEDS = [
   { url: "https://9to5mac.com/feed/",                                     domain: "9to5mac.com",          category: "tech",    authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
   { url: "https://9to5google.com/feed/",                                  domain: "9to5google.com",       category: "tech",    authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
   { url: "https://www.macrumors.com/macrumors.xml",                       domain: "macrumors.com",        category: "tech",    authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
-  { url: "https://feeds.feedburner.com/venturebeat/SZYF",                 domain: "venturebeat.com",      category: "tech",    authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
   { url: "https://news.ycombinator.com/rss",                              domain: "ycombinator.com",      category: "tech",    authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: true  },
 
   // ── Finance ────────────────────────────────────────────────────────────────
