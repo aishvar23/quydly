@@ -57,16 +57,27 @@ function imgResponse() {
 
 // ── renderer ─────────────────────────────────────────────────────────────────
 
-test("renderCarouselSlides: 4 ordered square JPEG slides (cover/what/why/cta)", async () => {
+test("renderCarouselSlides: no whyItMatters → 4 slides (cover/what/keypoints/cta)", async () => {
   const slides = await renderCarouselSlides(STORY);
   assert.equal(slides.length, 4);
-  assert.deepEqual(slides.map((s) => s.slideType), CAROUSEL_SLIDES);
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "cta"]);
   slides.forEach((s, i) => {
     assert.equal(s.index, i);
     assert.equal(s.contentType, "image/jpeg");
     assert.deepEqual([s.width, s.height], [1080, 1080]);
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
+  });
+});
+
+test("renderCarouselSlides: whyItMatters → 5 slides with a separate Why it matters slide", async () => {
+  const slides = await renderCarouselSlides(STORY, { whyItMatters: ["Third cut since 2023", "Echoes the 2019 stimulus"] });
+  assert.equal(slides.length, 5);
+  assert.deepEqual(slides.map((s) => s.slideType), CAROUSEL_SLIDES);
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "why", "cta"]);
+  slides.forEach((s, i) => {
+    assert.equal(s.index, i);
+    assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEG
   });
 });
 
@@ -119,7 +130,7 @@ test("renderCarouselSlides: withPortrait fetches the lead person's licensed phot
   const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
   const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
   assert.equal(slides.length, 4);
-  assert.deepEqual(slides.map((s) => s.slideType), CAROUSEL_SLIDES);
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "cta"]);
   slides.forEach((s) => assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8])); // valid JPEGs
   assert.deepEqual(calls, ["https://upload.wikimedia.org/jane.png"]); // fetched exactly the portrait
 });

@@ -37,9 +37,20 @@ const SHAPES = {
   square: { width: 1080, height: 1080 },
 };
 
-// The four-slide carousel (tracker L4): headline / what happened / why it
-// matters / CTA. Order here is the order they are published in.
-const CAROUSEL_SLIDES = ["cover", "what", "why", "cta"];
+// Carousel slide order. "Key points" and "Why it matters" are SEPARATE slides:
+// cover / what happened / key points / why it matters / CTA. The "why" slide is
+// included only when the generator supplied historical points for it
+// (whyItMatters) — otherwise the set is 4 slides and no empty "Why it matters"
+// slide is shown. CAROUSEL_SLIDES is the full ordered set.
+const CAROUSEL_SLIDES = ["cover", "what", "keypoints", "why", "cta"];
+const CAROUSEL_SLIDES_NO_WHY = ["cover", "what", "keypoints", "cta"];
+
+// Pick the slide list for a story based on whether historical "why it matters"
+// points were supplied. Keeps the "why" slide out of the set when it would be empty.
+function carouselSlidesFor(whyItMatters) {
+  const why = Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : [];
+  return why.length ? CAROUSEL_SLIDES : CAROUSEL_SLIDES_NO_WHY;
+}
 const JPEG_QUALITY = 85;
 
 // ── Instagram-grid safe zone ─────────────────────────────────────────────────
@@ -423,33 +434,31 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters }) {
     ]);
   }
 
-  if (kind === "why") {
-    // Two stacked blocks: "Key points" (today's key_points — the slide's
-    // original content, just relabelled) and "Why it matters" (LLM-generated
-    // historical-context points, passed in via `whyItMatters`). The second
-    // block renders only when points were supplied; otherwise the slide shows
-    // the Key points block alone, never worse than the pre-feature slide.
+  if (kind === "keypoints") {
+    // Today's key_points (the slide formerly labelled "Why it matters").
     const points = keyPoints(story).slice(0, 3);
-    const keyRows = points.length
+    const rows = points.length
       ? points.map((p) => bulletRow(p, accent, size))
       : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
-
-    const blocks = [
+    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Key points", accent, size),
-      ...keyRows,
-    ];
+      ...rows,
+    ]);
+  }
 
-    const why = Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean).slice(0, 3) : [];
-    if (why.length) {
-      blocks.push(
-        el("div", { style: { display: "flex", flexDirection: "column", marginTop: Math.round(size * 0.045) } }, [
-          eyebrow("Why it matters", accent, size),
-          ...why.map((p) => bulletRow(p, accent, size)),
-        ])
-      );
-    }
-
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, blocks);
+  if (kind === "why") {
+    // The historical "Why it matters" points (LLM-generated, passed in via
+    // whyItMatters) on their own slide. This slide is only included in the set
+    // when points exist (see carouselSlidesFor); the summary fallback guards the
+    // case where the slide is requested explicitly without points.
+    const why = (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : []).slice(0, 3);
+    const rows = why.length
+      ? why.map((p) => bulletRow(p, accent, size))
+      : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
+    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+      eyebrow("Why it matters", accent, size),
+      ...rows,
+    ]);
   }
 
   // cta
@@ -489,15 +498,18 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
 // gains a circular portrait inset (licensed photo + credit). Resolving the
 // portrait is best-effort and happens once up front; any failure leaves the
 // cover text-only. `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides = CAROUSEL_SLIDES, withPortrait = false, whyItMatters = [], fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], fetchImpl } = {}) {
   const { width: size } = SHAPES.square;
   const accent = accentFor(story?.category_id);
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
-  const total = slides.length;
+  // Default slide set depends on whether historical "why it matters" points were
+  // supplied (the "why" slide is dropped when empty). An explicit `slides` wins.
+  const slideList = slides || carouselSlidesFor(whyItMatters);
+  const total = slideList.length;
 
   let portrait = null;
-  if (withPortrait && slides.includes("cover")) {
+  if (withPortrait && slideList.includes("cover")) {
     const lead = leadPersonPortrait(story);
     if (lead) {
       const dataUri = await fetchImageDataUri(lead.url, fetchImpl ? { fetchImpl } : {});
@@ -506,8 +518,8 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides = CA
   }
 
   const out = [];
-  for (let index = 0; index < slides.length; index++) {
-    const kind = slides[index];
+  for (let index = 0; index < slideList.length; index++) {
+    const kind = slideList[index];
     const svg = await satori(
       slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null, whyItMatters }),
       { width: size, height: size, fonts }
