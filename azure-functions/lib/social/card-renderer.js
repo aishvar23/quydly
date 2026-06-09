@@ -400,7 +400,7 @@ function coverPortraitBlock({ portrait, accent, size }) {
 
 // Build the inner body for one slide kind. `size` is the square edge length.
 // `portrait` (cover only) is { dataUri, name, credit } or null.
-function slideBody({ kind, story, accent, size, portrait }) {
+function slideBody({ kind, story, accent, size, portrait, whyItMatters }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
 
   if (kind === "cover") {
@@ -424,14 +424,32 @@ function slideBody({ kind, story, accent, size, portrait }) {
   }
 
   if (kind === "why") {
+    // Two stacked blocks: "Key points" (today's key_points — the slide's
+    // original content, just relabelled) and "Why it matters" (LLM-generated
+    // historical-context points, passed in via `whyItMatters`). The second
+    // block renders only when points were supplied; otherwise the slide shows
+    // the Key points block alone, never worse than the pre-feature slide.
     const points = keyPoints(story).slice(0, 3);
-    const rows = points.length
+    const keyRows = points.length
       ? points.map((p) => bulletRow(p, accent, size))
       : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow("Why it matters", accent, size),
-      ...rows,
-    ]);
+
+    const blocks = [
+      eyebrow("Key points", accent, size),
+      ...keyRows,
+    ];
+
+    const why = Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean).slice(0, 3) : [];
+    if (why.length) {
+      blocks.push(
+        el("div", { style: { display: "flex", flexDirection: "column", marginTop: Math.round(size * 0.045) } }, [
+          eyebrow("Why it matters", accent, size),
+          ...why.map((p) => bulletRow(p, accent, size)),
+        ])
+      );
+    }
+
+    return el("div", { style: { display: "flex", flexDirection: "column" } }, blocks);
   }
 
   // cta
@@ -445,7 +463,7 @@ function slideBody({ kind, story, accent, size, portrait }) {
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, portrait }) {
+function slideTree({ kind, story, accent, category, index, total, size, portrait, whyItMatters }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
   const hint = kind === "cta" ? "quydly.com" : (kind === "cover" ? "Swipe to read →" : "");
@@ -458,7 +476,7 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait }),
+      slideBody({ kind, story, accent, size, portrait, whyItMatters }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -471,7 +489,7 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
 // gains a circular portrait inset (licensed photo + credit). Resolving the
 // portrait is best-effort and happens once up front; any failure leaves the
 // cover text-only. `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides = CAROUSEL_SLIDES, withPortrait = false, fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", slides = CAROUSEL_SLIDES, withPortrait = false, whyItMatters = [], fetchImpl } = {}) {
   const { width: size } = SHAPES.square;
   const accent = accentFor(story?.category_id);
   const category = oneLine(story?.category_id || "news");
@@ -491,7 +509,7 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides = CA
   for (let index = 0; index < slides.length; index++) {
     const kind = slides[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null }),
+      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null, whyItMatters }),
       { width: size, height: size, fonts }
     );
     const { buffer, contentType } = rasterize(svg, { width: size, format });
