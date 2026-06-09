@@ -34,10 +34,20 @@ function startOfUtcDayIso(now) {
 // primary posts ≈ 24 real tweets/day, matching the prior anti-spam ceiling.
 // If SOCIAL_MAX_X_POSTS_PER_DAY is set in Azure, halve it for the same reason.
 // (The selector's maxCandidatesPerDayPerGeo is platform-agnostic — shared by
-// FB/IG — so it stays at 24; X-only volume is bounded here.) Other platforms
-// keep the conservative default. Override any platform via its env var.
+// FB/IG — so it stays at 24; X-only volume is bounded here.)
+//
+// Instagram is capped at 25 to match Meta's content-publishing quota (25 API
+// posts per rolling 24h). At ~17/day supply this never binds in normal
+// operation — so there is no artificial throttle and no pile-up to flush in a
+// midnight burst. (The old cap of 10 sat BELOW supply, which is exactly what
+// caused the backlog + 00:00Z burst.) The cap now matters only as a safety rail:
+// if a one-time backlog flush or an abnormal spike would exceed Meta's limit,
+// the gate SKIPS the overflow — leaving it APPROVED to publish next window —
+// instead of letting Meta reject it and the post get marked FAILED (terminal).
+// Override via SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY. Other platforms keep the
+// conservative default.
 const DEFAULT_DAILY_CAP = 10;
-const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12 };
+const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12, instagram: 25 };
 
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
