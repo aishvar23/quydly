@@ -58,8 +58,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
 
   // Render + upload every carousel slide. Returns an ordered array of
   // { url, index, slideType, width, height, contentType } — order IS publish order.
-  async function buildCarousel({ story }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [] }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${s.index}-${s.slideType}.jpg`;
@@ -89,11 +89,11 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [] }) {
       if (!story || story.id == null) return null;
       const key = `${story.id}:carousel`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));
