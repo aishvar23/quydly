@@ -93,9 +93,15 @@ export default async function articleScraper(context, message) {
     });
 
     if (!res.ok) {
-      // Non-retryable client errors (4xx except 429): complete immediately.
-      // Throwing here burns the retry budget and eventually DLQs — pointless for 403/404.
-      const isNonRetryable = res.status !== 429 && res.status >= 400 && res.status < 500;
+      // Non-retryable client errors — ALL 4xx, including 429 — mark FAILED and
+      // complete immediately; never retry. Throwing burns the 5-delivery retry
+      // budget and dead-letters, which is pointless: a 403/404 won't change, and
+      // a site that 429s our bot UA (e.g. venturebeat) keeps 429ing on every
+      // retry, so all 5 attempts dead-letter. `discover` dedups against
+      // scrape_queue every run, so a FAILED url_hash is never re-enqueued — one
+      // clean failure, no churn (this was ~41% of the scrape DLQ). Only 5xx and
+      // network/timeout errors (the catch below) retry, since those are transient.
+      const isNonRetryable = res.status >= 400 && res.status < 500;
       if (isNonRetryable) {
         await supabase
           .from("scrape_queue")
