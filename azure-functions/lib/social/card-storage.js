@@ -10,9 +10,19 @@
 // getCardUrl is memoised per (story.id, shape) for the lifetime of the service
 // so one story renders each shape at most once across the platform loop.
 
+import { createHash } from "node:crypto";
 import { renderStoryCard, renderCarouselSlides } from "./card-renderer.js";
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
+
+// Carousel slides now depend on whyItMatters (the LLM "Why it matters" block),
+// so the per-story memo must key on those points too — otherwise an earlier
+// empty/fallback render would be returned for a later call that did produce
+// points, silently dropping the new block. "nowhy" for the empty case.
+function whyFingerprint(whyItMatters) {
+  if (!Array.isArray(whyItMatters) || whyItMatters.length === 0) return "nowhy";
+  return createHash("sha1").update(JSON.stringify(whyItMatters)).digest("hex").slice(0, 12);
+}
 
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
@@ -91,7 +101,7 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // per story for the service's lifetime.
     async getCarouselSlideUrls({ story, whyItMatters = [] }) {
       if (!story || story.id == null) return null;
-      const key = `${story.id}:carousel`;
+      const key = `${story.id}:carousel:${whyFingerprint(whyItMatters)}`;
       if (cache.has(key)) return cache.get(key);
       const p = buildCarousel({ story, whyItMatters }).catch((err) => {
         logger.warn(JSON.stringify({
