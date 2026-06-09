@@ -41,8 +41,8 @@ function makeSupabase({ duePosts, counts = {} }) {
   const byId = new Map(duePosts.map((p) => [p.id, { ...p }]));
   const updates = [];
 
-  function from() {
-    const q = { op: "select", filters: {}, payload: null, count: false, single: false };
+  function from(table) {
+    const q = { table, op: "select", filters: {}, payload: null, count: false, single: false };
     q.select = (_cols, opts) => { if (opts && opts.head) q.count = true; return q; };
     q.update = (payload) => { q.op = "update"; q.payload = payload; return q; };
     q.eq = (k, v) => { q.filters[k] = v; return q; };
@@ -73,7 +73,13 @@ function makeSupabase({ duePosts, counts = {} }) {
       const platform = q.filters.platform;
       return { count: counts[platform] || 0, error: null };
     }
-    return { data: duePosts, error: null };
+    // carousel slide lookups aren't under test here.
+    if (q.table === "social_media_assets") return { data: [], error: null };
+    // Posts fetch: honour the platform allow-list (the publisher excludes capped
+    // platforms from the query), so the mock reflects which rows actually return.
+    let rows = duePosts;
+    if (q.filters.in_platform) rows = rows.filter((p) => q.filters.in_platform.includes(p.platform));
+    return { data: rows, error: null };
   }
 
   return { client: { from }, byId, updates };
@@ -111,10 +117,36 @@ test("publishApprovedPosts: failure marks FAILED with error_message", async () =
 test("publishApprovedPosts: respects per-day cap", async () => {
   const sb = makeSupabase({ duePosts: [xPost("a"), xPost("b")], counts: { x: 1 } });
   const publishers = { x: async (p) => ({ platformPostId: `t_${p.id}`, rawResponse: {} }) };
-  // cap 1, already 1 posted today → 0 remaining → both skipped
+  // cap 1, already 1 posted today → 0 remaining. X is the only platform and it's
+  // capped, so it's excluded from the fetch entirely (nothing published, nothing
+  // even claimed/skipped) and the posts are left APPROVED for the next window.
   const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: { SOCIAL_MAX_X_POSTS_PER_DAY: "1" } });
   assert.equal(res.published, 0);
-  assert.equal(res.skipped, 2);
+  assert.equal(sb.byId.get("a").status, "APPROVED");
+  assert.equal(sb.byId.get("b").status, "APPROVED");
+});
+
+test("publishApprovedPosts: a capped platform does not starve a publishable one", async () => {
+  // Regression: X is capped (cap 1, 1 already posted) and its APPROVED backlog
+  // is OLDER than IG's. Ordered oldest-first, X would fill the batch and starve
+  // IG. The publisher must exclude capped X from the fetch so IG still publishes.
+  const ig = { id: "ig1", story_id: 2, platform: "instagram", audience_geo: "global",
+    post_text: "cap quydly.com", media_url: "https://cdn.test/0.jpg", status: "APPROVED",
+    scheduled_for: null, platform_post_id: null };
+  const sb = makeSupabase({ duePosts: [xPost("x1"), xPost("x2"), ig], counts: { x: 1 } });
+  const calls = [];
+  const publishers = {
+    x: async (p) => { calls.push("x"); return { platformPostId: `t_${p.id}`, rawResponse: {} }; },
+    instagram: async (p) => { calls.push("ig"); return { platformPostId: `ig_${p.id}`, rawResponse: {} }; },
+  };
+  const res = await publishApprovedPosts({
+    supabase: sb.client, publishers, getCreds: CREDS_FN, getIgCreds: CREDS_FN,
+    env: { SOCIAL_MAX_X_POSTS_PER_DAY: "1", SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY: "25" },
+  });
+  assert.equal(res.published, 1);                       // the IG post published
+  assert.deepEqual(calls, ["ig"]);                      // X never attempted (excluded from fetch)
+  assert.equal(sb.byId.get("ig1").status, "POSTED");
+  assert.equal(sb.byId.get("x1").status, "APPROVED");   // X left for the next window
 });
 
 test("publishApprovedPosts: never publishes Instagram without media (#16)", async () => {

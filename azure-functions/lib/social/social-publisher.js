@@ -108,12 +108,36 @@ export async function publishApprovedPosts({
     return (assets || []).map((a) => ({ url: a.asset_url }));
   }
 
-  // Due, unpublished posts for supported platforms.
+  // Per-platform remaining daily budget — computed BEFORE the fetch so capped
+  // platforms can be EXCLUDED from it. A capped platform keeps accumulating
+  // APPROVED posts it can't publish today; ordered oldest-first, that backlog
+  // sorts to the front of the queue and fills the entire BATCH every run,
+  // starving other publishable platforms. (This is exactly what stalled
+  // Instagram: once X's capped backlog grew past BATCH rows, every fetch came
+  // back all-X, all skipped, and IG never made it into the batch.) Excluding
+  // capped platforms keeps the batch full of posts that can actually publish.
+  const remaining = {};
+  for (const p of enabledPlatforms) {
+    const { count } = await supabase
+      .from("social_posts")
+      .select("id", { count: "exact", head: true })
+      .eq("platform", p)
+      .eq("status", "POSTED")
+      .gte("published_at", startOfUtcDayIso(now));
+    remaining[p] = dailyCap(env, p) - (count || 0);
+  }
+  const publishablePlatforms = enabledPlatforms.filter((p) => remaining[p] > 0);
+  if (publishablePlatforms.length === 0) {
+    logger(JSON.stringify({ event: "social_publish_none", reason: "all_platforms_capped" }));
+    return { published: 0, failed: 0, skipped: 0 };
+  }
+
+  // Due, unpublished posts for platforms that still have budget today.
   const { data: posts, error } = await supabase
     .from("social_posts")
     .select("id, story_id, platform, audience_geo, post_text, media_url, status, scheduled_for, platform_post_id, social_question_id")
     .in("status", ["APPROVED", "SCHEDULED"])
-    .in("platform", enabledPlatforms)
+    .in("platform", publishablePlatforms)
     .is("platform_post_id", null)
     .or(`scheduled_for.is.null,scheduled_for.lte.${new Date(now).toISOString()}`)
     .order("scheduled_for", { ascending: true, nullsFirst: true })
@@ -124,18 +148,6 @@ export async function publishApprovedPosts({
   if (!posts || posts.length === 0) {
     logger(JSON.stringify({ event: "social_publish_none" }));
     return { published: 0, failed: 0, skipped: 0 };
-  }
-
-  // Per-platform remaining daily budget.
-  const remaining = {};
-  for (const p of enabledPlatforms) {
-    const { count } = await supabase
-      .from("social_posts")
-      .select("id", { count: "exact", head: true })
-      .eq("platform", p)
-      .eq("status", "POSTED")
-      .gte("published_at", startOfUtcDayIso(now));
-    remaining[p] = dailyCap(env, p) - (count || 0);
   }
 
   let published = 0, failed = 0, skipped = 0;
