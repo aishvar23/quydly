@@ -12,12 +12,18 @@
 import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
 import { validatePost } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
+import { appendSourceLinks } from "./platforms/_sources.js";
 
 const PLATFORMS = PLATFORM_MODULES;
 const MODEL = "claude-sonnet-4-20250514";
 
 const STORY_COLUMNS =
-  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events";
+  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents";
+
+// IG captions append at most this many curated hashtags (reach §8.3). Topical
+// (category + entity) tags are selected first, so truncating to 3 preserves the
+// most-relevant tags and trims always-available brand tags last.
+const IG_CAPTION_MAX_HASHTAGS = 3;
 
 // Callable logger matching the Azure Functions `context.log` convention
 // (a function with .warn / .error attached), so handlers can pass context.log directly.
@@ -217,12 +223,21 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
       platform, story, audienceGeo: candidate.audience_geo, anthropic, cardService, igCarousel, logger,
     });
 
-    // Append the curated hashtag block to IG captions (reach §8.3). Done here —
-    // after generatePlatformPost (so it covers the LLM, validation-fallback, and
-    // deterministic paths uniformly) and after validation (so hashtags never trip
-    // the validator). IG-only; X/Facebook are untouched.
-    if (igHashtags && platform.PLATFORM === "instagram") {
-      post.text = appendHashtags(post.text, story);
+    // Append source attribution + the curated hashtag block to IG captions
+    // (attribution + reach §8.3). Done here — after generatePlatformPost (so it
+    // covers the LLM, validation-fallback, and deterministic paths uniformly)
+    // and after validation (so neither source links nor hashtags trip the
+    // validator). Order: body → Sources block → hashtags (tags sit at the very
+    // bottom of the caption by IG convention). IG-only; X/Facebook are untouched.
+    if (platform.PLATFORM === "instagram") {
+      // Source links from stories.source_documents (best-effort: no-op when the
+      // story has no usable HTTPS source URLs). Not flag-gated — attribution is
+      // always desirable when sources exist.
+      post.text = appendSourceLinks(post.text, story);
+      if (igHashtags) {
+        // Cap at IG_CAPTION_MAX_HASHTAGS most-relevant tags (topical first).
+        post.text = appendHashtags(post.text, story, { max: IG_CAPTION_MAX_HASHTAGS });
+      }
     }
 
     // Race-safe insert: ignoreDuplicates handles a concurrent generator.

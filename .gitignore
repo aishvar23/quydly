@@ -16,3 +16,6 @@ frontend/web-build/
 # OS
 .DS_Store
 .vercel
+
+# Local render artifacts
+azure-functions/sample-cards/
