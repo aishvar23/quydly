@@ -48,7 +48,8 @@ function makeSupabase({ duePosts, counts = {} }) {
     q.eq = (k, v) => { q.filters[k] = v; return q; };
     q.in = (k, v) => { q.filters[`in_${k}`] = v; return q; };
     q.is = (k, v) => { q.filters[`is_${k}`] = v; return q; };
-    q.or = () => q; q.gte = () => q; q.lte = () => q;
+    q.or = (clause) => { (q.orClauses ||= []).push(clause); return q; };
+    q.gte = () => q; q.lte = () => q;
     q.order = () => q; q.limit = () => q;
     q.maybeSingle = () => { q.single = true; return resolve(q); };
     q.then = (res, rej) => resolve(q).then(res, rej);
@@ -79,6 +80,15 @@ function makeSupabase({ duePosts, counts = {} }) {
     // platforms from the query), so the mock reflects which rows actually return.
     let rows = duePosts;
     if (q.filters.in_platform) rows = rows.filter((p) => q.filters.in_platform.includes(p.platform));
+    // Honour the media-exclusion or-clause the publisher applies: a media-required
+    // platform's media-less rows are filtered OUT of the fetch (keep only rows with
+    // media, or rows whose platform is in the media-optional allow-list).
+    const mediaClause = (q.orClauses || []).find((c) => c.includes("media_url.not.is.null"));
+    if (mediaClause) {
+      const m = mediaClause.match(/platform\.in\.\(([^)]*)\)/);
+      const optional = m ? m[1].split(",").filter(Boolean) : [];
+      rows = rows.filter((p) => p.media_url != null || optional.includes(p.platform));
+    }
     return { data: rows, error: null };
   }
 
@@ -149,6 +159,35 @@ test("publishApprovedPosts: a capped platform does not starve a publishable one"
   assert.equal(sb.byId.get("x1").status, "APPROVED");   // X left for the next window
 });
 
+test("publishApprovedPosts: media-less rows of a media-required platform don't starve the batch", async () => {
+  // Regression: a backlog of media-less Facebook drafts (legacy AUTO_APPROVED rows
+  // created before card rendering) is OLDER than a carded Instagram post. Ordered
+  // oldest-first, those FB rows would fill the BATCH and all get skipped (no media),
+  // starving IG. The publisher must EXCLUDE media-less rows of media-required
+  // platforms from the fetch, so they never enter the batch.
+  const fbA = { id: "fbA", story_id: 1, platform: "facebook", audience_geo: "global",
+    post_text: "fb quydly.com", media_url: null, status: "APPROVED", scheduled_for: null, platform_post_id: null };
+  const fbB = { ...fbA, id: "fbB" };
+  const ig = { id: "ig1", story_id: 2, platform: "instagram", audience_geo: "global",
+    post_text: "ig quydly.com", media_url: "https://cdn.test/0.jpg", status: "APPROVED",
+    scheduled_for: null, platform_post_id: null };
+  const sb = makeSupabase({ duePosts: [fbA, fbB, ig] });
+  const calls = [];
+  const publishers = {
+    facebook: async (p) => { calls.push("fb"); return { platformPostId: `fb_${p.id}`, rawResponse: {} }; },
+    instagram: async (p) => { calls.push("ig"); return { platformPostId: `ig_${p.id}`, rawResponse: {} }; },
+  };
+  const res = await publishApprovedPosts({
+    supabase: sb.client, publishers, getIgCreds: CREDS_FN, getFbCreds: CREDS_FN,
+    env: { SOCIAL_MAX_FACEBOOK_POSTS_PER_DAY: "10", SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY: "25" },
+  });
+  assert.equal(res.published, 1);                  // IG published
+  assert.equal(res.skipped, 0);                    // FB rows excluded from fetch, NOT fetched-then-skipped
+  assert.deepEqual(calls, ["ig"]);
+  assert.equal(sb.byId.get("ig1").status, "POSTED");
+  assert.equal(sb.byId.get("fbA").status, "APPROVED"); // left untouched, not skipped
+});
+
 test("publishApprovedPosts: never publishes Instagram without media (#16)", async () => {
   const igPost = { id: "ig", story_id: 1, platform: "instagram", audience_geo: "global",
     post_text: "cap quydly.com", media_url: null, status: "APPROVED", scheduled_for: null, platform_post_id: null };
@@ -156,7 +195,9 @@ test("publishApprovedPosts: never publishes Instagram without media (#16)", asyn
   let called = false;
   const publishers = { instagram: async () => { called = true; return { platformPostId: "x", rawResponse: {} }; } };
   const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: {} });
-  assert.equal(called, false);
-  assert.equal(res.skipped, 1);
+  assert.equal(called, false);                        // never published (#16)
+  // Media-less IG rows are now excluded at the fetch (not fetched-then-skipped),
+  // so they don't count as skipped; the in-loop media gate remains as a backstop.
+  assert.equal(res.skipped, 0);
   assert.equal(sb.byId.get("ig").status, "APPROVED"); // untouched
 });
