@@ -144,6 +144,18 @@ export async function publishApprovedPosts({
     return { published: 0, failed: 0, skipped: 0 };
   }
 
+  // Media-required platforms (IG #16, FB) can only publish with a rendered card;
+  // a media-less row is skipped in the loop below. Exclude those rows from the
+  // fetch itself, or — ordered oldest-first — a backlog of media-less drafts
+  // (e.g. legacy AUTO_APPROVED FB rows created before card rendering existed)
+  // fills the whole BATCH every run, all skipped, starving publishable platforms.
+  // (Same starvation the capped-platform exclusion above prevents.) Keep a row
+  // only if it has media OR its platform doesn't require media.
+  const mediaOptional = publishablePlatforms.filter((p) => !requiresMedia(p));
+  const mediaClause = mediaOptional.length
+    ? `media_url.not.is.null,platform.in.(${mediaOptional.join(",")})`
+    : "media_url.not.is.null";
+
   // Due, unpublished posts for platforms that still have budget today.
   const { data: posts, error } = await supabase
     .from("social_posts")
@@ -152,6 +164,7 @@ export async function publishApprovedPosts({
     .in("platform", publishablePlatforms)
     .is("platform_post_id", null)
     .or(`scheduled_for.is.null,scheduled_for.lte.${new Date(now).toISOString()}`)
+    .or(mediaClause)
     .order("scheduled_for", { ascending: true, nullsFirst: true })
     .order("created_at", { ascending: true })
     .limit(BATCH);
