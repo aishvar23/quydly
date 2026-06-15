@@ -17,6 +17,7 @@
 // pre-feature caption).
 
 import { CONSTRAINTS } from "./instagram.js";
+import { appendBlock } from "./_shared.js";
 
 // Keep the block short: a handful of links keeps the caption readable and the
 // "Sources" block scannable. The synthesiser typically attaches 2–5 documents.
@@ -41,30 +42,17 @@ export function sourceLinksFor(story, { max = DEFAULT_MAX_SOURCES } = {}) {
   return out;
 }
 
-// Append a "Sources:" block to a caption, separated by a blank line, staying
-// within IG's caption cap. Adds as many whole URLs as fit (never splits a URL,
-// never truncates the caption body); returns the caption unchanged if the
-// header + even one URL would not fit. Cap defaults to instagram.js
+// Append a newline-joined "Sources:" block to a caption, separated by a blank
+// line, staying within IG's caption cap. Adds as many whole URLs as fit (never
+// splits a URL, never truncates the caption body); returns the caption unchanged
+// if the header + even one URL would not fit. Cap defaults to instagram.js
 // CONSTRAINTS.maxLength — the same limit the validator enforces on the body.
+// Greedy fitting is shared with the hashtag block via appendBlock.
 export function appendSourceLinks(text, story, opts = {}) {
-  const max = opts.maxLength ?? CONSTRAINTS.maxLength;
-  const body = String(text || "");
   const urls = sourceLinksFor(story, opts);
-  if (!urls.length) return body;
-
-  const header = "Sources:";
-  const sep = body ? "\n\n" : "";
-  // Greedily fit whole URLs (each on its own line under the header) under the cap.
-  // fixed = body + separator + header; each URL adds "\n" + url.
-  const fixed = body.length + sep.length + header.length;
-  const fitted = [];
-  let lineLen = 0;
-  for (const url of urls) {
-    const addition = 1 + url.length; // 1 = "\n" before each URL line
-    if (fixed + lineLen + addition > max) break;
-    fitted.push(url);
-    lineLen += addition;
-  }
-  if (!fitted.length) return body;
-  return `${body}${sep}${header}\n${fitted.join("\n")}`;
+  return appendBlock(text, urls, {
+    header: "Sources:",
+    joiner: "\n",
+    maxLength: opts.maxLength ?? CONSTRAINTS.maxLength,
+  });
 }
