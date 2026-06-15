@@ -17,6 +17,7 @@ export const CONSTRAINTS = {
   // Facebook on media presence the same way it gates Instagram.
   requiresMedia: true,
   cardShape: "square",
+  cardFormat: "jpeg", // FB /photos posts the same square JPEG card as Instagram
 };
 
 export function format(story, audienceGeo) {
@@ -37,7 +38,7 @@ export function format(story, audienceGeo) {
     text,
     mediaUrl: null,
     linkUrl: url,
-    requiresMedia: true, // single-card-image format — set false once a card attaches
+    requiresMedia: true, // logged only; the real publish gate is CONSTRAINTS.requiresMedia + the DB media_url column
     audienceGeo,
   };
 }

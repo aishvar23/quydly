@@ -19,49 +19,27 @@
 // remote `url` publishes the photo to the Page feed in one call (no separate
 // container/publish step like Instagram), returning { id, post_id }.
 
-const DEFAULT_GRAPH_VERSION = "v21.0";
-const GRAPH_BASE = "https://graph.facebook.com";
+import {
+  graphUrl, graphPost as metaGraphPost, resolveMetaCreds, noopLogger,
+} from "./meta-graph.js";
 
-const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
+// Bind the shared form-encoded POST to the "Facebook" error prefix so thrown
+// messages stay "Facebook Graph <status>: …" exactly as before.
+const graphPost = (url, params, fetchImpl) => metaGraphPost(url, params, fetchImpl, "Facebook");
+
+// Graph's documented hard limit for a /photos caption (≈ a post message). We
+// never chop at this — it's purely a defensive WARN threshold (see publish()).
+const FB_CAPTION_HARD_LIMIT = 63206;
 
 // Resolve Facebook Graph creds from env. Throws (loudly) if any required piece
 // is missing so the publisher can release its claim cleanly instead of FAILing
 // the post.
 export function credsFromEnv(env = process.env) {
-  const pageId = env.FACEBOOK_PAGE_ID;
-  const accessToken = env.META_PAGE_ACCESS_TOKEN;
-  const graphVersion = env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION;
-  const missing = [];
-  if (!pageId) missing.push("FACEBOOK_PAGE_ID");
-  if (!accessToken) missing.push("META_PAGE_ACCESS_TOKEN");
-  if (missing.length) throw new Error(`Facebook Graph creds missing: ${missing.join(", ")}`);
-  return { pageId, accessToken, graphVersion };
-}
-
-function graphUrl(creds, path) {
-  return `${GRAPH_BASE}/${creds.graphVersion}/${path}`;
-}
-
-// POST form-encoded params to a Graph edge, returning parsed JSON. Throws with
-// Meta's error detail (code / subcode / message) on a non-2xx.
-async function graphPost(url, params, fetchImpl) {
-  const body = new URLSearchParams(params);
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
+  return resolveMetaCreds(env, {
+    idVar: "FACEBOOK_PAGE_ID",
+    idKey: "pageId",
+    platform: "Facebook",
   });
-  const raw = await res.json().catch(() => ({}));
-  if (!res.ok || raw.error) {
-    const e = raw.error || {};
-    const parts = [];
-    if (e.code != null) parts.push(`code=${e.code}`);
-    if (e.error_subcode != null) parts.push(`subcode=${e.error_subcode}`);
-    const detail = e.message || JSON.stringify(raw).slice(0, 300);
-    const meta = parts.length ? ` (${parts.join(" ")})` : "";
-    throw new Error(`Facebook Graph ${res.status}: ${detail}${meta}${e.error_user_msg ? ` — ${e.error_user_msg}` : ""}`);
-  }
-  return raw;
 }
 
 // Publish a post to the Facebook Page as a single photo + caption.
@@ -82,6 +60,20 @@ export async function publish(post, { creds, slides: _slides = null, fetchImpl =
   if (!imageUrl) throw new Error("Facebook publish: no image url (media_url required)");
   if (!/^https:\/\//i.test(imageUrl)) throw new Error(`Facebook publish: image url must be public HTTPS: ${imageUrl}`);
 
+  // The generator's format() self-truncates to 900 chars for quality, but a
+  // human-edited DB row can be longer. Graph's real /photos caption limit is far
+  // higher (~63,206 chars), so we DO NOT silently chop an intentional edit here —
+  // sending the human's text verbatim and letting Graph be the authority. We only
+  // WARN if it exceeds that hard Graph ceiling (Graph would reject it anyway).
+  if (message.length > FB_CAPTION_HARD_LIMIT) {
+    logger.warn(JSON.stringify({
+      event: "fb_caption_over_hard_limit",
+      page_id: creds.pageId,
+      caption_len: message.length,
+      hard_limit: FB_CAPTION_HARD_LIMIT,
+    }));
+  }
+
   if (dryRun) {
     logger(JSON.stringify({
       event: "fb_publish_dry_run",
@@ -100,6 +92,10 @@ export async function publish(post, { creds, slides: _slides = null, fetchImpl =
     fetchImpl
   );
 
+  // /photos returns { id: <photo-id>, post_id: <feed-story-id> }. Prefer post_id
+  // so platform_post_id is the FEED post id (linkable as the Page story) when
+  // present, falling back to the photo id otherwise. rawResponse retains BOTH,
+  // so a future reader can recover the photo id from platform_response.
   const platformPostId = raw.post_id || raw.id;
   if (!platformPostId) {
     throw new Error(`Facebook Graph: no post id in response: ${JSON.stringify(raw).slice(0, 200)}`);

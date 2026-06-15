@@ -16,6 +16,10 @@ import assert from "node:assert/strict";
 
 import { publish as fbPublish, credsFromEnv as fbCredsFromEnv } from "../lib/social/facebook-graph.js";
 import { publishApprovedPosts } from "../lib/social/social-publisher.js";
+import { requiresMedia, PLATFORM_REGISTRY } from "../lib/social/platforms/index.js";
+import * as x from "../lib/social/platforms/x.js";
+import * as instagram from "../lib/social/platforms/instagram.js";
+import * as facebook from "../lib/social/platforms/facebook.js";
 
 const FB_CREDS = { pageId: "1196631670191325", accessToken: "tok", graphVersion: "v25.0" };
 const IMG = "https://cdn.test/cards/story/square.jpg";
@@ -197,4 +201,46 @@ test("publishApprovedPosts: facebook day cap defaults to 10", async () => {
   assert.equal(called, false);
   assert.equal(res.published, 0);
   assert.equal(sb.byId.get("f1").status, "APPROVED");
+});
+
+// ── media gate is DERIVED from CONSTRAINTS (de-dup lock-in) ──────────────────────
+
+test("requiresMedia() is derived from each platform's CONSTRAINTS.requiresMedia", () => {
+  // No hand-maintained platform list: the gate reads CONSTRAINTS directly.
+  assert.equal(requiresMedia("instagram"), instagram.CONSTRAINTS.requiresMedia === true);
+  assert.equal(requiresMedia("facebook"), facebook.CONSTRAINTS.requiresMedia === true);
+  assert.equal(requiresMedia("x"), x.CONSTRAINTS.requiresMedia === true);
+  // Current truth table.
+  assert.equal(requiresMedia("instagram"), true);
+  assert.equal(requiresMedia("facebook"), true);
+  assert.equal(requiresMedia("x"), false);
+  // Unknown platform → not gated.
+  assert.equal(requiresMedia("mastodon"), false);
+  // The registry is keyed by the PLATFORM constant.
+  assert.equal(PLATFORM_REGISTRY.facebook, facebook);
+});
+
+test("publisher media gate follows CONSTRAINTS.requiresMedia (flip changes gating)", async () => {
+  // Flip X to require media: a no-media X post must now be gated/skipped, proving
+  // the publisher reads CONSTRAINTS rather than a hardcoded {instagram,facebook} set.
+  const original = x.CONSTRAINTS.requiresMedia;
+  x.CONSTRAINTS.requiresMedia = true;
+  try {
+    const sb = makeSupabase({ duePosts: [
+      { id: "x0", story_id: 1, platform: "x", audience_geo: "global", post_text: "no media",
+        media_url: null, status: "APPROVED", scheduled_for: null, platform_post_id: null },
+    ] });
+    let called = false;
+    const publishers = { x: async () => { called = true; return { platformPostId: "t", rawResponse: {} }; } };
+    const res = await publishApprovedPosts({
+      supabase: sb.client, publishers,
+      getCreds: () => ({ consumerKey: "k" }),
+      env: {},
+    });
+    assert.equal(called, false, "X must be gated once CONSTRAINTS.requiresMedia is true");
+    assert.equal(res.skipped, 1);
+    assert.equal(sb.byId.get("x0").status, "APPROVED");
+  } finally {
+    x.CONSTRAINTS.requiresMedia = original;
+  }
 });

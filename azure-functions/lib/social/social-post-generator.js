@@ -9,13 +9,11 @@
 //
 // No external social API calls happen here — drafts are review-first.
 
-import * as x from "./platforms/x.js";
-import * as facebook from "./platforms/facebook.js";
-import * as instagram from "./platforms/instagram.js";
+import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
 import { validatePost } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 
-const PLATFORMS = [x, facebook, instagram];
+const PLATFORMS = PLATFORM_MODULES;
 const MODEL = "claude-sonnet-4-20250514";
 
 const STORY_COLUMNS =
@@ -103,10 +101,10 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         draft.requiresMedia = false;
       }
     } else if (platform.CONSTRAINTS.cardShape) {
-      // Single card. Instagram + Facebook publish via the Meta Graph API and use
-      // JPEG (IG's Graph API rejects PNG; FB /photos posts the square card too);
-      // X uses PNG.
-      const format = (platform.PLATFORM === "instagram" || platform.PLATFORM === "facebook") ? "jpeg" : "png";
+      // Single card. The render format is declared by the platform's CONSTRAINTS
+      // (Meta Graph platforms set cardFormat "jpeg" — IG's Graph API rejects PNG,
+      // FB /photos posts the same square JPEG; X has no cardFormat → PNG).
+      const format = platform.CONSTRAINTS.cardFormat || "png";
       const mediaUrl = await cardService.getCardUrl({ story, shape: platform.CONSTRAINTS.cardShape, format });
       if (mediaUrl) {
         draft.mediaUrl = mediaUrl;
@@ -190,11 +188,12 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   const autoApproved = candidate.status === "AUTO_APPROVED";
   // Platforms whose published format requires a media asset auto-approve ONLY
   // once that asset (post.mediaUrl) is present; without it they stay
-  // PENDING_REVIEW and the publisher's media gate blocks them anyway.
-  const MEDIA_GATED_PLATFORMS = new Set(["instagram", "facebook"]);
+  // PENDING_REVIEW and the publisher's media gate blocks them anyway. Whether a
+  // platform requires media is derived from CONSTRAINTS.requiresMedia (single
+  // source of truth — see platforms/index.js), not a hand-maintained list.
   const statusFor = (platform, post) => {
     if (!autoApproved) return "PENDING_REVIEW";
-    if (MEDIA_GATED_PLATFORMS.has(platform.PLATFORM) && !post.mediaUrl) return "PENDING_REVIEW";
+    if (requiresMedia(platform.PLATFORM) && !post.mediaUrl) return "PENDING_REVIEW";
     return "APPROVED";
   };
 
