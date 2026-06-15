@@ -12,6 +12,7 @@ import { uploadMedia, publish } from "../lib/social/platforms/x.js";
 import { generatePlatformPost } from "../lib/social/social-post-generator.js";
 import * as x from "../lib/social/platforms/x.js";
 import * as instagram from "../lib/social/platforms/instagram.js";
+import * as facebook from "../lib/social/platforms/facebook.js";
 
 const STORY = {
   id: 42,
@@ -94,6 +95,17 @@ test("generatePlatformPost: Instagram card clears requiresMedia", async () => {
   const cardService = { getCardUrl: async ({ shape }) => `https://cdn.test/${shape}.png` };
   const post = await generatePlatformPost({ platform: instagram, story: STORY, audienceGeo: "global", cardService });
   assert.equal(post.mediaUrl, "https://cdn.test/square.png");
+  assert.equal(post.requiresMedia, false);
+});
+
+test("generatePlatformPost: Facebook renders a square JPEG card and clears requiresMedia", async () => {
+  // FB's locked format is a single square card image + caption. With a cardService
+  // present it requests shape=square format=jpeg and sets it on mediaUrl.
+  const calls = [];
+  const cardService = { getCardUrl: async ({ shape, format }) => { calls.push({ shape, format }); return `https://cdn.test/${shape}.${format}`; } };
+  const post = await generatePlatformPost({ platform: facebook, story: STORY, audienceGeo: "global", cardService });
+  assert.deepEqual(calls, [{ shape: "square", format: "jpeg" }]);
+  assert.equal(post.mediaUrl, "https://cdn.test/square.jpeg");
   assert.equal(post.requiresMedia, false);
 });
 

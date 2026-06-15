@@ -19,8 +19,10 @@
 // Containers can take a moment to process; carousel/video containers MUST be
 // polled (GET ?fields=status_code) until FINISHED before publishing.
 
-const DEFAULT_GRAPH_VERSION = "v21.0";
-const GRAPH_BASE = "https://graph.facebook.com";
+import {
+  graphUrl, graphPost as metaGraphPost, graphGet as metaGraphGet,
+  resolveMetaCreds, noopLogger,
+} from "./meta-graph.js";
 
 // Carousels accept 2–10 items (Instagram limit). A 1-item set publishes as a
 // single image instead.
@@ -31,53 +33,21 @@ export const CAROUSEL_MAX = 10;
 const POLL_ATTEMPTS = 10;
 const POLL_INTERVAL_MS = 2000;
 
-const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Bind the shared Graph helpers to the "Instagram" error prefix so thrown
+// messages stay "Instagram Graph <status>: …" exactly as before.
+const graphPost = (url, params, fetchImpl) => metaGraphPost(url, params, fetchImpl, "Instagram");
+const graphGet = (url, fetchImpl) => metaGraphGet(url, fetchImpl, "Instagram");
 
 // Resolve IG Graph creds from env. Throws (loudly) if any piece is missing so
 // the publisher can release its claim instead of silently no-op'ing.
 export function credsFromEnv(env = process.env) {
-  const igUserId = env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
-  const accessToken = env.META_PAGE_ACCESS_TOKEN;
-  const graphVersion = env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION;
-  const missing = [];
-  if (!igUserId) missing.push("INSTAGRAM_BUSINESS_ACCOUNT_ID");
-  if (!accessToken) missing.push("META_PAGE_ACCESS_TOKEN");
-  if (missing.length) throw new Error(`Instagram Graph creds missing: ${missing.join(", ")}`);
-  return { igUserId, accessToken, graphVersion };
-}
-
-function graphUrl(creds, path) {
-  return `${GRAPH_BASE}/${creds.graphVersion}/${path}`;
-}
-
-// POST form-encoded params to a Graph edge, returning parsed JSON. Throws with
-// Meta's error detail on a non-2xx.
-async function graphPost(url, params, fetchImpl) {
-  const body = new URLSearchParams(params);
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
+  return resolveMetaCreds(env, {
+    idVar: "INSTAGRAM_BUSINESS_ACCOUNT_ID",
+    idKey: "igUserId",
+    platform: "Instagram",
   });
-  const raw = await res.json().catch(() => ({}));
-  if (!res.ok || raw.error) {
-    const e = raw.error || {};
-    const detail = e.message || JSON.stringify(raw).slice(0, 300);
-    throw new Error(`Instagram Graph ${res.status}: ${detail}${e.error_user_msg ? ` — ${e.error_user_msg}` : ""}`);
-  }
-  return raw;
-}
-
-async function graphGet(url, fetchImpl) {
-  const res = await fetchImpl(url);
-  const raw = await res.json().catch(() => ({}));
-  if (!res.ok || raw.error) {
-    const e = raw.error || {};
-    throw new Error(`Instagram Graph ${res.status}: ${e.message || JSON.stringify(raw).slice(0, 300)}`);
-  }
-  return raw;
 }
 
 // Create a media container. Returns its id. `extra` carries is_carousel_item /

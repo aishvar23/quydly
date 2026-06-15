@@ -131,16 +131,19 @@ function makeSupabaseMock({ candidate, story }) {
   return { client: { from }, inserted, candidateUpdates };
 }
 
-test("generateSocialPosts: AUTO_APPROVED candidate → X/FB APPROVED, IG PENDING_REVIEW, candidate kept AUTO_APPROVED", async () => {
+test("generateSocialPosts: AUTO_APPROVED candidate → X APPROVED, IG+FB PENDING_REVIEW (no media), candidate kept AUTO_APPROVED", async () => {
   const candidate = { id: "c1", story_id: 1, audience_geo: "global", status: "AUTO_APPROVED" };
   const mock = makeSupabaseMock({ candidate, story: goodStory() });
 
+  // No cardService injected → neither IG nor FB has a media asset. Both are
+  // media-gated (FB now mirrors IG's gate), so both stay PENDING_REVIEW; only
+  // text-only X auto-approves.
   const res = await generateSocialPosts({ supabase: mock.client, candidateId: "c1" });
   assert.equal(res.created, 3);
 
   const byPlatform = Object.fromEntries(mock.inserted.map((p) => [p.platform, p.status]));
   assert.equal(byPlatform.x, "APPROVED");
-  assert.equal(byPlatform.facebook, "APPROVED");
+  assert.equal(byPlatform.facebook, "PENDING_REVIEW");  // needs media — never auto-approved without a card
   assert.equal(byPlatform.instagram, "PENDING_REVIEW"); // needs media — never auto-approved
   // Candidate NOT downgraded to POST_GENERATED (stays AUTO_APPROVED for the daily cap).
   assert.equal(mock.candidateUpdates.length, 0);

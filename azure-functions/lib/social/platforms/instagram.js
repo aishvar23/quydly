@@ -14,6 +14,7 @@ export const CONSTRAINTS = {
   maxLength: 1500,
   requiresMedia: true, // §10.3 / acceptance #16 — must have a card before publish
   cardShape: "square", // 1:1 card satisfies the media gate
+  cardFormat: "jpeg",  // IG's Graph API rejects PNG — render the card as JPEG
   // L4 carousel: when enabled, the media asset is a 4-slide carousel
   // (cover / what happened / why it matters / CTA) rather than a single card.
   carousel: true,

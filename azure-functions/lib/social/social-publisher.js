@@ -14,12 +14,21 @@
 import { publish as xPublish, publishReply as xPublishReply } from "./platforms/x.js";
 import { credsFromEnv as xCredsFromEnv } from "./x-oauth1.js";
 import { publish as igPublish, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
+import { publish as fbPublish, credsFromEnv as fbCredsFromEnv } from "./facebook-graph.js";
+import { requiresMedia } from "./platforms/index.js";
 
 const BATCH = 20;
-const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish };
+const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish, facebook: fbPublish };
 // Per-platform credential resolvers (env → creds). Each is called at most once,
 // lazily, the first time a post for that platform is published.
-const DEFAULT_CREDS_RESOLVERS = { x: xCredsFromEnv, instagram: igCredsFromEnv };
+const DEFAULT_CREDS_RESOLVERS = { x: xCredsFromEnv, instagram: igCredsFromEnv, facebook: fbCredsFromEnv };
+
+// Whether a platform requires a media asset (media_url) before publishing is
+// derived from its CONSTRAINTS.requiresMedia (single source of truth — see
+// platforms/index.js): IG (#16) and Facebook (locked single-card-image format).
+// A no-media post for such a platform is skipped (it should never have been
+// APPROVED — the generator keeps it PENDING_REVIEW — but the gate is enforced
+// here defensively too).
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -47,7 +56,9 @@ function startOfUtcDayIso(now) {
 // Override via SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY. Other platforms keep the
 // conservative default.
 const DEFAULT_DAILY_CAP = 10;
-const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12, instagram: 25 };
+// Facebook stays in the conservative class (10/day, same as the IG-style media
+// gate) — override via SOCIAL_MAX_FACEBOOK_POSTS_PER_DAY through dailyCap().
+const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12, instagram: 25, facebook: 10 };
 
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
@@ -59,9 +70,10 @@ function dailyCap(env, platform) {
 export async function publishApprovedPosts({
   supabase,
   publishers = DEFAULT_PUBLISHERS,
-  // X creds resolver (kept named `getCreds` for back-compat); IG uses getIgCreds.
+  // X creds resolver (kept named `getCreds` for back-compat); IG/FB mirror it.
   getCreds = xCredsFromEnv,
   getIgCreds = igCredsFromEnv,
+  getFbCreds = fbCredsFromEnv,
   // X reply publisher (the "answer here" link comment). Injectable for tests.
   xReplyPublish = xPublishReply,
   env = process.env,
@@ -77,7 +89,7 @@ export async function publishApprovedPosts({
   // Lazy, per-platform credential resolution. A platform whose creds are
   // unavailable (not configured) has its posts released + skipped — it does not
   // block other platforms (e.g. missing IG creds must not stop X publishing).
-  const credsResolvers = { ...DEFAULT_CREDS_RESOLVERS, x: getCreds, instagram: getIgCreds };
+  const credsResolvers = { ...DEFAULT_CREDS_RESOLVERS, x: getCreds, instagram: getIgCreds, facebook: getFbCreds };
   const credsCache = new Map();
   const credsUnavailable = new Map();
   function resolveCreds(platform) {
@@ -159,10 +171,10 @@ export async function publishApprovedPosts({
       continue;
     }
 
-    // Instagram requires a media asset before publishing (#16).
-    if (post.platform === "instagram" && !post.media_url) {
+    // Instagram (#16) and Facebook require a media asset before publishing.
+    if (requiresMedia(post.platform) && !post.media_url) {
       skipped++;
-      logger.warn(JSON.stringify({ event: "social_publish_skip_no_media", post_id: post.id }));
+      logger.warn(JSON.stringify({ event: "social_publish_skip_no_media", platform: post.platform, post_id: post.id }));
       continue;
     }
 
