@@ -1,8 +1,10 @@
 // Instagram caption formatter. Design §8.3.
 //
 // Instagram is visual-first: the MVP generates a CAPTION only and flags the post
-// as requiring a media asset (square card) before it can be published. No source
-// links in the caption.
+// as requiring a media asset (square card) before it can be published. Source
+// links and the curated hashtag block are NOT part of the body the LLM/
+// deterministic formatter produces — they are appended DOWNSTREAM, after
+// validation (see _sources.js / _hashtags.js / social-post-generator.js).
 
 import {
   QUYDLY_URL, keyPointStrings, firstSentences, truncate, bullets, assemble,
@@ -78,7 +80,8 @@ Can you answer today's news quiz?
 Visit ${QUYDLY_URL()}
 
 RULES:
-- Max ${CONSTRAINTS.maxLength} characters. No source links in the caption.
+- Max ${CONSTRAINTS.maxLength} characters. Do NOT add source links yourself — a
+  "Sources" block is appended automatically.
 - Must include the "Visit ${QUYDLY_URL()}" CTA. No invented facts or numbers.
 - Neutral tone for any sensitive subject. No clickbait.
 - Do NOT add hashtags yourself — a curated hashtag block is appended automatically.

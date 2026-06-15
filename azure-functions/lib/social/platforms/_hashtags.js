@@ -18,7 +18,7 @@
 // junk like "#TwoIndia" into a caption. Kept conservative: a wrong/junk tag is
 // worse than one fewer tag.
 
-import { entityNames } from "./_shared.js";
+import { entityNames, appendBlock } from "./_shared.js";
 import { CONSTRAINTS } from "./instagram.js";
 import { SOCIAL_CATEGORIES } from "../_categories.js";
 
@@ -103,33 +103,16 @@ export function hashtagsFor(story, { maxEntities = 3, max = 8 } = {}) {
   return out;
 }
 
-// Append the hashtag block to a caption, separated by a blank line, staying
-// within IG's caption cap. Adds as many whole tags as fit (never splits a tag,
-// never truncates the caption body); returns the caption unchanged if even one
-// tag would not fit. The cap defaults to instagram.js CONSTRAINTS.maxLength —
-// the same limit validatePost enforces on the body — so the appended block can
-// never push a validated caption over the real platform limit.
+// Append the space-joined hashtag block to a caption, separated by a blank line,
+// staying within IG's caption cap. Adds as many whole tags as fit (never splits
+// a tag, never truncates the caption body); returns the caption unchanged if
+// even one tag would not fit. The cap defaults to instagram.js
+// CONSTRAINTS.maxLength — the same limit validatePost enforces on the body — so
+// the appended block can never push a validated caption over the real platform
+// limit. Greedy fitting is shared with the source block via appendBlock.
 export function appendHashtags(text, story, opts = {}) {
-  const max = opts.maxLength ?? CONSTRAINTS.maxLength;
-  const body = String(text || "");
   const tags = hashtagsFor(story, opts);
-  if (!tags.length) return body;
-
-  // No leading separator when there is no caption body to separate from.
-  const sep = body ? "\n\n" : "";
-  // Track the running length of the joined tag line instead of rebuilding the
-  // whole candidate string each iteration (keeps this O(tags), not O(tags·body)).
-  const fixed = body.length + sep.length;
-  const fitted = [];
-  let lineLen = 0;
-  for (const tag of tags) {
-    const addition = (fitted.length ? 1 : 0) + tag.length; // 1 = space separator
-    if (fixed + lineLen + addition > max) break;
-    fitted.push(tag);
-    lineLen += addition;
-  }
-  if (!fitted.length) return body;
-  return `${body}${sep}${fitted.join(" ")}`;
+  return appendBlock(text, tags, { joiner: " ", maxLength: opts.maxLength ?? CONSTRAINTS.maxLength });
 }
 
 export { BRAND_TAGS, categoryTags, entityTag };

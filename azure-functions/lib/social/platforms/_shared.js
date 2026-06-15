@@ -79,3 +79,35 @@ export function assemble(blocks, max) {
   }
   return parts.join("\n\n");
 }
+
+// Append a labelled block of whole items to a caption, separated from the body
+// by a blank line and capped to `maxLength`. Items are joined by `joiner`; an
+// optional `header` sits on its own first line, after which every item is led by
+// `joiner`. With no header the first item follows the separator directly and
+// only later items are led. Greedily fits as many WHOLE items as the cap allows
+// — never splits an item, never truncates the body — and returns the body
+// unchanged when nothing (or no body+item) fits.
+//
+// Powers the IG caption blocks appended downstream of validation: the hashtag
+// block (no header, space-joined) and the source block (header "Sources:",
+// newline-joined). Pure — callers pass maxLength (e.g. CONSTRAINTS.maxLength) so
+// this stays free of any platform import.
+export function appendBlock(text, items, { header = "", joiner = " ", maxLength = Infinity } = {}) {
+  const body = String(text || "");
+  if (!items.length) return body;
+  const sep = body ? "\n\n" : ""; // no leading separator when there is no body
+  // fixed = body + blank-line separator + the header line (empty when none).
+  const fixed = body.length + sep.length + header.length;
+  const fitted = [];
+  let runLen = 0;
+  for (const item of items) {
+    const needsLead = header.length > 0 || fitted.length > 0;
+    const addition = (needsLead ? joiner.length : 0) + item.length;
+    if (fixed + runLen + addition > maxLength) break;
+    fitted.push(item);
+    runLen += addition;
+  }
+  if (!fitted.length) return body;
+  const lead = header ? joiner : ""; // header → first item starts on its own line
+  return `${body}${sep}${header}${lead}${fitted.join(joiner)}`;
+}
