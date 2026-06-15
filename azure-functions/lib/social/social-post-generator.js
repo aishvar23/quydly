@@ -103,8 +103,10 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         draft.requiresMedia = false;
       }
     } else if (platform.CONSTRAINTS.cardShape) {
-      // Single card. Instagram needs JPEG (its Graph API rejects PNG); X uses PNG.
-      const format = platform.PLATFORM === "instagram" ? "jpeg" : "png";
+      // Single card. Instagram + Facebook publish via the Meta Graph API and use
+      // JPEG (IG's Graph API rejects PNG; FB /photos posts the square card too);
+      // X uses PNG.
+      const format = (platform.PLATFORM === "instagram" || platform.PLATFORM === "facebook") ? "jpeg" : "png";
       const mediaUrl = await cardService.getCardUrl({ story, shape: platform.CONSTRAINTS.cardShape, format });
       if (mediaUrl) {
         draft.mediaUrl = mediaUrl;
@@ -186,9 +188,13 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   // provides it. Without media, IG stays PENDING_REVIEW and the publisher's media
   // gate (#16) blocks it anyway.
   const autoApproved = candidate.status === "AUTO_APPROVED";
+  // Platforms whose published format requires a media asset auto-approve ONLY
+  // once that asset (post.mediaUrl) is present; without it they stay
+  // PENDING_REVIEW and the publisher's media gate blocks them anyway.
+  const MEDIA_GATED_PLATFORMS = new Set(["instagram", "facebook"]);
   const statusFor = (platform, post) => {
     if (!autoApproved) return "PENDING_REVIEW";
-    if (platform.PLATFORM === "instagram" && !post.mediaUrl) return "PENDING_REVIEW";
+    if (MEDIA_GATED_PLATFORMS.has(platform.PLATFORM) && !post.mediaUrl) return "PENDING_REVIEW";
     return "APPROVED";
   };
 

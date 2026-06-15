@@ -14,12 +14,19 @@
 import { publish as xPublish, publishReply as xPublishReply } from "./platforms/x.js";
 import { credsFromEnv as xCredsFromEnv } from "./x-oauth1.js";
 import { publish as igPublish, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
+import { publish as fbPublish, credsFromEnv as fbCredsFromEnv } from "./facebook-graph.js";
 
 const BATCH = 20;
-const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish };
+const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish, facebook: fbPublish };
 // Per-platform credential resolvers (env → creds). Each is called at most once,
 // lazily, the first time a post for that platform is published.
-const DEFAULT_CREDS_RESOLVERS = { x: xCredsFromEnv, instagram: igCredsFromEnv };
+const DEFAULT_CREDS_RESOLVERS = { x: xCredsFromEnv, instagram: igCredsFromEnv, facebook: fbCredsFromEnv };
+
+// Platforms that require a media asset (media_url) before publishing: IG (#16)
+// and Facebook (locked single-card-image format). A no-media post for these
+// platforms is skipped (it should never have been APPROVED — the generator keeps
+// it PENDING_REVIEW — but the gate is enforced here defensively too).
+const MEDIA_REQUIRED_PLATFORMS = new Set(["instagram", "facebook"]);
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -47,7 +54,9 @@ function startOfUtcDayIso(now) {
 // Override via SOCIAL_MAX_INSTAGRAM_POSTS_PER_DAY. Other platforms keep the
 // conservative default.
 const DEFAULT_DAILY_CAP = 10;
-const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12, instagram: 25 };
+// Facebook stays in the conservative class (10/day, same as the IG-style media
+// gate) — override via SOCIAL_MAX_FACEBOOK_POSTS_PER_DAY through dailyCap().
+const PLATFORM_DAILY_CAP_DEFAULTS = { x: 12, instagram: 25, facebook: 10 };
 
 function dailyCap(env, platform) {
   const key = `SOCIAL_MAX_${platform.toUpperCase()}_POSTS_PER_DAY`;
@@ -159,10 +168,10 @@ export async function publishApprovedPosts({
       continue;
     }
 
-    // Instagram requires a media asset before publishing (#16).
-    if (post.platform === "instagram" && !post.media_url) {
+    // Instagram (#16) and Facebook require a media asset before publishing.
+    if (MEDIA_REQUIRED_PLATFORMS.has(post.platform) && !post.media_url) {
       skipped++;
-      logger.warn(JSON.stringify({ event: "social_publish_skip_no_media", post_id: post.id }));
+      logger.warn(JSON.stringify({ event: "social_publish_skip_no_media", platform: post.platform, post_id: post.id }));
       continue;
     }
 

@@ -11,7 +11,12 @@ export const PLATFORM = "facebook";
 
 export const CONSTRAINTS = {
   maxLength: 900,
-  requiresMedia: false,
+  // The locked Facebook post format is a single square card image + caption
+  // (published via POST /{pageId}/photos). The generator renders a 1080×1080
+  // JPEG card for this shape and sets it on media_url; the publisher then gates
+  // Facebook on media presence the same way it gates Instagram.
+  requiresMedia: true,
+  cardShape: "square",
 };
 
 export function format(story, audienceGeo) {
@@ -32,7 +37,7 @@ export function format(story, audienceGeo) {
     text,
     mediaUrl: null,
     linkUrl: url,
-    requiresMedia: false,
+    requiresMedia: true, // single-card-image format — set false once a card attaches
     audienceGeo,
   };
 }
