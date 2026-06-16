@@ -26,15 +26,35 @@ import { computeVideoEligibility } from "../lib/videoEligibility.js";
 import { computeStoryDecayAt } from "../lib/freshness.js";
 import { aggregateArticleLanguages } from "../lib/languageDetection.js";
 
-const MODEL             = "claude-sonnet-4-20250514";
+const MODEL             = "claude-sonnet-4-6";
 const MAX_RETRIES       = 2;
 const CONTENT_TRUNCATE  = 500;
 const RIVER_WINDOW_MS   = 24 * 60 * 60 * 1000;
+// Lease window for the PROCESSING claim. A cluster left in PROCESSING longer
+// than this is presumed to belong to a dead invocation (function killed mid
+// synthesis) and may be reclaimed by a redelivery. Set ABOVE the 10-min
+// functionTimeout (host.json) so a still-running invocation is always either
+// finished or already killed by the host before its lease is judged stale —
+// an in-flight invocation can never be reclaimed out from under itself, which
+// is what guarantees no two messages synthesise the same cluster. The bounded
+// Anthropic client (60s timeout, 2 retries) keeps real syntheses to ~2-3 min,
+// far inside the window; the prompt's "10 min" wedge threshold is satisfied
+// for any cluster a dead invocation left behind (those rows are minutes-to-
+// hours stale).
+const PROCESSING_LEASE_MS = 15 * 60 * 1000;
 
 let _anthropic = null;
 function getAnthropic() {
   if (!_anthropic) {
-    _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // Bound every Anthropic call: a per-request 60s timeout + 2 SDK retries.
+    // Without this the SDK can hang indefinitely on a stalled connection,
+    // which collided with the 5-min function timeout + 5-min SB lock and left
+    // clusters wedged in PROCESSING (2026-06-15 16:01 incident root cause).
+    _anthropic = new Anthropic({
+      apiKey:     process.env.ANTHROPIC_API_KEY,
+      timeout:    60_000,
+      maxRetries: 2,
+    });
   }
   return _anthropic;
 }
@@ -821,10 +841,15 @@ export async function run(context, message) {
   const supabase = getSupabase();
   const ai       = getAnthropic();
 
-  // ── 1. Fetch cluster — idempotency check ─────────────────────────────────
+  // ── 1. Fetch cluster — idempotency check + stale-lease reclaim ───────────
+  // status + updated_at drive a lease: PENDING is freely claimable; a
+  // PROCESSING row whose updated_at is older than PROCESSING_LEASE_MS is
+  // treated as a dead invocation (the 2026-06-15 wedge) and is reclaimable.
+  // A PROCESSING row inside the lease window is an actively-running sibling
+  // invocation — defer to it and no-op.
   const { data: cluster, error: clusterErr } = await supabase
     .from("clusters")
-    .select("id, category_id, primary_entities, article_ids, unique_domains, cluster_score, status, primary_geos, geo_scores, source_countries")
+    .select("id, category_id, primary_entities, article_ids, unique_domains, cluster_score, status, updated_at, primary_geos, geo_scores, source_countries")
     .eq("id", cluster_id)
     .single();
 
@@ -832,22 +857,68 @@ export async function run(context, message) {
     throw new Error(`[story-synthesizer] fetch cluster ${cluster_id}: ${clusterErr.message}`);
   }
 
-  if (!cluster || cluster.status !== "PENDING") {
-    // Already processed by a prior or duplicate message — complete and return.
+  if (!cluster) {
+    context.log(JSON.stringify({ event: "cluster_not_pending", cluster_id, status: "not_found" }));
+    return;
+  }
+
+  const leaseExpiry = new Date(Date.now() - PROCESSING_LEASE_MS).toISOString();
+  const isPending      = cluster.status === "PENDING";
+  const isStaleProcessing =
+    cluster.status === "PROCESSING" &&
+    typeof cluster.updated_at === "string" &&
+    cluster.updated_at < leaseExpiry;
+
+  if (!isPending && !isStaleProcessing) {
+    // Terminal (PROCESSED) or an actively-running sibling (fresh PROCESSING) —
+    // complete and return so we don't double-synthesize.
     context.log(JSON.stringify({
       event:      "cluster_not_pending",
       cluster_id,
-      status:     cluster?.status ?? "not_found",
+      status:     cluster.status,
+      updated_at: cluster.updated_at,
     }));
     // Return normally → runtime auto-completes the SB message
     return;
   }
 
-  // ── 2. Mark PROCESSING so concurrent duplicates see non-PENDING ──────────
-  await supabase
+  // ── 2. Atomically CLAIM the lease (move the PROCESSING write here) ────────
+  // Race-safety: this is a conditional UPDATE. The WHERE re-asserts the exact
+  // (id, status, prior-updated_at) we read above, so only ONE racer can flip
+  // the row — a concurrent duplicate's WHERE no longer matches (updated_at
+  // moved) and updates 0 rows, so it bails. This both prevents two messages
+  // from synthesising the same cluster AND lets a redelivery reclaim a wedged
+  // (stale-PROCESSING) cluster. We pass `updated_at` as the lease token; the
+  // synthesizer renews it on the PROCESSED write at the end (or on the error
+  // resets). PostgREST returns the updated rows via .select(); an empty array
+  // means we lost the claim.
+  const claimedAt = new Date().toISOString();
+  const { data: claimed, error: claimErr } = await supabase
     .from("clusters")
-    .update({ status: "PROCESSING", updated_at: new Date().toISOString() })
-    .eq("id", cluster_id);
+    .update({ status: "PROCESSING", updated_at: claimedAt })
+    .eq("id", cluster_id)
+    .eq("status", cluster.status)
+    .eq("updated_at", cluster.updated_at)
+    .select("id");
+
+  if (claimErr) {
+    throw new Error(`[story-synthesizer] claim cluster ${cluster_id}: ${claimErr.message}`);
+  }
+
+  if (!claimed || claimed.length === 0) {
+    // Lost the race to a concurrent invocation that claimed first. Bail —
+    // the winner owns this cluster. Return normally so SB completes our msg.
+    context.log(JSON.stringify({ event: "cluster_claim_lost", cluster_id, prior_status: cluster.status }));
+    return;
+  }
+
+  if (isStaleProcessing) {
+    context.log(JSON.stringify({
+      event:           "cluster_lease_reclaimed",
+      cluster_id,
+      stale_since:     cluster.updated_at,
+    }));
+  }
 
   // ── 3. Fetch article content ──────────────────────────────────────────────
   // canonical_url / published_at / author are needed in addition to NLP fields
