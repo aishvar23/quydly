@@ -26,7 +26,7 @@ import { computeVideoEligibility } from "../lib/videoEligibility.js";
 import { computeStoryDecayAt } from "../lib/freshness.js";
 import { aggregateArticleLanguages } from "../lib/languageDetection.js";
 
-const MODEL             = "claude-sonnet-4-20250514";
+const MODEL             = "claude-sonnet-4-6";
 const MAX_RETRIES       = 2;
 const CONTENT_TRUNCATE  = 500;
 const RIVER_WINDOW_MS   = 24 * 60 * 60 * 1000;

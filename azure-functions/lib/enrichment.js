@@ -27,7 +27,7 @@
 //   - The enrichment result is intentionally storage-shaped: every value can
 //     be persisted as-is to the corresponding story column.
 
-const MODEL          = "claude-sonnet-4-20250514";
+const MODEL          = "claude-sonnet-4-6";
 const ENRICH_TOKENS  = 2048;
 const HOOK_MIN_WORDS = 8;
 const HOOK_MAX_WORDS = 22;

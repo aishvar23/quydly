@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL  = "claude-sonnet-4-20250514";
+const MODEL  = "claude-sonnet-4-6";
 
 const REQUIRED_KEYS  = ["question", "options", "correctIndex", "tldr", "categoryId"];
 const CRITIQUE_MIN   = 4; // minimum score on every critique dimension
