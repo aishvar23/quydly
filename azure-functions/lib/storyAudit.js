@@ -12,7 +12,7 @@ function getAnthropic() {
   return _anthropic;
 }
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 const THRESHOLDS = {
   specificity_score: 0.6,

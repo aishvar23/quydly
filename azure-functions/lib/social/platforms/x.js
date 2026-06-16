@@ -239,7 +239,7 @@ Respond ONLY with JSON, no markdown: { "post_text": "..." }`;
 
 // ── Structured quiz question (for the shareable answer page) ────────────────────
 // Model kept in sync with the daily-quiz generator (backend/services/claude.js).
-const QUESTION_MODEL = "claude-sonnet-4-20250514";
+const QUESTION_MODEL = "claude-sonnet-4-6";
 
 function buildQuestionPrompt(story, audienceGeo) {
   const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";

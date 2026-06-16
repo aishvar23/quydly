@@ -47,7 +47,14 @@ export function getRedis() {
 export function getAnthropic() {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   if (!_anthropic) {
-    _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // Bound every Anthropic call: a per-request 60s timeout + 2 SDK retries,
+    // so a stalled connection can never hang past the function timeout / SB
+    // lock and wedge a cluster in PROCESSING (2026-06-15 incident root cause).
+    _anthropic = new Anthropic({
+      apiKey:     process.env.ANTHROPIC_API_KEY,
+      timeout:    60_000,
+      maxRetries: 2,
+    });
   }
   return _anthropic;
 }

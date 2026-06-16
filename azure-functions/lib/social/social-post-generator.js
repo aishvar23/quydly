@@ -15,7 +15,7 @@ import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 
 const PLATFORMS = PLATFORM_MODULES;
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 const STORY_COLUMNS =
   "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents";

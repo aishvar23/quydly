@@ -15,7 +15,7 @@ Users feel informed, not tested.
 | Database | Supabase (auth + persistence) |
 | Cache | Redis (daily questions) |
 | News | NewsData.io API |
-| AI | Anthropic Claude API (`claude-sonnet-4-20250514`) |
+| AI | Anthropic Claude API (`claude-sonnet-4-6`) |
 | Payments | Stripe (stub only — v2) |
 
 ## Repo Structure
