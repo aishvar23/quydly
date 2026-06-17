@@ -12,6 +12,7 @@ import { fetchArticlePool, fetchAudienceStoryPools, fetchStoryPool } from "../se
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 import FLAGS from "../../config/flags.js";
+import { quizDay } from "../lib/quizDay.js";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ function buildCategoryQueue() {
 }
 
 function todayKey(audience = "global") {
-  const date = new Date().toISOString().slice(0, 10);
+  const date = quizDay();
   // Keep backward-compatible key for global; scope other audiences
   return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
@@ -120,7 +121,7 @@ export async function generateDaily(audience = "global", { silent = false } = {}
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
   const categoryQueue = buildCategoryQueue();
-  const date = new Date().toISOString().slice(0, 10);
+  const date = quizDay();   // 7AM-reset quiz day — same key the read path uses
   const totalQuestions = categoryQueue.length;
 
   // ── Build picker function ─────────────────────────────────────────────────

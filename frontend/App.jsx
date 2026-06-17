@@ -135,7 +135,6 @@ export default function App() {
   const [singleQuestionId] = useState(readSingleQuestionId); // non-null → shareable single-question page
   const [screen,      setScreen]      = useState("home");
   const [questions,   setQuestions]   = useState([]);
-  const [quizDate,    setQuizDate]    = useState(null); // served quiz's date (echoed to /api/complete)
   const [currentQ,    setCurrentQ]    = useState(0);
   const [allCaughtUp, setAllCaughtUp] = useState(false);
   const [answered,    setAnswered]    = useState(false);
@@ -226,13 +225,12 @@ export default function App() {
       const raw = sessionStorage.getItem("quydly_oauth_resume");
       if (raw) {
         try {
-          const { screen: s, results: r, endRank: er, pendingPlayAgain: ppa, quizDate: qd } = JSON.parse(raw);
+          const { screen: s, results: r, endRank: er, pendingPlayAgain: ppa } = JSON.parse(raw);
           sessionStorage.removeItem("quydly_oauth_resume");
           if (s) setScreen(s);
           if (Array.isArray(r) && r.length) setResults(r);
           if (er != null) setEndRank(er);
           if (ppa) setPendingPlayAgain(true);
-          if (qd) setQuizDate(qd);
         } catch {}
       }
     }
@@ -311,7 +309,7 @@ export default function App() {
   const handleBeforeOAuth = () => {
     if (typeof sessionStorage !== "undefined") {
       sessionStorage.setItem("quydly_oauth_resume", JSON.stringify({
-        screen, results, endRank, pendingPlayAgain, quizDate,
+        screen, results, endRank, pendingPlayAgain,
       }));
     }
   };
@@ -339,7 +337,6 @@ export default function App() {
       }
 
       setQuestions(data.questions);
-      setQuizDate(data.date ?? null);
       setUnlimited(!!data.unlimited);
       setCredits(data.unlimited ? Infinity : FLAGS.freeQuestionsPerDay);
       setAllCaughtUp(false);
@@ -391,7 +388,7 @@ export default function App() {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ score: sessionScore, results, date: quizDate }),
+        body: JSON.stringify({ score: sessionScore, results }),
       });
       const data = await resp.json();
       if (data.streak !== undefined) setStreak(data.streak);

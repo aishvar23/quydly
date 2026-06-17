@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { subDays } from "date-fns";
+import { quizDay } from "../lib/quizDay.js";
 
 const router = Router();
 
@@ -10,10 +11,6 @@ function buildSupabase() {
 
 function buildAnonSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-}
-
-function todayDate() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function updateStreak(user, today) {
@@ -44,22 +41,13 @@ router.post("/", async (req, res) => {
   const userId     = authUser.id;
   const isAnonymous = authUser.is_anonymous ?? false;
 
-  const { score, results, date: bodyDate } = req.body ?? {};
+  const { score, results } = req.body ?? {};
   if (score === undefined || !Array.isArray(results)) {
     return res.status(400).json({ error: "Missing required fields: score, results" });
   }
 
   const supabase = buildSupabase();
-  const today    = todayDate();
-
-  // Quiz date the user actually played, echoed from GET /api/questions. Completion
-  // + session progress key to this date (the quiz that was answered) so a stale
-  // pre-7AM-cron fallback play doesn't bump today's counter and skip today's real
-  // session 0. Streak keys to real `today` below. Missing/invalid/future → today.
-  const quizDate =
-    typeof bodyDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(bodyDate) && bodyDate <= today
-      ? bodyDate
-      : today;
+  const today    = quizDay();   // 7AM-reset quiz day — matches the served quiz + cron
 
   try {
     const { data: user, error: userErr } = await supabase
@@ -77,7 +65,7 @@ router.post("/", async (req, res) => {
 
     const { error: compErr } = await supabase
       .from("completions")
-      .upsert({ user_id: userId, date: quizDate, score, results }, { onConflict: "user_id,date" });
+      .upsert({ user_id: userId, date: today, score, results }, { onConflict: "user_id,date" });
 
     if (compErr) {
       return res.status(500).json({ error: "Failed to record completion" });
@@ -107,13 +95,13 @@ router.post("/", async (req, res) => {
         .from("user_daily_progress")
         .select("sessions_completed")
         .eq("user_id", userId)
-        .eq("date", quizDate)
+        .eq("date", today)
         .single();
 
       const next = (progress?.sessions_completed ?? 0) + 1;
       await supabase
         .from("user_daily_progress")
-        .upsert({ user_id: userId, date: quizDate, sessions_completed: next, total_score: totalPoints }, { onConflict: "user_id,date" });
+        .upsert({ user_id: userId, date: today, sessions_completed: next, total_score: totalPoints }, { onConflict: "user_id,date" });
     } catch {
       // Non-fatal — "play more" will just re-serve the same session
     }
