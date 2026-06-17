@@ -1,7 +1,6 @@
 import { Router } from "express";
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { generateDaily } from "../jobs/generateDaily.js";
 import { SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
 
 const router = Router();
@@ -49,23 +48,42 @@ async function getAllQuestions(date, audience, redis, supabase) {
     }
   }
 
-  // 2. Supabase fallback — only for global (daily_questions.date is a single PK)
+  // 2. Supabase — today's row (global only; daily_questions.date is a single PK).
+  //    maybeSingle(): a missing row is the expected "cron hasn't run yet" path,
+  //    not an error.
   if (audience === "global") {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("daily_questions")
       .select("questions, generated_at")
       .eq("date", date)
-      .single();
+      .maybeSingle();
 
-    if (!error && data) {
+    if (data && Array.isArray(data.questions) && data.questions.length > 0) {
       return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
     }
   }
 
-  // 3. Generate on-demand (cache miss)
-  console.warn(`[GET /api/questions] cache miss (audience="${audience}") — generating on demand`);
-  const questions = await generateDaily(audience);
-  return { questions, generatedAt: new Date().toISOString(), source: "generated" };
+  // 3. Latest available row. Today's quiz isn't ready yet (cron not run, or a
+  //    non-global audience with no cache) — serve the most recent prior quiz so
+  //    the user never waits on live generation. We NEVER generate in the request
+  //    path; generation runs only from the 7AM cron (or the admin trigger).
+  const { data: latest } = await supabase
+    .from("daily_questions")
+    .select("questions, generated_at, date")
+    .lte("date", date)                       // never serve a future-dated row
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
+    console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
+    return { questions: latest.questions, generatedAt: latest.generated_at, source: "supabase-latest" };
+  }
+
+  // 4. Defensive only: reachable solely on a cold start (no quiz ever generated)
+  //    or a wiped table. In steady state step 3 always returns a row.
+  console.error(`[GET /api/questions] no daily_questions rows at or before ${date}`);
+  return { questions: [], generatedAt: null, source: "empty" };
 }
 
 // GET /api/questions[?audience=india|global]
