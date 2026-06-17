@@ -9,7 +9,7 @@
 
 import express, { Router } from "express";
 import { createClient } from "@supabase/supabase-js";
-import { timingSafeEqual } from "crypto";
+import { tokenMatches } from "../lib/adminAuth.js";
 
 const router = Router();
 router.use(express.urlencoded({ extended: false }));
@@ -32,15 +32,6 @@ function parseCookies(req) {
     out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
   }
   return out;
-}
-
-function tokenMatches(provided) {
-  const expected = process.env.ADMIN_TOKEN || "";
-  if (!expected || !provided) return false;
-  const a = Buffer.from(String(provided));
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
 }
 
 function requireAdmin(req, res, next) {

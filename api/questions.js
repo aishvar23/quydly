@@ -1,6 +1,5 @@
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { generateDaily } from "../backend/jobs/generateDaily.js";
 import { SESSION_SIZE, TOTAL_SESSIONS } from "../config/categories.js";
 
 function todayDate() {
@@ -27,11 +26,16 @@ function buildAnonSupabase() {
 }
 
 async function getAllQuestions(date, redis, supabase) {
+  // 1. Redis daily cache.
   if (redis) {
     try {
       await redis.connect();
       const cached = await redis.get(redisKey(date));
-      if (cached) return { questions: JSON.parse(cached), source: "redis" };
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return { questions: parsed, source: "redis" };
+        await redis.del(redisKey(date));
+      }
     } catch {
       // Redis unavailable — fall through
     } finally {
@@ -39,19 +43,41 @@ async function getAllQuestions(date, redis, supabase) {
     }
   }
 
+  // 2. Today's row. maybeSingle(): a missing row is the expected "cron hasn't
+  //    run yet" path, not an error. A real query error is surfaced (throw) so
+  //    the handler returns 500 rather than masquerading a DB outage as an
+  //    empty/"all caught up" quiz.
   const { data, error } = await supabase
     .from("daily_questions")
     .select("questions, generated_at")
     .eq("date", date)
-    .single();
-
-  if (!error && data) {
+    .maybeSingle();
+  if (error) throw new Error(`daily_questions lookup failed: ${error.message}`);
+  if (data && Array.isArray(data.questions) && data.questions.length > 0) {
     return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
   }
 
-  console.warn("[GET /api/questions] cache miss — generating on demand");
-  const questions = await generateDaily();
-  return { questions, generatedAt: new Date().toISOString(), source: "generated" };
+  // 3. Latest available row. Today's quiz isn't ready yet — serve the most
+  //    recent prior quiz so the user never waits on live generation. We NEVER
+  //    generate in the request path; generation runs only from the 7AM cron
+  //    (/api/cron/generate) or the manual silent trigger (/api/cron/generate-silent).
+  const { data: latest, error: latestErr } = await supabase
+    .from("daily_questions")
+    .select("questions, generated_at, date")
+    .lte("date", date)                       // never serve a future-dated row
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
+  if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
+    console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
+    return { questions: latest.questions, generatedAt: latest.generated_at, source: "supabase-latest" };
+  }
+
+  // 4. Defensive only: reachable solely on a cold start (no quiz ever generated)
+  //    or a wiped table. In steady state step 3 always returns a row.
+  console.error(`[GET /api/questions] no daily_questions rows at or before ${date}`);
+  return { questions: [], generatedAt: null, source: "empty" };
 }
 
 export default async function handler(req, res) {

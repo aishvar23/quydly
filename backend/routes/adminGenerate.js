@@ -12,21 +12,11 @@
 // matched with a constant-time compare (same convention as adminSocial.js).
 
 import { Router } from "express";
-import { timingSafeEqual } from "crypto";
 import { generateDaily } from "../jobs/generateDaily.js";
+import { tokenMatches } from "../lib/adminAuth.js";
+import { VALID_AUDIENCES } from "../lib/audiences.js";
 
 const router = Router();
-
-const VALID_AUDIENCES = ["india", "global"];
-
-function tokenMatches(provided) {
-  const expected = process.env.ADMIN_TOKEN || "";
-  if (!expected || !provided) return false;
-  const a = Buffer.from(String(provided));
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
 
 function requireAdmin(req, res, next) {
   if (!process.env.ADMIN_TOKEN) {
@@ -43,7 +33,10 @@ router.post("/generate-daily", requireAdmin, (req, res) => {
   const audience = VALID_AUDIENCES.includes(rawAudience) ? rawAudience : "global";
 
   // Fire-and-forget: never block the request on the multi-minute pipeline.
-  generateDaily(audience)
+  // silent: true — this is a manual recovery trigger, not the scheduled 7AM
+  // run, so it must NOT re-send the daily notification email to every user
+  // (generateDaily emails when `audience === "global" && !silent`).
+  generateDaily(audience, { silent: true })
     .then((questions) =>
       console.log(`[POST /api/admin/generate-daily] done (audience="${audience}", ${questions?.length ?? 0} questions)`),
     )

@@ -2,10 +2,9 @@ import { Router } from "express";
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
+import { VALID_AUDIENCES } from "../lib/audiences.js";
 
 const router = Router();
-
-const VALID_AUDIENCES = ["india", "global"];
 
 function redisKey(date, audience = "global") {
   return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
@@ -52,12 +51,12 @@ async function getAllQuestions(date, audience, redis, supabase) {
   //    maybeSingle(): a missing row is the expected "cron hasn't run yet" path,
   //    not an error.
   if (audience === "global") {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("daily_questions")
       .select("questions, generated_at")
       .eq("date", date)
       .maybeSingle();
-
+    if (error) throw new Error(`daily_questions lookup failed: ${error.message}`);
     if (data && Array.isArray(data.questions) && data.questions.length > 0) {
       return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
     }
@@ -67,13 +66,14 @@ async function getAllQuestions(date, audience, redis, supabase) {
   //    non-global audience with no cache) — serve the most recent prior quiz so
   //    the user never waits on live generation. We NEVER generate in the request
   //    path; generation runs only from the 7AM cron (or the admin trigger).
-  const { data: latest } = await supabase
+  const { data: latest, error: latestErr } = await supabase
     .from("daily_questions")
     .select("questions, generated_at, date")
     .lte("date", date)                       // never serve a future-dated row
     .order("date", { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
 
   if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
     console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
