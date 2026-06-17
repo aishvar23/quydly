@@ -33,7 +33,7 @@ async function getAllQuestions(date, redis, supabase) {
       const cached = await redis.get(redisKey(date));
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return { questions: parsed, source: "redis" };
+        if (Array.isArray(parsed) && parsed.length > 0) return { questions: parsed, source: "redis", servedDate: date };
         await redis.del(redisKey(date));
       }
     } catch {
@@ -54,7 +54,7 @@ async function getAllQuestions(date, redis, supabase) {
     .maybeSingle();
   if (error) throw new Error(`daily_questions lookup failed: ${error.message}`);
   if (data && Array.isArray(data.questions) && data.questions.length > 0) {
-    return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
+    return { questions: data.questions, generatedAt: data.generated_at, source: "supabase", servedDate: date };
   }
 
   // 3. Latest available row. Today's quiz isn't ready yet — serve the most
@@ -71,13 +71,16 @@ async function getAllQuestions(date, redis, supabase) {
   if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
   if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
     console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
-    return { questions: latest.questions, generatedAt: latest.generated_at, source: "supabase-latest" };
+    // servedDate = latest.date (NOT today): progress/completion must key to the
+    // quiz actually served, so playing this stale fallback before the 7AM cron
+    // doesn't advance today's session counter and skip today's real session 0.
+    return { questions: latest.questions, generatedAt: latest.generated_at, source: "supabase-latest", servedDate: latest.date };
   }
 
   // 4. Defensive only: reachable solely on a cold start (no quiz ever generated)
   //    or a wiped table. In steady state step 3 always returns a row.
   console.error(`[GET /api/questions] no daily_questions rows at or before ${date}`);
-  return { questions: [], generatedAt: null, source: "empty" };
+  return { questions: [], generatedAt: null, source: "empty", servedDate: null };
 }
 
 export default async function handler(req, res) {
@@ -90,7 +93,13 @@ export default async function handler(req, res) {
   const supabase = buildSupabase();
 
   try {
-    const { questions: allQuestions, generatedAt = null, source } = await getAllQuestions(date, redis, supabase);
+    const { questions: allQuestions, generatedAt = null, source, servedDate } = await getAllQuestions(date, redis, supabase);
+
+    // The served quiz's own date — today on the normal path, a prior date when
+    // the latest-row fallback fires. Progress is keyed to this (the quiz the
+    // user actually plays) and echoed to the client so /api/complete records
+    // against the same date.
+    const quizDate = servedDate ?? date;
 
     // Determine which session to serve from the auth token.
     // No token (anonymous) → always session 0.
@@ -107,7 +116,7 @@ export default async function handler(req, res) {
             .from("user_daily_progress")
             .select("sessions_completed")
             .eq("user_id", user.id)
-            .eq("date", date)
+            .eq("date", quizDate)
             .single();
           sessionIndex = progress?.sessions_completed ?? 0;
         }
@@ -117,17 +126,17 @@ export default async function handler(req, res) {
     }
 
     if (sessionIndex >= TOTAL_SESSIONS) {
-      return res.json({ date, allCaughtUp: true });
+      return res.json({ date: quizDate, allCaughtUp: true });
     }
 
     const start     = sessionIndex * SESSION_SIZE;
     const questions = allQuestions.slice(start, start + SESSION_SIZE);
 
     if (questions.length === 0) {
-      return res.json({ date, allCaughtUp: true });
+      return res.json({ date: quizDate, allCaughtUp: true });
     }
 
-    return res.json({ date, sessionIndex, questions, generatedAt, source });
+    return res.json({ date: quizDate, sessionIndex, questions, generatedAt, source });
   } catch (err) {
     console.error("[GET /api/questions]", err.message);
     return res.status(500).json({ error: "Failed to retrieve questions" });

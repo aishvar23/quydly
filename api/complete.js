@@ -44,13 +44,25 @@ export default async function handler(req, res) {
   const isAnonymous = authUser.is_anonymous ?? false;
 
   // ── Validate body ───────────────────────────────────────────────────────────
-  const { score, results } = req.body ?? {};
+  const { score, results, date: bodyDate } = req.body ?? {};
   if (score === undefined || !Array.isArray(results)) {
     return res.status(400).json({ error: "Missing required fields: score, results" });
   }
 
   const supabase = buildSupabase();
   const today    = todayDate();
+
+  // The quiz date the user actually played, echoed from GET /api/questions.
+  // On the normal path this is today; in the pre-7AM-cron window it's the prior
+  // date served by the latest-row fallback. Completion + session progress key to
+  // THIS date (the quiz that was answered) so a stale-fallback play doesn't bump
+  // today's counter and skip today's real session 0. Streak keys to real `today`
+  // below — the daily ritual is "did the user show up today", not the quiz date.
+  // Missing/invalid/future → fall back to today.
+  const quizDate =
+    typeof bodyDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(bodyDate) && bodyDate <= today
+      ? bodyDate
+      : today;
 
   try {
     // Fetch current user state
@@ -67,10 +79,10 @@ export default async function handler(req, res) {
     const newStreak   = updateStreak(user, today);
     const totalPoints = user.total_points + score;
 
-    // Upsert completion record
+    // Upsert completion record (keyed to the played quiz's date)
     const { error: compErr } = await supabase
       .from("completions")
-      .upsert({ user_id: userId, date: today, score, results }, { onConflict: "user_id,date" });
+      .upsert({ user_id: userId, date: quizDate, score, results }, { onConflict: "user_id,date" });
 
     if (compErr) {
       return res.status(500).json({ error: "Failed to record completion" });
@@ -105,14 +117,14 @@ export default async function handler(req, res) {
           .from("user_daily_progress")
           .select("sessions_completed")
           .eq("user_id", userId)
-          .eq("date", today)
+          .eq("date", quizDate)
           .single();
 
         const next = (progress?.sessions_completed ?? 0) + 1;
         await supabase
           .from("user_daily_progress")
           .upsert(
-            { user_id: userId, date: today, sessions_completed: next, total_score: totalPoints },
+            { user_id: userId, date: quizDate, sessions_completed: next, total_score: totalPoints },
             { onConflict: "user_id,date" }
           );
       } catch {
