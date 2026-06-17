@@ -12,6 +12,7 @@ import { fetchArticlePool, fetchAudienceStoryPools, fetchStoryPool } from "../se
 import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 import FLAGS from "../../config/flags.js";
+import { quizDay } from "../lib/quizDay.js";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ function buildCategoryQueue() {
 }
 
 function todayKey(audience = "global") {
-  const date = new Date().toISOString().slice(0, 10);
+  const date = quizDay();
   // Keep backward-compatible key for global; scope other audiences
   return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
 }
@@ -120,7 +121,7 @@ export async function generateDaily(audience = "global", { silent = false } = {}
   const redis = buildRedisClient();
   const supabase = buildSupabaseClient();
   const categoryQueue = buildCategoryQueue();
-  const date = new Date().toISOString().slice(0, 10);
+  const date = quizDay();   // 7AM-reset quiz day — same key the read path uses
   const totalQuestions = categoryQueue.length;
 
   // ── Build picker function ─────────────────────────────────────────────────
@@ -312,21 +313,24 @@ export async function generateDaily(audience = "global", { silent = false } = {}
   );
 
   // ── Persist ───────────────────────────────────────────────────────────────
-  let redisOk = false;
+  // Redis is a best-effort HOT CACHE for today's quiz (fast path on read).
   if (redis && questions.length > 0) {
     try {
       await redis.connect();
       await cacheInRedis(redis, todayKey(audience), questions);
-      redisOk = true;
     } catch (err) {
-      console.warn("[generateDaily] Redis unavailable, falling back to Supabase:", err.message);
+      console.warn("[generateDaily] Redis cache write failed (non-fatal):", err.message);
     } finally {
       redis.disconnect();
     }
   }
 
-  // Supabase fallback: only for global (daily_questions.date is the PK — no audience column)
-  if (!redisOk && audience === "global" && questions.length > 0) {
+  // Supabase daily_questions is the DURABLE SOURCE OF TRUTH that GET /api/questions
+  // falls back to when the cache misses (eviction, or the gap before the next
+  // cron). It must be written on EVERY successful global run — not only when
+  // Redis is down — or the read-side latest-row fallback serves stale/empty.
+  // (No audience column: non-global stays Redis-only.)
+  if (audience === "global" && questions.length > 0) {
     await saveToSupabase(supabase, date, questions);
   }
 

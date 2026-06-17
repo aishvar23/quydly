@@ -105,8 +105,11 @@ CreditManager {
 3. Send each headline to Claude API (see prompt below)
 4. Parse JSON response → validate shape
 5. Cache array of 5 questions in Redis (key: "questions:{YYYY-MM-DD}")
-   TTL: 24 hours
-6. Fallback: if Redis unavailable, store in Supabase daily_questions table
+   TTL: 24 hours  (best-effort hot cache for the read fast-path)
+6. Always persist to Supabase daily_questions (durable source of truth).
+   GET /api/questions serves the latest daily_questions row on a cache miss,
+   so this table must be written on every successful global run — not only
+   when Redis is down.
 ```
 
 ### Claude Prompt (per question)

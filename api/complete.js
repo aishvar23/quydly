@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { subDays } from "date-fns";
+import { quizDay } from "../backend/lib/quizDay.js";
 
 function buildSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -7,10 +8,6 @@ function buildSupabase() {
 
 function buildAnonSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-}
-
-function todayDate() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function updateStreak(user, today) {
@@ -50,7 +47,7 @@ export default async function handler(req, res) {
   }
 
   const supabase = buildSupabase();
-  const today    = todayDate();
+  const today    = quizDay();   // 7AM-reset quiz day — matches the served quiz + cron
 
   try {
     // Fetch current user state
