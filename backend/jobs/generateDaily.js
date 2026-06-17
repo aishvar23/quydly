@@ -5,6 +5,7 @@ import { dirname, resolve } from "path";
 const __filename = fileURLToPath(import.meta.url);
 dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
+import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE, TOTAL_SESSIONS } from "../../config/categories.js";
@@ -106,6 +107,24 @@ async function saveToSupabase(supabase, date, questions) {
     .upsert({ date, questions, generated_at: new Date().toISOString() });
   if (error) throw new Error(`Supabase upsert failed: ${error.message}`);
   console.log(`[supabase] saved ${questions.length} questions for ${date}`);
+}
+
+// Durable per-question identity for the signed-in unbounded/multi-day backlog.
+// Replace this day's set (admin re-trigger replaces rather than appends);
+// user_question_attempts cascades on delete, so a manual re-generation cleanly
+// resets that day. Runs for BOTH audiences (quiz_questions has an audience col).
+async function saveQuizQuestions(supabase, date, audience, rows) {
+  if (rows.length === 0) return;
+  const { error: delErr } = await supabase
+    .from("quiz_questions")
+    .delete()
+    .eq("date", date)
+    .eq("audience", audience);
+  if (delErr) throw new Error(`quiz_questions delete failed: ${delErr.message}`);
+
+  const { error: insErr } = await supabase.from("quiz_questions").insert(rows);
+  if (insErr) throw new Error(`quiz_questions insert failed: ${insErr.message}`);
+  console.log(`[supabase] saved ${rows.length} quiz_questions for ${date} (${audience})`);
 }
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -293,6 +312,7 @@ export async function generateDaily(audience = "global", { silent = false } = {}
       }
 
       if (question) {
+        question._storyId = article?._story_id ?? null;  // for quiz_questions.story_id
         usedSignatures.push(sig);
         break;
       }
@@ -313,6 +333,38 @@ export async function generateDaily(audience = "global", { silent = false } = {}
   );
 
   // ── Persist ───────────────────────────────────────────────────────────────
+  // Assign a stable id to each question and build the durable quiz_questions
+  // rows. MUST run before any caching so the cached/daily_questions jsonb
+  // carries the id — that id is what the attempt-tracking path records, which
+  // is how a guest's free-5 are excluded once they sign in (same user_id).
+  const quizRows = questions.map((q) => {
+    const id = randomUUID();
+    const storyId = q._storyId ?? null;
+    q.id = id;             // embed into the cached object
+    delete q._storyId;     // keep the cached jsonb shape clean
+    return {
+      id,
+      date,
+      audience,
+      category_id:   q.categoryId,
+      question:      q.question,
+      options:       q.options,
+      correct_index: q.correctIndex,
+      tldr:          q.tldr,
+      story_id:      storyId,
+    };
+  });
+
+  // Non-fatal: a quiz_questions failure must not block the daily_questions /
+  // Redis write the anonymous free-5 path depends on.
+  if (quizRows.length > 0) {
+    try {
+      await saveQuizQuestions(supabase, date, audience, quizRows);
+    } catch (err) {
+      console.warn(`[generateDaily] quiz_questions persist failed (non-fatal): ${err.message}`);
+    }
+  }
+
   // Redis is a best-effort HOT CACHE for today's quiz (fast path on read).
   if (redis && questions.length > 0) {
     try {

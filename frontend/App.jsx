@@ -141,6 +141,7 @@ export default function App() {
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [skipped,     setSkipped]     = useState(false);
   const [unlimited,   setUnlimited]   = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState(null); // null = all beats
   const [wager,       setWager]       = useState(25);
   const [points,      setPoints]      = useState(0);
   const [streak,      setStreak]      = useState(0);
@@ -325,8 +326,12 @@ export default function App() {
       // 8.6 — detect India locale via timezone; expo-localization not installed
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const isIndia = tz === "Asia/Kolkata" || tz === "Asia/Calcutta";
-      const audienceParam = isIndia ? "?audience=india" : "";
-      const res = await fetch(`${API_BASE}/api/questions${audienceParam}`, { headers });
+      const params = new URLSearchParams();
+      if (isIndia) params.set("audience", "india");
+      // Beat filter is signed-in only; guests always get the editorial mix.
+      if (isSignedIn && selectedCategory) params.set("category", selectedCategory);
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/api/questions${qs ? `?${qs}` : ""}`, { headers });
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
 
@@ -362,7 +367,7 @@ export default function App() {
     setSelectedIdx(idx);
     setSkipped(false);
     setAnswered(true);
-    setResults((prev) => [...prev, { correct, delta, categoryId: q.categoryId }]);
+    setResults((prev) => [...prev, { id: q.id, correct, delta, categoryId: q.categoryId }]);
   };
 
   // Skip & reveal — no points, no penalty. Recorded as not-correct so it
@@ -373,7 +378,7 @@ export default function App() {
     setSelectedIdx(null);
     setSkipped(true);
     setAnswered(true);
-    setResults((prev) => [...prev, { correct: false, delta: 0, categoryId: q.categoryId, skipped: true }]);
+    setResults((prev) => [...prev, { id: q.id, correct: false, delta: 0, categoryId: q.categoryId, skipped: true }]);
   };
 
   // Submit the run so far (points, streak, rank). Used by both the natural
@@ -483,6 +488,9 @@ export default function App() {
           streak={streak}
           points={points}
           answered={results.length}
+          canChooseBeat={FLAGS.beatEnabled && isSignedIn}
+          selectedCategory={selectedCategory}
+          onSelectCategory={setSelectedCategory}
         />
       )}
 

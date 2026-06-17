@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { subDays } from "date-fns";
 import { quizDay } from "../backend/lib/quizDay.js";
+import { recordAttempts } from "../backend/lib/recordAttempts.js";
 
 function buildSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -73,6 +74,9 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Failed to record completion" });
     }
 
+    // Advance the per-question checkpoint (anon included — see recordAttempts).
+    await recordAttempts(supabase, userId, results);
+
     // Update user streak + points
     const { error: updateErr } = await supabase
       .from("users")
@@ -94,27 +98,27 @@ export default async function handler(req, res) {
     // promptSaveStreak: true → frontend shows "Save your streak — sign in with Google"
     const promptSaveStreak = isAnonymous && newStreak >= 1;
 
-    // Advance session counter so next GET /api/questions serves the next batch.
-    // Non-fatal — streak and points are already committed above.
-    if (!isAnonymous) {
-      try {
-        const { data: progress } = await supabase
-          .from("user_daily_progress")
-          .select("sessions_completed")
-          .eq("user_id", userId)
-          .eq("date", today)
-          .single();
+    // Advance the daily session counter. Anonymous users included: the free
+    // tier is one 5-question session/day, so the counter reaching 1 is what
+    // makes a second GET /api/questions return allCaughtUp (server-side backstop
+    // behind the frontend credit gate). Non-fatal — streak/points already saved.
+    try {
+      const { data: progress } = await supabase
+        .from("user_daily_progress")
+        .select("sessions_completed")
+        .eq("user_id", userId)
+        .eq("date", today)
+        .single();
 
-        const next = (progress?.sessions_completed ?? 0) + 1;
-        await supabase
-          .from("user_daily_progress")
-          .upsert(
-            { user_id: userId, date: today, sessions_completed: next, total_score: totalPoints },
-            { onConflict: "user_id,date" }
-          );
-      } catch {
-        // Non-fatal
-      }
+      const next = (progress?.sessions_completed ?? 0) + 1;
+      await supabase
+        .from("user_daily_progress")
+        .upsert(
+          { user_id: userId, date: today, sessions_completed: next, total_score: totalPoints },
+          { onConflict: "user_id,date" }
+        );
+    } catch {
+      // Non-fatal
     }
 
     return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });

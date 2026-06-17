@@ -2,6 +2,7 @@ import { Router } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { subDays } from "date-fns";
 import { quizDay } from "../lib/quizDay.js";
+import { recordAttempts } from "../lib/recordAttempts.js";
 
 const router = Router();
 
@@ -70,6 +71,9 @@ router.post("/", async (req, res) => {
     if (compErr) {
       return res.status(500).json({ error: "Failed to record completion" });
     }
+
+    // Advance the per-question checkpoint (anon included — see recordAttempts).
+    await recordAttempts(supabase, userId, results);
 
     const { error: updateErr } = await supabase
       .from("users")

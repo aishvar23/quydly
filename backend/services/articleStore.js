@@ -147,7 +147,7 @@ export async function fetchStoryPool(category_id, limit = 10) {
 
   const { data, error } = await supabase
     .from("stories")
-    .select("headline, summary, key_points, confidence_score, source_count")
+    .select("id, headline, summary, key_points, confidence_score, source_count")
     .eq("category_id", category_id)
     .eq("quiz_candidate", true)
     .gte("confidence_score", 6)
@@ -170,6 +170,7 @@ export async function fetchStoryPool(category_id, limit = 10) {
       key_points:       Array.isArray(s.key_points) ? s.key_points : [],
       confidence_score: s.confidence_score,
       source_count:     s.source_count,
+      _story_id:        s.id,
     }));
 }
 
