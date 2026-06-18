@@ -260,14 +260,15 @@ export default function App() {
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (session) {
           setSession(session);
-          // Lifetime stats (score/accuracy/answered) are a signed-in feature.
-          // A guest is a persisted ANONYMOUS user, so loading their stored
-          // cumulative total here is what made a guest show a stale lifetime
-          // score (e.g. 125) on a fresh load. Only hydrate for real accounts;
-          // anon sessions keep the zeroed initial state and show session-only
+          // A guest is a persisted ANONYMOUS user. Hydrate streak for them (the
+          // daily-ritual hook), but NOT the cumulative lifetime score — loading
+          // a guest's stored total here is what made a guest show a stale score
+          // (e.g. 125) on a fresh load. Real accounts hydrate everything; anon
+          // sessions keep the zeroed lifetime state and show session-only
           // progress (the server still records anon attempts for the eventual
           // sign-in/linkIdentity merge).
-          if (!(session.user?.is_anonymous ?? true)) loadUserData(session.user.id);
+          const isAnon = session.user?.is_anonymous ?? true;
+          loadUserData(session.user.id, { hydrateLifetime: !isAnon });
         } else if (!isOAuthRedirect && !singleQuestionId) {
           // Skip anonymous provisioning for public single-question share visitors
           // — a brand-new anon user per share-link hit would balloon auth.users.
@@ -313,7 +314,11 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const loadUserData = async (userId) => {
+  // Streak is hydrated for everyone (it's the daily-ritual hook shown to guests
+  // too, and drives the save-streak prompt); the cumulative lifetime stats
+  // (score/accuracy/answered) are a signed-in feature, so pass hydrateLifetime:
+  // false for anonymous guests to keep them at the zeroed session-only state.
+  const loadUserData = async (userId, { hydrateLifetime = true } = {}) => {
     // Prefer the denormalized lifetime columns; fall back if the migration that
     // adds them hasn't landed yet so streak/points still load.
     let { data } = await supabase
@@ -330,9 +335,11 @@ export default function App() {
     }
     if (data) {
       setStreak(data.streak ?? 0);
-      setPoints(data.total_points ?? 0);
-      setAnsweredTotal(data.total_answered ?? 0);
-      setCorrectTotal(data.total_correct ?? 0);
+      if (hydrateLifetime) {
+        setPoints(data.total_points ?? 0);
+        setAnsweredTotal(data.total_answered ?? 0);
+        setCorrectTotal(data.total_correct ?? 0);
+      }
     }
   };
 

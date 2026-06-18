@@ -7,6 +7,11 @@
 -- no ledger rows (legacy id-less completions only) correctly become 0. This
 -- rewrites historical scores and is NOT reversible — the old running-sum values
 -- are not stored anywhere else. Run deliberately.
+--
+-- ORDER: apply migration_lifetime_points_consistency.sql (the points-aware RPC)
+-- BEFORE this backfill. Otherwise applyCompletion's fallback re-adds the session
+-- score on top of an already-backfilled total on the next completion, until the
+-- RPC lands. (The repo has no migration runner; these are applied by hand.)
 
 update users u set total_points = coalesce((
   select sum(a.delta) filter (where a.delta > 0)::int
