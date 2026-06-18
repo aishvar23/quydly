@@ -414,10 +414,16 @@ export default function App() {
       // Checkpoint the answers so far BEFORE fetching: serve_unseen only excludes
       // questions already in user_question_attempts, so fetching first could
       // re-serve a just-answered question when switching to an overlapping beat
-      // (e.g. All → its category). Clearing results right after the submit also
-      // means an empty/failed switch can't re-submit them and inflate the score.
+      // (e.g. All → its category). Only clear results / proceed once the
+      // checkpoint actually succeeded — otherwise the answers would be dropped
+      // from any later completion AND re-served (they never reached the ledger).
       if (isSignedIn && results.length > 0) {
-        await submitCompletion();
+        const ok = await submitCompletion();
+        if (!ok) {
+          setScreen("quiz");
+          setBeatNotice("Couldn't save your progress — staying on this beat.");
+          return;
+        }
         setResults([]);
       }
       const data = await fetchQuestions(next);
@@ -466,10 +472,12 @@ export default function App() {
     setResults((prev) => [...prev, { id: q.id, correct: false, delta: 0, categoryId: q.categoryId, skipped: true }]);
   };
 
-  // Submit the run so far (points, streak, rank). Used by both the natural
-  // end-of-pool finish and the "quit anytime" path.
+  // Submit the run so far (points, streak, rank). Used by the natural
+  // end-of-pool finish, the "quit anytime" path, and the beat switch.
+  // Returns true only if the completion was actually checkpointed server-side;
+  // callers that must not lose/duplicate answers (beat switch) gate on this.
   const submitCompletion = async () => {
-    if (!session) return;
+    if (!session) return false;
     try {
       const sessionScore = results.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
       const resp = await fetch(`${API_BASE}/api/complete`, {
@@ -480,6 +488,7 @@ export default function App() {
         },
         body: JSON.stringify({ score: sessionScore, results }),
       });
+      if (!resp.ok) return false;   // 401/500 etc. — attempts NOT recorded
       const data = await resp.json();
       if (data.streak !== undefined) setStreak(data.streak);
       // Reconcile cumulative stats to the server-authoritative totals (which
@@ -490,8 +499,9 @@ export default function App() {
       if (data.totalCorrect != null) setCorrectTotal(data.totalCorrect);
       if (data.rank !== undefined) setEndRank(data.rank);
       if (data.promptSaveStreak) setPromptSaveStreak(true);
+      return true;
     } catch {
-      // non-fatal
+      return false;   // network failure — attempts NOT recorded
     }
   };
 
