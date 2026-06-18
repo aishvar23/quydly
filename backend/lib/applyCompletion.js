@@ -1,0 +1,116 @@
+// Shared completion logic for both POST /api/complete surfaces
+// (backend/routes/complete.js, Express local dev; api/complete.js, Vercel prod).
+// Both handlers previously inlined this verbatim and are exactly the kind of
+// pair that drifts — this is the single source of truth so they can't.
+//
+// Records the completion, advances the per-question checkpoint, recomputes the
+// user's LIFETIME stats from the attempt ledger (the score/accuracy/answered
+// display is cumulative and never resets), updates the users row, and returns
+// the values the frontend reconciles against.
+
+import { subDays } from "date-fns";
+import { recordAttempts } from "./recordAttempts.js";
+
+function updateStreak(user, today) {
+  const yesterday = subDays(new Date(today), 1).toISOString().slice(0, 10);
+  if (user.last_played === yesterday) return user.streak + 1;
+  if (user.last_played === today)     return user.streak;
+  return 1;
+}
+
+// Recompute lifetime answered/correct from user_question_attempts — the
+// authoritative, idempotent ledger. "Answered" excludes skips (delta = 0).
+// Returns null on failure so callers can fall back to not persisting them.
+async function computeLifetimeStats(supabase, userId) {
+  try {
+    const [{ count: answered }, { count: correct }] = await Promise.all([
+      supabase.from("user_question_attempts")
+        .select("question_id", { count: "exact", head: true })
+        .eq("user_id", userId).neq("delta", 0),
+      supabase.from("user_question_attempts")
+        .select("question_id", { count: "exact", head: true })
+        .eq("user_id", userId).eq("correct", true),
+    ]);
+    return { totalAnswered: answered ?? 0, totalCorrect: correct ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
+// Throws Error with `.status` on a recoverable client/server condition so the
+// HTTP handlers can map it to the right code; returns the response body on success.
+export async function applyCompletion(supabase, { userId, isAnonymous, score, results, today }) {
+  const { data: user, error: userErr } = await supabase
+    .from("users")
+    .select("streak, last_played, total_points")
+    .eq("id", userId)
+    .single();
+
+  if (userErr || !user) {
+    const e = new Error("User not found");
+    e.status = 404;
+    throw e;
+  }
+
+  const newStreak   = updateStreak(user, today);
+  const totalPoints = user.total_points + score;
+
+  const { error: compErr } = await supabase
+    .from("completions")
+    .upsert({ user_id: userId, date: today, score, results }, { onConflict: "user_id,date" });
+  if (compErr) {
+    const e = new Error("Failed to record completion");
+    e.status = 500;
+    throw e;
+  }
+
+  // Advance the per-question checkpoint first (anon included — see recordAttempts),
+  // then recompute lifetime stats so the counts reflect this completion's attempts.
+  await recordAttempts(supabase, userId, results);
+  const lifetime = await computeLifetimeStats(supabase, userId);
+
+  const update = { streak: newStreak, last_played: today, total_points: totalPoints };
+  if (lifetime) {
+    update.total_answered = lifetime.totalAnswered;
+    update.total_correct  = lifetime.totalCorrect;
+  }
+
+  let { error: updateErr } = await supabase.from("users").update(update).eq("id", userId);
+  // Deploy-safe: if the lifetime columns aren't migrated yet, the update would
+  // reject and lose streak/points too. Retry without them so completions still
+  // commit; the stats self-heal once the migration lands.
+  if (updateErr && lifetime) {
+    delete update.total_answered;
+    delete update.total_correct;
+    ({ error: updateErr } = await supabase.from("users").update(update).eq("id", userId));
+  }
+  if (updateErr) {
+    const e = new Error("Failed to update user record");
+    e.status = 500;
+    throw e;
+  }
+
+  const { count, error: rankErr } = await supabase
+    .from("users")
+    .select("id", { count: "exact", head: true })
+    .gt("total_points", totalPoints);
+  const rank = rankErr ? null : (count ?? 0) + 1;
+
+  const promptSaveStreak = isAnonymous && newStreak >= 1;
+
+  // Atomically advance the per-day session counter (anon free-tier backstop +
+  // next-batch cursor). Non-fatal — streak/points already saved above.
+  const { error: bumpErr } = await supabase.rpc("bump_daily_session", {
+    p_user: userId, p_date: today, p_score: totalPoints,
+  });
+  if (bumpErr) console.warn(`[applyCompletion] session bump failed: ${bumpErr.message}`);
+
+  return {
+    streak: newStreak,
+    totalPoints,
+    totalAnswered: lifetime?.totalAnswered ?? null,
+    totalCorrect:  lifetime?.totalCorrect ?? null,
+    rank,
+    promptSaveStreak,
+  };
+}

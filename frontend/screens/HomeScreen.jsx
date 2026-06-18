@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { View, Text, TouchableOpacity, ScrollView, Image, useWindowDimensions } from "react-native";
 import { CATEGORIES } from "../../config/categories";
+import StatsBar from "../components/StatsBar";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -51,12 +52,6 @@ function makeStyles(scale) {
     streakBadge:         { backgroundColor: T.amber,  borderRadius: s(20), paddingHorizontal: s(11), paddingVertical: s(5) },
     streakBadgeText:     { fontFamily: FONT.mono,    fontSize: s(11), fontWeight: "700", color: T.ink },
 
-    // StatsBar
-    statsBar: { flexDirection: "row", gap: s(8), marginBottom: s(14) },
-    statChip: { flex: 1, backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(10), paddingVertical: s(10), paddingHorizontal: s(8), alignItems: "center" },
-    statVal:  { fontFamily: FONT.mono, fontSize: s(20), fontWeight: "700", color: T.amber, lineHeight: s(22) },
-    statLbl:  { fontFamily: FONT.body, fontSize: s(9),  textTransform: "uppercase", letterSpacing: s(1), color: T.muted, marginTop: s(3), fontWeight: "600" },
-
     // HomeCard
     homeCard:     { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), paddingVertical: s(22), paddingHorizontal: s(20), alignItems: "center" },
     homeEdition:  { fontFamily: FONT.mono,    fontSize: s(10), fontWeight: "600", letterSpacing: s(2), textTransform: "uppercase", color: T.amber, marginBottom: s(8) },
@@ -106,27 +101,9 @@ function Masthead({ streak, styles }) {
   );
 }
 
-// ── StatsBar ──────────────────────────────────────────────────────────────────
-function StatsBar({ points, credits, answered, styles }) {
-  return (
-    <View style={styles.statsBar}>
-      {[
-        { val: points,   lbl: "Points"     },
-        { val: Number.isFinite(credits) ? credits : "∞", lbl: "Left Today" },
-        { val: answered, lbl: "Answered"   },
-      ].map(({ val, lbl }) => (
-        <View key={lbl} style={styles.statChip}>
-          <Text style={styles.statVal}>{val}</Text>
-          <Text style={styles.statLbl}>{lbl}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
 // ── HomeScreen ────────────────────────────────────────────────────────────────
 export default function HomeScreen({
-  onStart, credits, strategy, streak = 0, points = 0, answered = 0,
+  onStart, credits, strategy, streak = 0, score = 0, accuracy = 0, answered = 0,
   canChooseBeat = false, selectedCategory = null, onSelectCategory,
 }) {
   const { width } = useWindowDimensions();
@@ -149,7 +126,7 @@ export default function HomeScreen({
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <Masthead streak={streak} styles={styles} />
-      <StatsBar points={points} credits={credits} answered={answered} styles={styles} />
+      <StatsBar score={score} accuracy={accuracy} answered={answered} scale={scale} />
 
       <View style={styles.homeCard}>
         <Text style={styles.homeEdition}>Quydly · {strategy.getLabel()}</Text>
