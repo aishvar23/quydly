@@ -35,9 +35,16 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
--- Serving walks this index: filter by audience [+ category], newest date first.
+-- All-categories serving walks this index: audience + date prefix, newest first.
 CREATE INDEX IF NOT EXISTS quiz_questions_serve_idx
   ON quiz_questions (audience, date DESC, category_id);
+
+-- Beat (single-category) serving needs category_id BEFORE date so the equality
+-- prefix is used and ORDER BY date DESC needs no sort. The serve_idx above puts
+-- date before category_id, so it can't satisfy the category-filtered query
+-- efficiently — this index does.
+CREATE INDEX IF NOT EXISTS quiz_questions_beat_idx
+  ON quiz_questions (audience, category_id, date DESC);
 
 -- ─────────────────────────────────────────────
 -- user_question_attempts
@@ -62,8 +69,12 @@ CREATE INDEX IF NOT EXISTS uqa_user_idx
 -- serve_unseen(user, audience, category, today, limit)
 --   Next page of questions a signed-in user has NOT attempted, newest day
 --   first, reaching back across days until none remain. p_category NULL = all
---   categories. The supabase-js builder can't express NOT EXISTS cleanly, so
---   this is called via supabase.rpc('serve_unseen', {...}).
+--   categories. Called via supabase.rpc('serve_unseen', {...}).
+--
+--   Branches on p_category instead of `(p_category IS NULL OR category_id=...)`
+--   so each query is sargable: the NULL branch uses quiz_questions_serve_idx
+--   (audience, date DESC); the category branch uses quiz_questions_beat_idx
+--   (audience, category_id, date DESC). The OR-NULL form defeats both indexes.
 -- ─────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION serve_unseen(
   p_user     uuid,
@@ -72,18 +83,52 @@ CREATE OR REPLACE FUNCTION serve_unseen(
   p_today    date,
   p_limit    int
 ) RETURNS SETOF quiz_questions
-LANGUAGE sql STABLE AS $$
-  SELECT q.*
-  FROM quiz_questions q
-  WHERE q.audience = p_audience
-    AND (p_category IS NULL OR q.category_id = p_category)
-    AND q.date <= p_today                       -- never serve a future-dated row
-    AND NOT EXISTS (
-      SELECT 1 FROM user_question_attempts a
-      WHERE a.user_id = p_user AND a.question_id = q.id
-    )
-  ORDER BY q.date DESC, q.created_at ASC
-  LIMIT p_limit;
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+  IF p_category IS NULL THEN
+    RETURN QUERY
+      SELECT q.* FROM quiz_questions q
+      WHERE q.audience = p_audience
+        AND q.date <= p_today                    -- never serve a future-dated row
+        AND NOT EXISTS (
+          SELECT 1 FROM user_question_attempts a
+          WHERE a.user_id = p_user AND a.question_id = q.id)
+      ORDER BY q.date DESC, q.created_at ASC
+      LIMIT p_limit;
+  ELSE
+    RETURN QUERY
+      SELECT q.* FROM quiz_questions q
+      WHERE q.audience = p_audience
+        AND q.category_id = p_category
+        AND q.date <= p_today
+        AND NOT EXISTS (
+          SELECT 1 FROM user_question_attempts a
+          WHERE a.user_id = p_user AND a.question_id = q.id)
+      ORDER BY q.date DESC, q.created_at ASC
+      LIMIT p_limit;
+  END IF;
+END;
+$$;
+
+-- ─────────────────────────────────────────────
+-- bump_daily_session(user, date, score)
+--   Atomically advance the per-day session counter and return the new value.
+--   A single INSERT ... ON CONFLICT DO UPDATE avoids the lost-update race of a
+--   read-then-write (two concurrent completions could otherwise both read N and
+--   both write N+1). Called from POST /api/complete.
+-- ─────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION bump_daily_session(
+  p_user  uuid,
+  p_date  date,
+  p_score int
+) RETURNS int
+LANGUAGE sql AS $$
+  INSERT INTO user_daily_progress (user_id, date, sessions_completed, total_score)
+  VALUES (p_user, p_date, 1, p_score)
+  ON CONFLICT (user_id, date) DO UPDATE
+    SET sessions_completed = user_daily_progress.sessions_completed + 1,
+        total_score        = p_score
+  RETURNING sessions_completed;
 $$;
 
 -- ─────────────────────────────────────────────

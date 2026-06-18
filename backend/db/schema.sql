@@ -71,6 +71,8 @@ create table if not exists quiz_questions (
 );
 create index if not exists quiz_questions_serve_idx
   on quiz_questions (audience, date desc, category_id);
+create index if not exists quiz_questions_beat_idx
+  on quiz_questions (audience, category_id, date desc);
 
 -- Per-user attempt checkpoint: the set of question ids a user has attempted.
 create table if not exists user_question_attempts (
