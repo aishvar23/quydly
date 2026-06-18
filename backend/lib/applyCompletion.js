@@ -29,7 +29,15 @@ async function computeLifetimeStats(supabase, userId) {
   if (error) return null;
   const row = Array.isArray(data) ? data[0] : data;
   if (!row) return null;
-  return { totalAnswered: row.answered ?? 0, totalCorrect: row.correct ?? 0 };
+  return {
+    totalAnswered: row.answered ?? 0,
+    totalCorrect:  row.correct ?? 0,
+    // points = sum of positive deltas, the same "lifetime score never decreases"
+    // rule the client applies via Math.max(0, delta). null (not 0) when the
+    // points-aware RPC isn't deployed yet, so the caller falls back to the
+    // running sum rather than zeroing every score during the migration window.
+    totalPoints:   typeof row.points === "number" ? row.points : null,
+  };
 }
 
 // Throws Error with `.status` on a recoverable client/server condition so the
@@ -47,8 +55,7 @@ export async function applyCompletion(supabase, { userId, isAnonymous, score, re
     throw e;
   }
 
-  const newStreak   = updateStreak(user, today);
-  const totalPoints = user.total_points + score;
+  const newStreak = updateStreak(user, today);
 
   // Advance the per-question checkpoint FIRST (anon included — see recordAttempts).
   // It's the ledger that lifetime stats and serve_unseen exclusion both trust, so
@@ -73,6 +80,16 @@ export async function applyCompletion(supabase, { userId, isAnonymous, score, re
 
   // Recompute lifetime stats so the counts reflect this completion's attempts.
   const lifetime = await computeLifetimeStats(supabase, userId);
+
+  // Lifetime score derives from the SAME ledger as answered/correct so the three
+  // can't drift. The old running sum (user.total_points + score) double-counts
+  // mid-run beat-switch resubmits and counts id-less legacy completions that
+  // never produced ledger rows — the cause of "125 points but 0 answered". Fall
+  // back to the running sum only when the points-aware RPC isn't deployed yet.
+  const totalPoints =
+    lifetime && lifetime.totalPoints != null
+      ? lifetime.totalPoints
+      : user.total_points + score;
 
   const update = { streak: newStreak, last_played: today, total_points: totalPoints };
   if (lifetime) {

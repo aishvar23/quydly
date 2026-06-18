@@ -260,7 +260,14 @@ export default function App() {
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (session) {
           setSession(session);
-          loadUserData(session.user.id);
+          // Lifetime stats (score/accuracy/answered) are a signed-in feature.
+          // A guest is a persisted ANONYMOUS user, so loading their stored
+          // cumulative total here is what made a guest show a stale lifetime
+          // score (e.g. 125) on a fresh load. Only hydrate for real accounts;
+          // anon sessions keep the zeroed initial state and show session-only
+          // progress (the server still records anon attempts for the eventual
+          // sign-in/linkIdentity merge).
+          if (!(session.user?.is_anonymous ?? true)) loadUserData(session.user.id);
         } else if (!isOAuthRedirect && !singleQuestionId) {
           // Skip anonymous provisioning for public single-question share visitors
           // — a brand-new anon user per share-link hit would balloon auth.users.
@@ -494,9 +501,14 @@ export default function App() {
       // Reconcile cumulative stats to the server-authoritative totals (which
       // already include this run's attempts). Setting (not adding) is what keeps
       // repeated submits — e.g. a beat switch mid-run — from double-counting.
-      if (data.totalPoints !== undefined) setPoints(data.totalPoints);
-      if (data.totalAnswered != null) setAnsweredTotal(data.totalAnswered);
-      if (data.totalCorrect != null) setCorrectTotal(data.totalCorrect);
+      // Signed-in only: the lifetime display is a signed-in feature, so a guest
+      // keeps their session-local optimistic stats instead of pulling back the
+      // server cumulative (which would re-surface the stale lifetime score).
+      if (isSignedIn) {
+        if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+        if (data.totalAnswered != null) setAnsweredTotal(data.totalAnswered);
+        if (data.totalCorrect != null) setCorrectTotal(data.totalCorrect);
+      }
       if (data.rank !== undefined) setEndRank(data.rank);
       if (data.promptSaveStreak) setPromptSaveStreak(true);
       return true;
