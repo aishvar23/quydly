@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { View, Text, TouchableOpacity, ScrollView, Image, useWindowDimensions } from "react-native";
 import { CATEGORIES } from "../../config/categories";
+import StatsBar from "../components/StatsBar";
+import BeatSelector from "../components/BeatSelector";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -51,12 +53,6 @@ function makeStyles(scale) {
     streakBadge:         { backgroundColor: T.amber,  borderRadius: s(20), paddingHorizontal: s(11), paddingVertical: s(5) },
     streakBadgeText:     { fontFamily: FONT.mono,    fontSize: s(11), fontWeight: "700", color: T.ink },
 
-    // StatsBar
-    statsBar: { flexDirection: "row", gap: s(8), marginBottom: s(14) },
-    statChip: { flex: 1, backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(10), paddingVertical: s(10), paddingHorizontal: s(8), alignItems: "center" },
-    statVal:  { fontFamily: FONT.mono, fontSize: s(20), fontWeight: "700", color: T.amber, lineHeight: s(22) },
-    statLbl:  { fontFamily: FONT.body, fontSize: s(9),  textTransform: "uppercase", letterSpacing: s(1), color: T.muted, marginTop: s(3), fontWeight: "600" },
-
     // HomeCard
     homeCard:     { backgroundColor: T.card, borderWidth: 1, borderColor: T.border, borderRadius: s(16), paddingVertical: s(22), paddingHorizontal: s(20), alignItems: "center" },
     homeEdition:  { fontFamily: FONT.mono,    fontSize: s(10), fontWeight: "600", letterSpacing: s(2), textTransform: "uppercase", color: T.amber, marginBottom: s(8) },
@@ -67,15 +63,6 @@ function makeStyles(scale) {
     mixPreview:  { flexDirection: "row", flexWrap: "wrap", gap: s(6), justifyContent: "center", marginBottom: s(16) },
     mixPill:     { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(4), paddingHorizontal: s(10) },
     mixPillText: { fontFamily: FONT.body, fontSize: s(11), color: T.cream2 },
-
-    // Beat selector (signed-in only)
-    beatBlock:           { width: "100%", marginBottom: s(16) },
-    beatLabel:           { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(1.5), textTransform: "uppercase", color: T.muted, textAlign: "center", marginBottom: s(8) },
-    beatRow:             { flexDirection: "row", flexWrap: "wrap", gap: s(6), justifyContent: "center" },
-    beatChip:            { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(5), paddingHorizontal: s(11) },
-    beatChipActive:      { backgroundColor: T.amber, borderColor: T.amber },
-    beatChipText:        { fontFamily: FONT.body, fontSize: s(11), color: T.cream2 },
-    beatChipTextActive:  { color: T.ink, fontWeight: "700" },
 
     // Start button
     startBtn:     { width: "100%", paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(12), alignItems: "center", marginBottom: s(10) },
@@ -106,27 +93,9 @@ function Masthead({ streak, styles }) {
   );
 }
 
-// ── StatsBar ──────────────────────────────────────────────────────────────────
-function StatsBar({ points, credits, answered, styles }) {
-  return (
-    <View style={styles.statsBar}>
-      {[
-        { val: points,   lbl: "Points"     },
-        { val: Number.isFinite(credits) ? credits : "∞", lbl: "Left Today" },
-        { val: answered, lbl: "Answered"   },
-      ].map(({ val, lbl }) => (
-        <View key={lbl} style={styles.statChip}>
-          <Text style={styles.statVal}>{val}</Text>
-          <Text style={styles.statLbl}>{lbl}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
 // ── HomeScreen ────────────────────────────────────────────────────────────────
 export default function HomeScreen({
-  onStart, credits, strategy, streak = 0, points = 0, answered = 0,
+  onStart, credits, strategy, streak = 0, score = 0, accuracy = 0, answered = 0,
   canChooseBeat = false, selectedCategory = null, onSelectCategory,
 }) {
   const { width } = useWindowDimensions();
@@ -149,7 +118,7 @@ export default function HomeScreen({
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <Masthead streak={streak} styles={styles} />
-      <StatsBar points={points} credits={credits} answered={answered} styles={styles} />
+      <StatsBar score={score} accuracy={accuracy} answered={answered} scale={scale} />
 
       <View style={styles.homeCard}>
         <Text style={styles.homeEdition}>Quydly · {strategy.getLabel()}</Text>
@@ -158,26 +127,12 @@ export default function HomeScreen({
         <View style={styles.mixPreview}>{pills}</View>
 
         {canChooseBeat && (
-          <View style={styles.beatBlock}>
-            <Text style={styles.beatLabel}>Your Beat</Text>
-            <View style={styles.beatRow}>
-              {[{ id: null, label: "All", emoji: "✦" }, ...CATEGORIES].map((c) => {
-                const active = (selectedCategory ?? null) === (c.id ?? null);
-                return (
-                  <TouchableOpacity
-                    key={c.id ?? "all"}
-                    style={[styles.beatChip, active && styles.beatChipActive]}
-                    onPress={() => onSelectCategory?.(c.id ?? null)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.beatChipText, active && styles.beatChipTextActive]}>
-                      {c.emoji} {c.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
+          <BeatSelector
+            selectedCategory={selectedCategory}
+            onSelect={onSelectCategory}
+            scale={scale}
+            align="center"
+          />
         )}
 
         <TouchableOpacity style={styles.startBtn} onPress={onStart} activeOpacity={0.85}>

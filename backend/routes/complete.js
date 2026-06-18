@@ -1,8 +1,7 @@
 import { Router } from "express";
 import { createClient } from "@supabase/supabase-js";
-import { subDays } from "date-fns";
 import { quizDay } from "../lib/quizDay.js";
-import { recordAttempts } from "../lib/recordAttempts.js";
+import { applyCompletion } from "../lib/applyCompletion.js";
 
 const router = Router();
 
@@ -14,16 +13,9 @@ function buildAnonSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 }
 
-function updateStreak(user, today) {
-  const yesterday = subDays(new Date(today), 1).toISOString().slice(0, 10);
-  if (user.last_played === yesterday) return user.streak + 1;
-  if (user.last_played === today)     return user.streak;
-  return 1;
-}
-
 // POST /api/complete
 // Headers: Authorization: Bearer <supabase-jwt>
-// Body:    { score, results: [{ correct, delta, categoryId }] }
+// Body:    { score, results: [{ id, correct, delta, categoryId }] }
 router.post("/", async (req, res) => {
   const authHeader = req.headers.authorization ?? "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -39,9 +31,6 @@ router.post("/", async (req, res) => {
     return res.status(401).json({ error: "Invalid or expired session" });
   }
 
-  const userId     = authUser.id;
-  const isAnonymous = authUser.is_anonymous ?? false;
-
   const { score, results } = req.body ?? {};
   if (score === undefined || !Array.isArray(results)) {
     return res.status(400).json({ error: "Missing required fields: score, results" });
@@ -51,58 +40,18 @@ router.post("/", async (req, res) => {
   const today    = quizDay();   // 7AM-reset quiz day — matches the served quiz + cron
 
   try {
-    const { data: user, error: userErr } = await supabase
-      .from("users")
-      .select("streak, last_played, total_points")
-      .eq("id", userId)
-      .single();
-
-    if (userErr || !user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const newStreak   = updateStreak(user, today);
-    const totalPoints = user.total_points + score;
-
-    const { error: compErr } = await supabase
-      .from("completions")
-      .upsert({ user_id: userId, date: today, score, results }, { onConflict: "user_id,date" });
-
-    if (compErr) {
-      return res.status(500).json({ error: "Failed to record completion" });
-    }
-
-    // Advance the per-question checkpoint (anon included — see recordAttempts).
-    await recordAttempts(supabase, userId, results);
-
-    const { error: updateErr } = await supabase
-      .from("users")
-      .update({ streak: newStreak, last_played: today, total_points: totalPoints })
-      .eq("id", userId);
-
-    if (updateErr) {
-      return res.status(500).json({ error: "Failed to update user record" });
-    }
-
-    const { count, error: rankErr } = await supabase
-      .from("users")
-      .select("id", { count: "exact", head: true })
-      .gt("total_points", totalPoints);
-
-    const rank = rankErr ? null : (count ?? 0) + 1;
-    const promptSaveStreak = isAnonymous && newStreak >= 1;
-
-    // Atomically advance the per-day session counter (anon free-tier backstop +
-    // next-batch cursor). Non-fatal — streak/points already saved above.
-    const { error: bumpErr } = await supabase.rpc("bump_daily_session", {
-      p_user: userId, p_date: today, p_score: totalPoints,
+    const body = await applyCompletion(supabase, {
+      userId:      authUser.id,
+      isAnonymous: authUser.is_anonymous ?? false,
+      score,
+      results,
+      today,
     });
-    if (bumpErr) console.warn(`[POST /api/complete] session bump failed: ${bumpErr.message}`);
-
-    return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
+    return res.json(body);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     console.error("[POST /api/complete]", err);
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 

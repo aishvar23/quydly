@@ -1,7 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
-import { subDays } from "date-fns";
 import { quizDay } from "../backend/lib/quizDay.js";
-import { recordAttempts } from "../backend/lib/recordAttempts.js";
+import { applyCompletion } from "../backend/lib/applyCompletion.js";
 
 function buildSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -9,13 +8,6 @@ function buildSupabase() {
 
 function buildAnonSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-}
-
-function updateStreak(user, today) {
-  const yesterday = subDays(new Date(today), 1).toISOString().slice(0, 10);
-  if (user.last_played === yesterday) return user.streak + 1;
-  if (user.last_played === today)     return user.streak;
-  return 1;
 }
 
 export default async function handler(req, res) {
@@ -38,9 +30,6 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: "Invalid or expired session" });
   }
 
-  const userId      = authUser.id;
-  const isAnonymous = authUser.is_anonymous ?? false;
-
   // ── Validate body ───────────────────────────────────────────────────────────
   const { score, results } = req.body ?? {};
   if (score === undefined || !Array.isArray(results)) {
@@ -51,66 +40,16 @@ export default async function handler(req, res) {
   const today    = quizDay();   // 7AM-reset quiz day — matches the served quiz + cron
 
   try {
-    // Fetch current user state
-    const { data: user, error: userErr } = await supabase
-      .from("users")
-      .select("streak, last_played, total_points")
-      .eq("id", userId)
-      .single();
-
-    if (userErr || !user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const newStreak   = updateStreak(user, today);
-    const totalPoints = user.total_points + score;
-
-    // Upsert completion record
-    const { error: compErr } = await supabase
-      .from("completions")
-      .upsert({ user_id: userId, date: today, score, results }, { onConflict: "user_id,date" });
-
-    if (compErr) {
-      return res.status(500).json({ error: "Failed to record completion" });
-    }
-
-    // Advance the per-question checkpoint (anon included — see recordAttempts).
-    await recordAttempts(supabase, userId, results);
-
-    // Update user streak + points
-    const { error: updateErr } = await supabase
-      .from("users")
-      .update({ streak: newStreak, last_played: today, total_points: totalPoints })
-      .eq("id", userId);
-
-    if (updateErr) {
-      return res.status(500).json({ error: "Failed to update user record" });
-    }
-
-    // Global rank: count users with more total_points
-    const { count, error: rankErr } = await supabase
-      .from("users")
-      .select("id", { count: "exact", head: true })
-      .gt("total_points", totalPoints);
-
-    const rank = rankErr ? null : (count ?? 0) + 1;
-
-    // promptSaveStreak: true → frontend shows "Save your streak — sign in with Google"
-    const promptSaveStreak = isAnonymous && newStreak >= 1;
-
-    // Atomically advance the daily session counter. Anonymous users included:
-    // the free tier is one 5-question session/day, so the counter reaching 1 is
-    // what makes a second GET /api/questions return allCaughtUp (server-side
-    // backstop behind the frontend credit gate). A single INSERT..ON CONFLICT
-    // avoids the read-then-write lost-update race. Non-fatal — streak/points
-    // already saved.
-    const { error: bumpErr } = await supabase.rpc("bump_daily_session", {
-      p_user: userId, p_date: today, p_score: totalPoints,
+    const body = await applyCompletion(supabase, {
+      userId:      authUser.id,
+      isAnonymous: authUser.is_anonymous ?? false,
+      score,
+      results,
+      today,
     });
-    if (bumpErr) console.warn(`[POST /api/complete] session bump failed: ${bumpErr.message}`);
-
-    return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
+    return res.json(body);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     console.error("[POST /api/complete]", err.message);
     return res.status(500).json({ error: "Internal server error" });
   }

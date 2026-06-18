@@ -1,5 +1,5 @@
 import "react-native-url-polyfill/auto";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, PlayfairDisplay_900Black } from "@expo-google-fonts/playfair-display";
@@ -8,6 +8,7 @@ import { Lato_400Regular, Lato_300Light } from "@expo-google-fonts/lato";
 import { createClient } from "@supabase/supabase-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { CATEGORIES } from "../config/categories";
 import SaveStreakModal from "./components/SaveStreakModal";
 import HomeScreen from "./screens/HomeScreen";
 import QuestionScreen from "./screens/QuestionScreen";
@@ -143,8 +144,11 @@ export default function App() {
   const [unlimited,   setUnlimited]   = useState(false);
   const [selectedCategory, setSelectedCategory] = useState(null); // null = all beats
   const [wager,       setWager]       = useState(25);
-  const [points,      setPoints]      = useState(0);
+  const [points,      setPoints]      = useState(0);          // lifetime score (server-authoritative)
+  const [answeredTotal, setAnsweredTotal] = useState(0);      // lifetime non-skip answers
+  const [correctTotal,  setCorrectTotal]  = useState(0);      // lifetime correct answers
   const [streak,      setStreak]      = useState(0);
+  const [beatNotice,  setBeatNotice]  = useState(null);       // transient mid-quiz beat-switch message
   const [results,     setResults]     = useState([]);
   const [credits,     setCredits]     = useState(FLAGS.freeQuestionsPerDay);
   const [loadError,        setLoadError]        = useState(null);
@@ -157,6 +161,21 @@ export default function App() {
 
   // Signed-in (non-anonymous) users get unlimited play and no credit gate.
   const isSignedIn = !!session && !(session.user?.is_anonymous ?? true);
+
+  // Lifetime accuracy, derived from the cumulative answered/correct totals.
+  const accuracy = answeredTotal > 0 ? Math.round((correctTotal / answeredTotal) * 100) : 0;
+  const canChooseBeat = FLAGS.beatEnabled && isSignedIn;
+
+  // Guards a beat switch in flight so rapid chip taps can't fire concurrent
+  // submit/fetch races (mismatched beat vs. loaded questions, double submits).
+  const switchingBeat = useRef(false);
+
+  // Auto-dismiss the transient beat-switch notice, cleaning up on unmount/re-set.
+  useEffect(() => {
+    if (!beatNotice) return undefined;
+    const t = setTimeout(() => setBeatNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [beatNotice]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -288,14 +307,25 @@ export default function App() {
   }, []);
 
   const loadUserData = async (userId) => {
-    const { data } = await supabase
+    // Prefer the denormalized lifetime columns; fall back if the migration that
+    // adds them hasn't landed yet so streak/points still load.
+    let { data } = await supabase
       .from("users")
-      .select("streak, total_points")
+      .select("streak, total_points, total_answered, total_correct")
       .eq("id", userId)
       .single();
+    if (!data) {
+      ({ data } = await supabase
+        .from("users")
+        .select("streak, total_points")
+        .eq("id", userId)
+        .single());
+    }
     if (data) {
       setStreak(data.streak ?? 0);
       setPoints(data.total_points ?? 0);
+      setAnsweredTotal(data.total_answered ?? 0);
+      setCorrectTotal(data.total_correct ?? 0);
     }
   };
 
@@ -305,6 +335,8 @@ export default function App() {
     if (data?.session) setSession(data.session);
     setStreak(0);
     setPoints(0);
+    setAnsweredTotal(0);
+    setCorrectTotal(0);
   };
 
   const handleBeforeOAuth = () => {
@@ -316,45 +348,100 @@ export default function App() {
   };
 
   // ── Handlers ────────────────────────────────────────────────────────────────
+  // Fetch a page of questions for the given beat (category id or null = all).
+  // Shared by the initial start and mid-quiz beat switching.
+  const fetchQuestions = async (category) => {
+    const headers = {};
+    if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
+    // 8.6 — detect India locale via timezone; expo-localization not installed
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const isIndia = tz === "Asia/Kolkata" || tz === "Asia/Calcutta";
+    const params = new URLSearchParams();
+    if (isIndia) params.set("audience", "india");
+    // Beat filter is signed-in only; guests always get the editorial mix.
+    if (isSignedIn && category) params.set("category", category);
+    const qs = params.toString();
+    const res = await fetch(`${API_BASE}/api/questions${qs ? `?${qs}` : ""}`, { headers });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return res.json();
+  };
+
+  // Load a freshly fetched page into a clean run. Cumulative score/accuracy/
+  // answered are NOT touched here — they persist across runs and beats.
+  const loadRun = (data) => {
+    setQuestions(data.questions);
+    setUnlimited(!!data.unlimited);
+    setCredits(data.unlimited ? Infinity : FLAGS.freeQuestionsPerDay);
+    setAllCaughtUp(false);
+    setCurrentQ(0);
+    setAnswered(false);
+    setSelectedIdx(null);
+    setSkipped(false);
+    setWager(25);
+    setResults([]);
+    setScreen("quiz");
+  };
+
   const handleStart = async (skipCreditCheck = false) => {
     if (!skipCreditCheck && !isSignedIn && credits <= 0) { setScreen("gate"); return; }
     setLoadError(null);
     setScreen("loading");
     try {
-      const headers = {};
-      if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
-      // 8.6 — detect India locale via timezone; expo-localization not installed
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const isIndia = tz === "Asia/Kolkata" || tz === "Asia/Calcutta";
-      const params = new URLSearchParams();
-      if (isIndia) params.set("audience", "india");
-      // Beat filter is signed-in only; guests always get the editorial mix.
-      if (isSignedIn && selectedCategory) params.set("category", selectedCategory);
-      const qs = params.toString();
-      const res = await fetch(`${API_BASE}/api/questions${qs ? `?${qs}` : ""}`, { headers });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const data = await res.json();
-
+      const data = await fetchQuestions(selectedCategory);
       if (data.allCaughtUp) {
         setAllCaughtUp(true);
         setScreen("end");
         return;
       }
-
-      setQuestions(data.questions);
-      setUnlimited(!!data.unlimited);
-      setCredits(data.unlimited ? Infinity : FLAGS.freeQuestionsPerDay);
-      setAllCaughtUp(false);
-      setCurrentQ(0);
-      setAnswered(false);
-      setSelectedIdx(null);
-      setSkipped(false);
-      setWager(25);
-      setResults([]);
-      setScreen("quiz");
+      loadRun(data);
     } catch {
       setLoadError("Couldn't load today's questions. Check your connection and try again.");
       setScreen("home");
+    }
+  };
+
+  // Switch beat mid-quiz (signed-in unlimited only). Submits the answers so far
+  // so they're checkpointed and the cumulative stats stay accurate, then loads
+  // the new beat's next page. The lifetime score never resets across the swap.
+  const beatLabel = (id) => (id ? (CATEGORIES.find((c) => c.id === id)?.label ?? "this beat") : "All");
+  const handleChangeBeat = async (rawCategory) => {
+    const next = rawCategory ?? null;
+    if (next === (selectedCategory ?? null) || switchingBeat.current) return;
+    switchingBeat.current = true;
+    setBeatNotice(null);
+    setScreen("loading");
+    try {
+      // Checkpoint the answers so far BEFORE fetching: serve_unseen only excludes
+      // questions already in user_question_attempts, so fetching first could
+      // re-serve a just-answered question when switching to an overlapping beat
+      // (e.g. All → its category). Only clear results / proceed once the
+      // checkpoint actually succeeded — otherwise the answers would be dropped
+      // from any later completion AND re-served (they never reached the ledger).
+      if (isSignedIn && results.length > 0) {
+        const ok = await submitCompletion();
+        if (!ok) {
+          setScreen("quiz");
+          setBeatNotice("Couldn't save your progress — staying on this beat.");
+          return;
+        }
+        setResults([]);
+      }
+      const data = await fetchQuestions(next);
+      if (data.allCaughtUp || !data.questions?.length) {
+        // Target beat has no unseen questions — don't strand the player. Keep
+        // them on their current run (beat unchanged) and surface a notice.
+        setScreen("quiz");
+        setBeatNotice(`No new questions in ${beatLabel(next)} right now.`);
+        return;
+      }
+      // Switch confirmed: load the new beat.
+      setSelectedCategory(next);
+      loadRun(data);
+    } catch {
+      setScreen("quiz");
+      setBeatNotice("Couldn't switch beat. Please try again.");
+    } finally {
+      switchingBeat.current = false;
     }
   };
 
@@ -362,7 +449,11 @@ export default function App() {
     const q = questions[currentQ];
     const correct = idx === q.correctIndex;
     const delta = correct ? wager : -Math.floor(wager / 2);
-    setPoints((p) => p + delta);
+    // Lifetime score never decreases (server only adds positive deltas), so
+    // mirror that here; submitCompletion reconciles to the authoritative total.
+    setPoints((p) => p + Math.max(0, delta));
+    setAnsweredTotal((a) => a + 1);
+    if (correct) setCorrectTotal((c) => c + 1);
     if (!isSignedIn) setCredits((c) => Math.max(0, c - 1));
     setSelectedIdx(idx);
     setSkipped(false);
@@ -381,10 +472,12 @@ export default function App() {
     setResults((prev) => [...prev, { id: q.id, correct: false, delta: 0, categoryId: q.categoryId, skipped: true }]);
   };
 
-  // Submit the run so far (points, streak, rank). Used by both the natural
-  // end-of-pool finish and the "quit anytime" path.
+  // Submit the run so far (points, streak, rank). Used by the natural
+  // end-of-pool finish, the "quit anytime" path, and the beat switch.
+  // Returns true only if the completion was actually checkpointed server-side;
+  // callers that must not lose/duplicate answers (beat switch) gate on this.
   const submitCompletion = async () => {
-    if (!session) return;
+    if (!session) return false;
     try {
       const sessionScore = results.reduce((acc, r) => acc + Math.max(0, r.delta), 0);
       const resp = await fetch(`${API_BASE}/api/complete`, {
@@ -395,13 +488,20 @@ export default function App() {
         },
         body: JSON.stringify({ score: sessionScore, results }),
       });
+      if (!resp.ok) return false;   // 401/500 etc. — attempts NOT recorded
       const data = await resp.json();
       if (data.streak !== undefined) setStreak(data.streak);
+      // Reconcile cumulative stats to the server-authoritative totals (which
+      // already include this run's attempts). Setting (not adding) is what keeps
+      // repeated submits — e.g. a beat switch mid-run — from double-counting.
       if (data.totalPoints !== undefined) setPoints(data.totalPoints);
+      if (data.totalAnswered != null) setAnsweredTotal(data.totalAnswered);
+      if (data.totalCorrect != null) setCorrectTotal(data.totalCorrect);
       if (data.rank !== undefined) setEndRank(data.rank);
       if (data.promptSaveStreak) setPromptSaveStreak(true);
+      return true;
     } catch {
-      // non-fatal
+      return false;   // network failure — attempts NOT recorded
     }
   };
 
@@ -486,9 +586,10 @@ export default function App() {
           credits={isSignedIn ? Infinity : credits}
           strategy={strategy}
           streak={streak}
-          points={points}
-          answered={results.length}
-          canChooseBeat={FLAGS.beatEnabled && isSignedIn}
+          score={points}
+          accuracy={accuracy}
+          answered={answeredTotal}
+          canChooseBeat={canChooseBeat}
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
         />
@@ -509,6 +610,9 @@ export default function App() {
           maxScore={results.filter((r) => !r.skipped).length * 100}
           attempted={results.filter((r) => !r.skipped).length}
           skippedCount={results.filter((r) => r.skipped).length}
+          lifetimeScore={points}
+          accuracy={accuracy}
+          lifetimeAnswered={answeredTotal}
           results={results}
           strategy={strategy}
           streak={streak}
@@ -553,6 +657,13 @@ export default function App() {
           totalQ={questions.length}
           unlimited={unlimited}
           strategyLabel={strategy.getLabel()}
+          score={points}
+          accuracy={accuracy}
+          answeredCount={answeredTotal}
+          canChooseBeat={canChooseBeat}
+          selectedCategory={selectedCategory}
+          onChangeBeat={handleChangeBeat}
+          beatNotice={beatNotice}
         />
       )}
     </View>

@@ -6,6 +6,7 @@ import {
 import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
 import SaveStreakModal from "../components/SaveStreakModal";
+import StatsBar from "../components/StatsBar";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -116,7 +117,7 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, attempted, skippedCount = 0, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp }) {
+export default function EndScreen({ score, maxScore, attempted, skippedCount = 0, lifetimeScore = 0, accuracy = 0, lifetimeAnswered = 0, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -157,14 +158,17 @@ export default function EndScreen({ score, maxScore, attempted, skippedCount = 0
 
   return (<>
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      {/* Cumulative score / accuracy / answered — always visible, never resets. */}
+      <StatsBar score={lifetimeScore} accuracy={accuracy} answered={lifetimeAnswered} scale={scale} />
+
       <View style={styles.card}>
         {/* Grade */}
         <Text style={styles.gradeEmoji}>{grade.emoji}</Text>
         <Text style={styles.gradeLabel}>{grade.label}</Text>
         <Text style={styles.gradeScore}>
           {answeredCount === 0
-            ? "No questions answered"
-            : `${score} points · ${correct}/${answeredCount} correct`}
+            ? "No questions answered this round"
+            : `+${score} this round · ${correct}/${answeredCount} correct`}
           {skippedCount > 0 ? ` · ${skippedCount} skipped` : ""}
         </Text>
 

@@ -5,6 +5,8 @@ import {
 } from "react-native";
 import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
+import StatsBar from "../components/StatsBar";
+import BeatSelector from "../components/BeatSelector";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -94,6 +96,7 @@ function makeStyles(scale) {
     quitRow:     { flexDirection: "row", justifyContent: "flex-end", marginBottom: s(6) },
     quitBtn:     { paddingVertical: s(4), paddingHorizontal: s(8) },
     quitBtnText: { fontFamily: FONT.monoReg, fontSize: s(11), color: T.muted, letterSpacing: s(0.5) },
+
 
     // Skip & reveal button
     skipBtn:     { width: "100%", marginTop: s(12), paddingVertical: s(11), backgroundColor: "transparent", borderWidth: 1, borderColor: T.border2, borderRadius: s(11), alignItems: "center" },
@@ -252,7 +255,7 @@ function QuestionCard({ question, onAnswer, answered, skipped, selectedIndex, wa
 }
 
 // ── QuestionScreen ────────────────────────────────────────────────────────────
-export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQuit, answered, skipped, selectedIndex, wager, setWager, currentQ, totalQ, unlimited, strategyLabel, nextLabel }) {
+export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQuit, answered, skipped, selectedIndex, wager, setWager, currentQ, totalQ, unlimited, strategyLabel, nextLabel, score = 0, accuracy = 0, answeredCount = 0, canChooseBeat = false, selectedCategory = null, onChangeBeat, beatNotice }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -271,6 +274,20 @@ export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQ
             <Text style={styles.quitBtnText}>✕ Quit &amp; see results</Text>
           </TouchableOpacity>
         </View>
+      )}
+
+      {/* Cumulative score / accuracy / answered — always visible, never resets. */}
+      <StatsBar score={score} accuracy={accuracy} answered={answeredCount} scale={scale} />
+
+      {/* Beat selector — signed-in users can switch beats at any point mid-quiz. */}
+      {canChooseBeat && (
+        <BeatSelector
+          selectedCategory={selectedCategory}
+          onSelect={onChangeBeat}
+          scale={scale}
+          align="flex-start"
+          notice={beatNotice}
+        />
       )}
 
       <ProgressBar current={currentQ + (answered ? 1 : 0)} total={total} label={strategyLabel} unlimited={unlimited} styles={styles} />
