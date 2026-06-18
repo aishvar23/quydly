@@ -1,5 +1,5 @@
 import "react-native-url-polyfill/auto";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, PlayfairDisplay_900Black } from "@expo-google-fonts/playfair-display";
@@ -165,6 +165,17 @@ export default function App() {
   // Lifetime accuracy, derived from the cumulative answered/correct totals.
   const accuracy = answeredTotal > 0 ? Math.round((correctTotal / answeredTotal) * 100) : 0;
   const canChooseBeat = FLAGS.beatEnabled && isSignedIn;
+
+  // Guards a beat switch in flight so rapid chip taps can't fire concurrent
+  // submit/fetch races (mismatched beat vs. loaded questions, double submits).
+  const switchingBeat = useRef(false);
+
+  // Auto-dismiss the transient beat-switch notice, cleaning up on unmount/re-set.
+  useEffect(() => {
+    if (!beatNotice) return undefined;
+    const t = setTimeout(() => setBeatNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [beatNotice]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -395,30 +406,32 @@ export default function App() {
   const beatLabel = (id) => (id ? (CATEGORIES.find((c) => c.id === id)?.label ?? "this beat") : "All");
   const handleChangeBeat = async (rawCategory) => {
     const next = rawCategory ?? null;
-    const prev = selectedCategory ?? null;
-    if (next === prev) return;
-
-    if (isSignedIn && results.length > 0) await submitCompletion();
-    setSelectedCategory(next);
+    if (next === (selectedCategory ?? null) || switchingBeat.current) return;
+    switchingBeat.current = true;
     setBeatNotice(null);
     setScreen("loading");
     try {
+      // Fetch FIRST. We only submit the current run + swap the beat once we know
+      // the new beat has questions — otherwise an empty/failed switch that had
+      // already submitted would leave `results` populated and get re-submitted
+      // at the next finish, double-adding its score to total_points.
       const data = await fetchQuestions(next);
       if (data.allCaughtUp || !data.questions?.length) {
         // Target beat has no unseen questions — don't strand the player. Keep
-        // them on their current run and surface a notice.
-        setSelectedCategory(prev);
+        // them on their current run (beat unchanged) and surface a notice.
         setScreen("quiz");
         setBeatNotice(`No new questions in ${beatLabel(next)} right now.`);
-        setTimeout(() => setBeatNotice(null), 4000);
         return;
       }
+      // Switch confirmed: checkpoint the answers so far, then load the new beat.
+      if (isSignedIn && results.length > 0) await submitCompletion();
+      setSelectedCategory(next);
       loadRun(data);
     } catch {
-      setSelectedCategory(prev);
       setScreen("quiz");
       setBeatNotice("Couldn't switch beat. Please try again.");
-      setTimeout(() => setBeatNotice(null), 4000);
+    } finally {
+      switchingBeat.current = false;
     }
   };
 

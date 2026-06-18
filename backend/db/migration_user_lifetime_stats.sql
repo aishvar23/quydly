@@ -27,3 +27,18 @@ from (
   group by user_id
 ) sub
 where sub.user_id = u.id;
+
+-- Single-aggregate recompute used by POST /api/complete to refresh the
+-- denormalized columns on every completion. Keeping the "answered = delta <> 0"
+-- rule here (matching the backfill above) means it lives in exactly one place.
+create or replace function compute_lifetime_stats(p_user uuid)
+returns table(answered int, correct int)
+language sql
+stable
+as $$
+  select
+    count(*) filter (where delta <> 0)::int as answered,
+    count(*) filter (where correct)::int    as correct
+  from user_question_attempts
+  where user_id = p_user;
+$$;

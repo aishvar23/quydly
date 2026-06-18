@@ -6,6 +6,7 @@ import {
 import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
 import StatsBar from "../components/StatsBar";
+import BeatSelector from "../components/BeatSelector";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -96,15 +97,6 @@ function makeStyles(scale) {
     quitBtn:     { paddingVertical: s(4), paddingHorizontal: s(8) },
     quitBtnText: { fontFamily: FONT.monoReg, fontSize: s(11), color: T.muted, letterSpacing: s(0.5) },
 
-    // Beat selector (signed-in only) — switch beats at any point
-    beatBlock:          { marginBottom: s(12) },
-    beatLabel:          { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(1.5), textTransform: "uppercase", color: T.muted, marginBottom: s(6) },
-    beatRow:            { flexDirection: "row", flexWrap: "wrap", gap: s(6) },
-    beatChip:           { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(5), paddingHorizontal: s(11) },
-    beatChipActive:     { backgroundColor: T.amber, borderColor: T.amber },
-    beatChipText:       { fontFamily: FONT.body, fontSize: s(11), color: T.cream2 },
-    beatChipTextActive: { color: T.ink, fontWeight: "700" },
-    beatNotice:         { fontFamily: FONT.monoReg, fontSize: s(11), color: T.amber2, marginTop: s(8) },
 
     // Skip & reveal button
     skipBtn:     { width: "100%", marginTop: s(12), paddingVertical: s(11), backgroundColor: "transparent", borderWidth: 1, borderColor: T.border2, borderRadius: s(11), alignItems: "center" },
@@ -289,27 +281,13 @@ export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQ
 
       {/* Beat selector — signed-in users can switch beats at any point mid-quiz. */}
       {canChooseBeat && (
-        <View style={styles.beatBlock}>
-          <Text style={styles.beatLabel}>Your Beat</Text>
-          <View style={styles.beatRow}>
-            {[{ id: null, label: "All", emoji: "✦" }, ...CATEGORIES].map((c) => {
-              const active = (selectedCategory ?? null) === (c.id ?? null);
-              return (
-                <TouchableOpacity
-                  key={c.id ?? "all"}
-                  style={[styles.beatChip, active && styles.beatChipActive]}
-                  onPress={() => onChangeBeat?.(c.id ?? null)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.beatChipText, active && styles.beatChipTextActive]}>
-                    {c.emoji} {c.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          {beatNotice ? <Text style={styles.beatNotice}>{beatNotice}</Text> : null}
-        </View>
+        <BeatSelector
+          selectedCategory={selectedCategory}
+          onSelect={onChangeBeat}
+          scale={scale}
+          align="flex-start"
+          notice={beatNotice}
+        />
       )}
 
       <ProgressBar current={currentQ + (answered ? 1 : 0)} total={total} label={strategyLabel} unlimited={unlimited} styles={styles} />

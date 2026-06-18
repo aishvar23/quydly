@@ -19,22 +19,17 @@ function updateStreak(user, today) {
 }
 
 // Recompute lifetime answered/correct from user_question_attempts — the
-// authoritative, idempotent ledger. "Answered" excludes skips (delta = 0).
-// Returns null on failure so callers can fall back to not persisting them.
+// authoritative, idempotent ledger — via a single aggregate RPC (one round-trip,
+// and the "answered = delta <> 0" rule lives only in SQL, shared with the
+// migration backfill). Returns null on ANY error (including the non-throwing
+// PostgREST error channel) so the caller skips persisting rather than writing
+// bogus zeros over real history.
 async function computeLifetimeStats(supabase, userId) {
-  try {
-    const [{ count: answered }, { count: correct }] = await Promise.all([
-      supabase.from("user_question_attempts")
-        .select("question_id", { count: "exact", head: true })
-        .eq("user_id", userId).neq("delta", 0),
-      supabase.from("user_question_attempts")
-        .select("question_id", { count: "exact", head: true })
-        .eq("user_id", userId).eq("correct", true),
-    ]);
-    return { totalAnswered: answered ?? 0, totalCorrect: correct ?? 0 };
-  } catch {
-    return null;
-  }
+  const { data, error } = await supabase.rpc("compute_lifetime_stats", { p_user: userId });
+  if (error) return null;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return { totalAnswered: row.answered ?? 0, totalCorrect: row.correct ?? 0 };
 }
 
 // Throws Error with `.status` on a recoverable client/server condition so the
@@ -76,10 +71,12 @@ export async function applyCompletion(supabase, { userId, isAnonymous, score, re
   }
 
   let { error: updateErr } = await supabase.from("users").update(update).eq("id", userId);
-  // Deploy-safe: if the lifetime columns aren't migrated yet, the update would
-  // reject and lose streak/points too. Retry without them so completions still
-  // commit; the stats self-heal once the migration lands.
-  if (updateErr && lifetime) {
+  // Deploy-safe: ONLY if the lifetime columns aren't migrated yet (Postgres
+  // undefined_column, 42703) would the update reject and lose streak/points too.
+  // Retry without them so completions still commit; the stats self-heal once the
+  // migration lands. Any other error (RLS, constraint, transient) must surface,
+  // not be silently retried.
+  if (updateErr && lifetime && updateErr.code === "42703") {
     delete update.total_answered;
     delete update.total_correct;
     ({ error: updateErr } = await supabase.from("users").update(update).eq("id", userId));
