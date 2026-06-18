@@ -411,10 +411,15 @@ export default function App() {
     setBeatNotice(null);
     setScreen("loading");
     try {
-      // Fetch FIRST. We only submit the current run + swap the beat once we know
-      // the new beat has questions — otherwise an empty/failed switch that had
-      // already submitted would leave `results` populated and get re-submitted
-      // at the next finish, double-adding its score to total_points.
+      // Checkpoint the answers so far BEFORE fetching: serve_unseen only excludes
+      // questions already in user_question_attempts, so fetching first could
+      // re-serve a just-answered question when switching to an overlapping beat
+      // (e.g. All → its category). Clearing results right after the submit also
+      // means an empty/failed switch can't re-submit them and inflate the score.
+      if (isSignedIn && results.length > 0) {
+        await submitCompletion();
+        setResults([]);
+      }
       const data = await fetchQuestions(next);
       if (data.allCaughtUp || !data.questions?.length) {
         // Target beat has no unseen questions — don't strand the player. Keep
@@ -423,8 +428,7 @@ export default function App() {
         setBeatNotice(`No new questions in ${beatLabel(next)} right now.`);
         return;
       }
-      // Switch confirmed: checkpoint the answers so far, then load the new beat.
-      if (isSignedIn && results.length > 0) await submitCompletion();
+      // Switch confirmed: load the new beat.
       setSelectedCategory(next);
       loadRun(data);
     } catch {
