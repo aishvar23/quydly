@@ -14,6 +14,8 @@ import { generateQuestion } from "../services/claude.js";
 import { sendDailyNotification } from "../services/email.js";
 import FLAGS from "../../config/flags.js";
 import { quizDay } from "../lib/quizDay.js";
+import { questionsKey } from "../lib/cacheKeys.js";
+import { toQuizQuestionRow } from "../lib/quizQuestionRow.js";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -55,9 +57,7 @@ function buildCategoryQueue() {
 }
 
 function todayKey(audience = "global") {
-  const date = quizDay();
-  // Keep backward-compatible key for global; scope other audiences
-  return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
+  return questionsKey(quizDay(), audience);
 }
 
 // ── Narrative dedup ───────────────────────────────────────────────────────────
@@ -342,17 +342,15 @@ export async function generateDaily(audience = "global", { silent = false } = {}
     const storyId = q._storyId ?? null;
     q.id = id;             // embed into the cached object
     delete q._storyId;     // keep the cached jsonb shape clean
-    return {
-      id,
-      date,
-      audience,
-      category_id:   q.categoryId,
-      question:      q.question,
-      options:       q.options,
-      correct_index: q.correctIndex,
-      tldr:          q.tldr,
-      story_id:      storyId,
-    };
+    return toQuizQuestionRow({
+      id, date, audience,
+      categoryId:   q.categoryId,
+      question:     q.question,
+      options:      q.options,
+      correctIndex: q.correctIndex,
+      tldr:         q.tldr,
+      storyId,
+    });
   });
 
   // Non-fatal: a quiz_questions failure must not block the daily_questions /

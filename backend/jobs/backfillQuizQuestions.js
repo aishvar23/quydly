@@ -22,8 +22,26 @@ dotenv.config({ path: resolve(dirname(__filename), "../../.env") });
 
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { CATEGORIES } from "../../config/categories.js";
+import { toQuizQuestionRow } from "../lib/quizQuestionRow.js";
 
 const AUDIENCE = "global";
+const VALID_CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
+
+// A jsonb question is safe to seed only if it carries a real answer index and a
+// known category. Defaulting these (e.g. correct_index→0, category→"world")
+// would silently corrupt the seeded backlog: a wrong correct answer makes the
+// question unwinnable, a wrong category pollutes beat filtering. So we skip,
+// not default, anything malformed.
+function isSeedable(q) {
+  return (
+    q &&
+    typeof q.question === "string" && q.question.length > 0 &&
+    Array.isArray(q.options) && q.options.length === 4 &&
+    Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3 &&
+    typeof q.categoryId === "string" && VALID_CATEGORY_IDS.has(q.categoryId)
+  );
+}
 
 function buildSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -55,18 +73,23 @@ export async function backfillQuizQuestions(days = 7) {
       continue;
     }
 
-    const toInsert = row.questions
-      .filter((q) => q && q.question && Array.isArray(q.options))
-      .map((q) => ({
-        id:            randomUUID(),
-        date:          row.date,
-        audience:      AUDIENCE,
-        category_id:   q.categoryId ?? "world",
-        question:      q.question,
-        options:       q.options,
-        correct_index: q.correctIndex ?? 0,
-        tldr:          q.tldr ?? "",
-        story_id:      null,                  // identity never existed for old rows
+    const seedable = row.questions.filter(isSeedable);
+    const skipped  = row.questions.length - seedable.length;
+    if (skipped > 0) {
+      console.warn(`[backfill] ${row.date}: skipping ${skipped} malformed question(s) (missing/invalid correctIndex or categoryId)`);
+    }
+
+    const toInsert = seedable.map((q) =>
+      toQuizQuestionRow({
+        id:           randomUUID(),
+        date:         row.date,
+        audience:     AUDIENCE,
+        categoryId:   q.categoryId,
+        question:     q.question,
+        options:      q.options,
+        correctIndex: q.correctIndex,
+        tldr:         q.tldr ?? "",           // display-only; safe to default
+        storyId:      null,                   // identity never existed for old rows
       }));
 
     if (toInsert.length === 0) continue;

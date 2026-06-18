@@ -15,6 +15,7 @@
 
 import { CATEGORIES, SESSION_SIZE } from "../../config/categories.js";
 import { quizDay } from "./quizDay.js";
+import { questionsKey } from "./cacheKeys.js";
 
 // Page size for the signed-in unbounded run. Each fetched page is one "run":
 // the frontend plays it, submits (recording attempts), then "play again"
@@ -22,10 +23,6 @@ import { quizDay } from "./quizDay.js";
 const SIGNED_IN_PAGE_SIZE = 10;
 
 const VALID_CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
-
-function redisKey(date, audience = "global") {
-  return audience === "global" ? `questions:${date}` : `questions:${date}:${audience}`;
-}
 
 // quiz_questions row → the shape QuestionScreen consumes.
 function mapRow(r) {
@@ -46,11 +43,11 @@ export async function getAllQuestions(date, audience, redis, supabase) {
   if (redis) {
     try {
       await redis.connect();
-      const cached = await redis.get(redisKey(date, audience));
+      const cached = await redis.get(questionsKey(date, audience));
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) return { questions: parsed, source: "redis" };
-        await redis.del(redisKey(date, audience));
+        await redis.del(questionsKey(date, audience));
       }
     } catch {
       // Redis unavailable — fall through to Supabase.
@@ -126,11 +123,34 @@ export async function resolveQuestions({ audience, category, token, redis, supab
     if (error) throw new Error(`serve_unseen failed: ${error.message}`);
 
     const rows = data ?? [];
-    if (rows.length === 0) {
-      // Reached the checkpoint frontier (or empty beat) — caught up.
-      return category ? { date, allCaughtUp: true, category } : { date, allCaughtUp: true };
+    if (rows.length > 0) {
+      return { date, questions: rows.map(mapRow), unlimited: true, source: "quiz_questions" };
     }
-    return { date, questions: rows.map(mapRow), unlimited: true, source: "quiz_questions" };
+
+    // No unseen rows. Distinguish "genuinely caught up" (quiz_questions has rows
+    // for this audience, the user has attempted them all) from "no backlog yet"
+    // (cold start before backfill/generation populated quiz_questions). In the
+    // cold-start, all-beats case, fall back to today's daily_questions pool so a
+    // signed-in user is never stranded — the pre-migration behavior. Self-heals
+    // once quiz_questions is populated. (A user who has attempted everything
+    // always has a non-empty quiz_questions, so count==0 means cold start, not
+    // caught up.)
+    if (!category) {
+      const { count, error: cntErr } = await supabase
+        .from("quiz_questions")
+        .select("id", { count: "exact", head: true })
+        .eq("audience", audience);
+      if (!cntErr && (count ?? 0) === 0) {
+        const { questions: pool, generatedAt = null, source } =
+          await getAllQuestions(date, audience, redis, supabase);
+        if (pool.length > 0) {
+          return { date, questions: pool, unlimited: true, generatedAt, source };
+        }
+      }
+    }
+
+    // Reached the checkpoint frontier (or empty beat) — caught up.
+    return category ? { date, allCaughtUp: true, category } : { date, allCaughtUp: true };
   }
 
   // ── Anonymous / unauth: exactly ONE free 5-question session per day ─────────
