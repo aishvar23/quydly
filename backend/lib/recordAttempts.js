@@ -16,8 +16,14 @@
 // ids that actually exist, then upsert only those — known-good attempts are
 // always recorded; unknown ids are skipped with a warning.
 //
-// Idempotent (PK = user_id,question_id + ignoreDuplicates). Non-fatal: the
-// completion is already committed by the caller, so a failure is logged.
+// Idempotent (PK = user_id,question_id + ignoreDuplicates).
+//
+// Returns true when the checkpoint is durable — meaning the valid attempts were
+// written, OR there was genuinely nothing to write (no ids, or all ids are stale
+// and can never be recorded via the question_id FK). Returns false ONLY on a
+// real DB error (existence check or upsert), so the caller can fail the request
+// rather than report a completion as saved when it wasn't. Stale-id drops are
+// expected (an old client page after a quiz re-generation) and are NOT failures.
 export async function recordAttempts(supabase, userId, results) {
   const candidates = (results ?? [])
     .filter((r) => r && r.id)                 // tolerate legacy/id-less rows
@@ -27,7 +33,7 @@ export async function recordAttempts(supabase, userId, results) {
       delta:   typeof r.delta === "number" ? r.delta : 0,
     }));
 
-  if (candidates.length === 0) return;
+  if (candidates.length === 0) return true;
 
   // Keep only ids that exist in quiz_questions — one missing id would otherwise
   // reject the entire batch via the question_id FK.
@@ -37,7 +43,7 @@ export async function recordAttempts(supabase, userId, results) {
     .in("id", candidates.map((c) => c.id));
   if (existErr) {
     console.warn(`[recordAttempts] existence check failed for ${userId}: ${existErr.message}`);
-    return;
+    return false;
   }
 
   const known = new Set((existing ?? []).map((r) => r.id));
@@ -49,11 +55,15 @@ export async function recordAttempts(supabase, userId, results) {
   if (dropped > 0) {
     console.warn(`[recordAttempts] ${dropped}/${candidates.length} attempt(s) skipped for ${userId}: id not in quiz_questions`);
   }
-  if (attempts.length === 0) return;
+  if (attempts.length === 0) return true;   // nothing recordable (all stale)
 
   const { error } = await supabase
     .from("user_question_attempts")
     .upsert(attempts, { onConflict: "user_id,question_id", ignoreDuplicates: true });
 
-  if (error) console.warn(`[recordAttempts] failed for ${userId}: ${error.message}`);
+  if (error) {
+    console.warn(`[recordAttempts] failed for ${userId}: ${error.message}`);
+    return false;
+  }
+  return true;
 }

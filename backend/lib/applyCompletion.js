@@ -50,6 +50,18 @@ export async function applyCompletion(supabase, { userId, isAnonymous, score, re
   const newStreak   = updateStreak(user, today);
   const totalPoints = user.total_points + score;
 
+  // Advance the per-question checkpoint FIRST (anon included — see recordAttempts).
+  // It's the ledger that lifetime stats and serve_unseen exclusion both trust, so
+  // a write failure must fail the whole request (500) rather than let the client
+  // treat an unrecorded run as saved (which would lose stats and re-serve the
+  // just-answered questions). recordAttempts returns false only on a real DB error.
+  const recorded = await recordAttempts(supabase, userId, results);
+  if (!recorded) {
+    const e = new Error("Failed to record attempts");
+    e.status = 500;
+    throw e;
+  }
+
   const { error: compErr } = await supabase
     .from("completions")
     .upsert({ user_id: userId, date: today, score, results }, { onConflict: "user_id,date" });
@@ -59,9 +71,7 @@ export async function applyCompletion(supabase, { userId, isAnonymous, score, re
     throw e;
   }
 
-  // Advance the per-question checkpoint first (anon included — see recordAttempts),
-  // then recompute lifetime stats so the counts reflect this completion's attempts.
-  await recordAttempts(supabase, userId, results);
+  // Recompute lifetime stats so the counts reflect this completion's attempts.
   const lifetime = await computeLifetimeStats(supabase, userId);
 
   const update = { streak: newStreak, last_played: today, total_points: totalPoints };
