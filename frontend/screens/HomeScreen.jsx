@@ -68,6 +68,15 @@ function makeStyles(scale) {
     mixPill:     { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(4), paddingHorizontal: s(10) },
     mixPillText: { fontFamily: FONT.body, fontSize: s(11), color: T.cream2 },
 
+    // Beat selector (signed-in only)
+    beatBlock:           { width: "100%", marginBottom: s(16) },
+    beatLabel:           { fontFamily: FONT.mono, fontSize: s(9), letterSpacing: s(1.5), textTransform: "uppercase", color: T.muted, textAlign: "center", marginBottom: s(8) },
+    beatRow:             { flexDirection: "row", flexWrap: "wrap", gap: s(6), justifyContent: "center" },
+    beatChip:            { backgroundColor: T.card2, borderWidth: 1, borderColor: T.border, borderRadius: s(20), paddingVertical: s(5), paddingHorizontal: s(11) },
+    beatChipActive:      { backgroundColor: T.amber, borderColor: T.amber },
+    beatChipText:        { fontFamily: FONT.body, fontSize: s(11), color: T.cream2 },
+    beatChipTextActive:  { color: T.ink, fontWeight: "700" },
+
     // Start button
     startBtn:     { width: "100%", paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(12), alignItems: "center", marginBottom: s(10) },
     startBtnText: { fontFamily: FONT.mono, fontSize: s(13), fontWeight: "700", letterSpacing: s(0.5), color: T.ink },
@@ -116,7 +125,10 @@ function StatsBar({ points, credits, answered, styles }) {
 }
 
 // ── HomeScreen ────────────────────────────────────────────────────────────────
-export default function HomeScreen({ onStart, credits, strategy, streak = 0, points = 0, answered = 0 }) {
+export default function HomeScreen({
+  onStart, credits, strategy, streak = 0, points = 0, answered = 0,
+  canChooseBeat = false, selectedCategory = null, onSelectCategory,
+}) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -144,6 +156,30 @@ export default function HomeScreen({ onStart, credits, strategy, streak = 0, poi
         <Text style={styles.homeHeadline}>{"5 Questions.\n3 Minutes.\nStay Sharp."}</Text>
         <Text style={styles.homeSub}>{"AI-curated from today's real headlines.\nWager points. Get smarter."}</Text>
         <View style={styles.mixPreview}>{pills}</View>
+
+        {canChooseBeat && (
+          <View style={styles.beatBlock}>
+            <Text style={styles.beatLabel}>Your Beat</Text>
+            <View style={styles.beatRow}>
+              {[{ id: null, label: "All", emoji: "✦" }, ...CATEGORIES].map((c) => {
+                const active = (selectedCategory ?? null) === (c.id ?? null);
+                return (
+                  <TouchableOpacity
+                    key={c.id ?? "all"}
+                    style={[styles.beatChip, active && styles.beatChipActive]}
+                    onPress={() => onSelectCategory?.(c.id ?? null)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.beatChipText, active && styles.beatChipTextActive]}>
+                      {c.emoji} {c.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
         <TouchableOpacity style={styles.startBtn} onPress={onStart} activeOpacity={0.85}>
           <Text style={styles.startBtnText}>Start Today's Edition →</Text>
         </TouchableOpacity>

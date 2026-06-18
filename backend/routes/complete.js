@@ -2,6 +2,7 @@ import { Router } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { subDays } from "date-fns";
 import { quizDay } from "../lib/quizDay.js";
+import { recordAttempts } from "../lib/recordAttempts.js";
 
 const router = Router();
 
@@ -71,6 +72,9 @@ router.post("/", async (req, res) => {
       return res.status(500).json({ error: "Failed to record completion" });
     }
 
+    // Advance the per-question checkpoint (anon included — see recordAttempts).
+    await recordAttempts(supabase, userId, results);
+
     const { error: updateErr } = await supabase
       .from("users")
       .update({ streak: newStreak, last_played: today, total_points: totalPoints })
@@ -88,23 +92,12 @@ router.post("/", async (req, res) => {
     const rank = rankErr ? null : (count ?? 0) + 1;
     const promptSaveStreak = isAnonymous && newStreak >= 1;
 
-    // Advance the user's session counter so the next GET /api/questions
-    // serves the next batch. Non-fatal — streak/points already saved above.
-    try {
-      const { data: progress } = await supabase
-        .from("user_daily_progress")
-        .select("sessions_completed")
-        .eq("user_id", userId)
-        .eq("date", today)
-        .single();
-
-      const next = (progress?.sessions_completed ?? 0) + 1;
-      await supabase
-        .from("user_daily_progress")
-        .upsert({ user_id: userId, date: today, sessions_completed: next, total_score: totalPoints }, { onConflict: "user_id,date" });
-    } catch {
-      // Non-fatal — "play more" will just re-serve the same session
-    }
+    // Atomically advance the per-day session counter (anon free-tier backstop +
+    // next-batch cursor). Non-fatal — streak/points already saved above.
+    const { error: bumpErr } = await supabase.rpc("bump_daily_session", {
+      p_user: userId, p_date: today, p_score: totalPoints,
+    });
+    if (bumpErr) console.warn(`[POST /api/complete] session bump failed: ${bumpErr.message}`);
 
     return res.json({ streak: newStreak, totalPoints, rank, promptSaveStreak });
   } catch (err) {

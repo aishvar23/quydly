@@ -7,7 +7,11 @@ const CATEGORIES = [
   { id: "ai",      label: "AI",      emoji: "🤖", newsDataTag: "technology"    },
 ];
 
-const EDITORIAL_MIX = { world: 1, tech: 1, finance: 1, culture: 1, ai: 1 };
+// All six categories participate so per-beat serving has content for every
+// selectable category (incl. science). The total daily question budget is
+// SESSION_SIZE * TOTAL_SESSIONS (independent of the mix width) — widening the
+// mix redistributes that budget across categories, it does not add questions.
+const EDITORIAL_MIX = { world: 1, tech: 1, finance: 1, culture: 1, science: 1, ai: 1 };
 
 const SESSION_SIZE   = 5;
 const TOTAL_SESSIONS = 10;

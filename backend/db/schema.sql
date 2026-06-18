@@ -52,3 +52,35 @@ create table if not exists completions (
   created_at timestamptz default now(),
   unique(user_id, date)
 );
+
+-- Per-question identity (durable backlog for signed-in, unbounded, multi-day play).
+-- story_id FK to stories(id) is added in migration_question_identity.sql, where
+-- the stories table is guaranteed to exist; kept FK-less here so a fresh apply of
+-- this core schema (which does not define stories) succeeds standalone.
+create table if not exists quiz_questions (
+  id            uuid        primary key default gen_random_uuid(),
+  date          date        not null,
+  audience      text        not null default 'global',
+  category_id   text        not null,
+  question      text        not null,
+  options       jsonb       not null,
+  correct_index int         not null check (correct_index between 0 and 3),
+  tldr          text        not null,
+  story_id      bigint,
+  created_at    timestamptz not null default now()
+);
+create index if not exists quiz_questions_serve_idx
+  on quiz_questions (audience, date desc, category_id);
+create index if not exists quiz_questions_beat_idx
+  on quiz_questions (audience, category_id, date desc);
+
+-- Per-user attempt checkpoint: the set of question ids a user has attempted.
+create table if not exists user_question_attempts (
+  user_id      uuid        not null references users(id) on delete cascade,
+  question_id  uuid        not null references quiz_questions(id) on delete cascade,
+  attempted_at timestamptz not null default now(),
+  correct      boolean,
+  delta        int,
+  primary key (user_id, question_id)
+);
+create index if not exists uqa_user_idx on user_question_attempts (user_id);
