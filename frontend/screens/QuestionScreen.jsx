@@ -261,7 +261,6 @@ export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQ
   const styles = useMemo(() => makeStyles(scale), [scale]);
 
   const total  = totalQ || FLAGS.freeQuestionsPerDay;
-  const isLast = currentQ + 1 >= total;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -311,7 +310,7 @@ export default function QuestionScreen({ question, onAnswer, onNext, onSkip, onQ
 
       {answered && (
         <TouchableOpacity style={styles.nextBtn} onPress={onNext} activeOpacity={0.85}>
-          <Text style={styles.nextBtnText}>{nextLabel || (isLast ? "See Results →" : "Next Question →")}</Text>
+          <Text style={styles.nextBtnText}>{nextLabel || "Next Question →"}</Text>
         </TouchableOpacity>
       )}
     </ScrollView>

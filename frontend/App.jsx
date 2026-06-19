@@ -526,15 +526,45 @@ export default function App() {
 
   const handleNext = async () => {
     const total = questions.length || FLAGS.freeQuestionsPerDay;
-    if (currentQ + 1 >= total) {
-      await submitCompletion();
-      setScreen("end");
-    } else {
+    if (currentQ + 1 < total) {
+      // Still inside the loaded page — advance to the next question.
       setCurrentQ((q) => q + 1);
       setAnswered(false);
       setSelectedIdx(null);
       setSkipped(false);
       setWager(25);
+      return;
+    }
+
+    // Reached the end of the loaded page. Checkpoint what's been answered so the
+    // cumulative stats stay accurate either way.
+    await submitCompletion();
+
+    // Anonymous users play a fixed session; the page IS the pool, so its end is
+    // the natural finish → show results. (They must never run unbounded — see the
+    // sign-in gating notes around handleQuit/QuestionScreen.)
+    if (!isSignedIn) {
+      setScreen("end");
+      return;
+    }
+
+    // Signed-in users get questions nonstop: pull the next page and continue.
+    // Only stop when the server says they've exhausted the pool (allCaughtUp /
+    // no more questions), at which point the end/caught-up state is reached.
+    setScreen("loading");
+    try {
+      const data = await fetchQuestions(selectedCategory);
+      if (data.allCaughtUp || !data.questions?.length) {
+        setAllCaughtUp(!!data.allCaughtUp);
+        setScreen("end");
+        return;
+      }
+      // loadRun clears `results` so the just-checkpointed answers aren't
+      // re-counted by the next completion, and resets per-question UI state.
+      loadRun(data);
+    } catch {
+      // Couldn't fetch more — don't strand the player; show their results so far.
+      setScreen("end");
     }
   };
 
