@@ -166,9 +166,12 @@ export default function App() {
   const accuracy = answeredTotal > 0 ? Math.round((correctTotal / answeredTotal) * 100) : 0;
   const canChooseBeat = FLAGS.beatEnabled && isSignedIn;
 
-  // Guards a beat switch in flight so rapid chip taps can't fire concurrent
-  // submit/fetch races (mismatched beat vs. loaded questions, double submits).
-  const switchingBeat = useRef(false);
+  // Guards a run transition in flight (beat switch OR end-of-page advance) so
+  // rapid taps can't fire concurrent submit/fetch races — double /api/complete
+  // submits, or two fetched pages where the second loadRun silently discards the
+  // first (questions marked served but never shown). Mutually exclusive across
+  // both paths since both mutate `questions`/`results`.
+  const navigating = useRef(false);
 
   // Auto-dismiss the transient beat-switch notice, cleaning up on unmount/re-set.
   useEffect(() => {
@@ -420,8 +423,8 @@ export default function App() {
   const beatLabel = (id) => (id ? (CATEGORIES.find((c) => c.id === id)?.label ?? "this beat") : "All");
   const handleChangeBeat = async (rawCategory) => {
     const next = rawCategory ?? null;
-    if (next === (selectedCategory ?? null) || switchingBeat.current) return;
-    switchingBeat.current = true;
+    if (next === (selectedCategory ?? null) || navigating.current) return;
+    navigating.current = true;
     setBeatNotice(null);
     setScreen("loading");
     try {
@@ -431,9 +434,8 @@ export default function App() {
       // (e.g. All → its category). Only clear results / proceed once the
       // checkpoint actually succeeded — otherwise the answers would be dropped
       // from any later completion AND re-served (they never reached the ledger).
-      if (isSignedIn && results.length > 0) {
-        const ok = await submitCompletion();
-        if (!ok) {
+      if (isSignedIn) {
+        if (!(await checkpointBeforeAdvance())) {
           setScreen("quiz");
           setBeatNotice("Couldn't save your progress — staying on this beat.");
           return;
@@ -455,7 +457,7 @@ export default function App() {
       setScreen("quiz");
       setBeatNotice("Couldn't switch beat. Please try again.");
     } finally {
-      switchingBeat.current = false;
+      navigating.current = false;
     }
   };
 
@@ -524,47 +526,73 @@ export default function App() {
     }
   };
 
+  // Bank the pending answers before navigating away from them. Returns true only
+  // if the server actually recorded them. Callers MUST keep `results` and not
+  // fetch/advance on false: serve_unseen only excludes questions already in
+  // user_question_attempts, so dropping the buffer here would lose the answers
+  // AND let them be re-served. Shared by the beat switch and the end-of-page
+  // advance — the one safety-critical step both paths must get right.
+  const checkpointBeforeAdvance = async () => {
+    if (results.length === 0) return true;   // nothing pending to bank
+    return submitCompletion();
+  };
+
   const handleNext = async () => {
-    const total = questions.length || FLAGS.freeQuestionsPerDay;
-    if (currentQ + 1 < total) {
-      // Still inside the loaded page — advance to the next question.
-      setCurrentQ((q) => q + 1);
-      setAnswered(false);
-      setSelectedIdx(null);
-      setSkipped(false);
-      setWager(25);
-      return;
-    }
-
-    // Reached the end of the loaded page. Checkpoint what's been answered so the
-    // cumulative stats stay accurate either way.
-    await submitCompletion();
-
-    // Anonymous users play a fixed session; the page IS the pool, so its end is
-    // the natural finish → show results. (They must never run unbounded — see the
-    // sign-in gating notes around handleQuit/QuestionScreen.)
-    if (!isSignedIn) {
-      setScreen("end");
-      return;
-    }
-
-    // Signed-in users get questions nonstop: pull the next page and continue.
-    // Only stop when the server says they've exhausted the pool (allCaughtUp /
-    // no more questions), at which point the end/caught-up state is reached.
-    setScreen("loading");
+    // Re-entrancy guard: the end-of-page branch awaits the network with the
+    // "Next" button still mounted (answered stays true), so a double-tap would
+    // otherwise spawn concurrent submits/fetches. See `navigating`.
+    if (navigating.current) return;
+    navigating.current = true;
     try {
-      const data = await fetchQuestions(selectedCategory);
-      if (data.allCaughtUp || !data.questions?.length) {
-        setAllCaughtUp(!!data.allCaughtUp);
+      const total = questions.length || FLAGS.freeQuestionsPerDay;
+      if (currentQ + 1 < total) {
+        // Still inside the loaded page — advance to the next question.
+        setCurrentQ((q) => q + 1);
+        setAnswered(false);
+        setSelectedIdx(null);
+        setSkipped(false);
+        setWager(25);
+        return;
+      }
+
+      // Anonymous users play a fixed session; the page IS the pool, so its end is
+      // the natural finish → checkpoint and show results. (They must never run
+      // unbounded — see the sign-in gating around handleQuit/QuestionScreen.)
+      if (!isSignedIn) {
+        await submitCompletion();
         setScreen("end");
         return;
       }
-      // loadRun clears `results` so the just-checkpointed answers aren't
-      // re-counted by the next completion, and resets per-question UI state.
-      loadRun(data);
-    } catch {
-      // Couldn't fetch more — don't strand the player; show their results so far.
-      setScreen("end");
+
+      // Signed-in users get questions nonstop. Checkpoint the page first and
+      // bail without advancing if it didn't stick — otherwise the just-answered
+      // questions would be lost and eligible for re-serve (mirrors handleChangeBeat).
+      setScreen("loading");
+      if (!(await checkpointBeforeAdvance())) {
+        setScreen("quiz");   // keep the answered page; nothing dropped or re-served
+        setBeatNotice("Couldn't save your progress — please try again.");
+        return;
+      }
+
+      // Pull the next page and continue. Only stop when the server says the pool
+      // is exhausted (allCaughtUp / no more questions). On exhaustion we keep
+      // `results` so the end screen can show this round's summary.
+      try {
+        const data = await fetchQuestions(selectedCategory);
+        if (data.allCaughtUp || !data.questions?.length) {
+          setAllCaughtUp(!!data.allCaughtUp);
+          setScreen("end");
+          return;
+        }
+        // loadRun resets per-question UI state and clears `results` so the
+        // just-checkpointed answers aren't re-counted by the next completion.
+        loadRun(data);
+      } catch {
+        // Couldn't fetch more — don't strand the player; show their results so far.
+        setScreen("end");
+      }
+    } finally {
+      navigating.current = false;
     }
   };
 
