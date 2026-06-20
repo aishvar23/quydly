@@ -179,7 +179,7 @@ export default async function discover(context, timer) {
       // Send in batches that fit within SB message size limits
       for (let i = 0; i < newCandidates.length; i += BATCH_SIZE) {
         const batch = newCandidates.slice(i, i + BATCH_SIZE);
-        const sbBatch = await sender.createMessageBatch();
+        let sbBatch = await sender.createMessageBatch();
 
         for (const c of batch) {
           const msg = {
@@ -197,10 +197,17 @@ export default async function discover(context, timer) {
           };
 
           if (!sbBatch.tryAddMessage(msg)) {
-            // Batch full — send it and start a new one
+            // Batch full — send it and start a fresh one, then add msg to the
+            // fresh batch. Must reassign sbBatch so subsequent messages (and the
+            // final flush below) target the new batch, or overflow messages are
+            // silently dropped and their URLs never get scraped.
             await sender.sendMessages(sbBatch);
-            const nextBatch = await sender.createMessageBatch();
-            nextBatch.tryAddMessage(msg);
+            sbBatch = await sender.createMessageBatch();
+            if (!sbBatch.tryAddMessage(msg)) {
+              // A single message that won't fit an empty batch — skip it rather
+              // than spin. Its scrape_queue row stays PENDING (rare; oversized).
+              context.log.error(JSON.stringify({ event: "sb_message_too_large", url_hash: c.url_hash }));
+            }
           }
         }
 

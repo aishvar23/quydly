@@ -22,6 +22,8 @@
 // Flag-gated; ON by default — set DISCOVER_API_SOURCES_ENABLED=false (or 0) in
 // Azure to disable. Mirrors the AI_RETAG_ENABLED env-toggle pattern.
 
+import { rootDomain } from "./sourceDiversity.js";
+
 const API_TIMEOUT_MS = 10_000;
 const CATEGORY        = "ai";
 
@@ -39,12 +41,15 @@ function apiSourcesEnabled() {
   return !/^(0|false)$/i.test(String(process.env.DISCOVER_API_SOURCES_ENABLED ?? "true"));
 }
 
-// Registrable-ish host for diversity/dedup: hostname minus a leading "www.".
-// Returns null on an unparseable URL so the caller can skip the item.
+// Registrable-ish domain root for diversity/dedup. Routes the URL host through
+// the SAME rootDomain() the synthesizer's diversity layer uses, so an
+// API-sourced "edition.cnn.com" / "in.reuters.com" collapses to the same value
+// an RSS row would carry — otherwise the clusterer's >=2-distinct-domain gate
+// (which counts the raw stored domain) would treat one outlet as two and
+// falsely inflate corroboration. Returns null on an unparseable URL.
 function domainFromUrl(rawUrl) {
   try {
-    const h = new URL(rawUrl).hostname.toLowerCase();
-    return h.startsWith("www.") ? h.slice(4) : h;
+    return rootDomain(new URL(rawUrl).hostname);
   } catch {
     return null;
   }
@@ -76,39 +81,44 @@ async function fetchJson(url) {
 }
 
 // ── Hacker News (Algolia) ─────────────────────────────────────────────────────
-async function fetchHackerNews(context) {
+async function fetchHnQuery(context, q) {
+  const url =
+    `https://hn.algolia.com/api/v1/search_by_date?tags=story` +
+    `&query=${encodeURIComponent(q)}&hitsPerPage=${HN_HITS}`;
+
+  let data;
+  try {
+    data = await fetchJson(url);
+  } catch (err) {
+    context.log.error(JSON.stringify({ event: "api_source_error", source: "hn", query: q, error: err.message }));
+    return []; // one bad query shouldn't sink the others
+  }
+
   const out = [];
-  for (const q of HN_QUERIES) {
-    const url =
-      `https://hn.algolia.com/api/v1/search_by_date?tags=story` +
-      `&query=${encodeURIComponent(q)}&hitsPerPage=${HN_HITS}`;
+  for (const hit of data?.hits ?? []) {
+    const rawUrl = hit?.url;
+    if (!rawUrl) continue;                    // Ask/Show HN self-posts have no external url
+    const domain = domainFromUrl(rawUrl);
+    if (!domain || domain === "ycombinator.com") continue;
 
-    let data;
-    try {
-      data = await fetchJson(url);
-    } catch (err) {
-      context.log.error(JSON.stringify({ event: "api_source_error", source: "hn", query: q, error: err.message }));
-      continue; // one bad query shouldn't sink the others
-    }
-
-    for (const hit of data?.hits ?? []) {
-      const rawUrl = hit?.url;
-      if (!rawUrl) continue;                    // Ask/Show HN self-posts have no external url
-      const domain = domainFromUrl(rawUrl);
-      if (!domain || domain === "news.ycombinator.com") continue;
-
-      out.push({
-        rawUrl,
-        domain,
-        category_id:     CATEGORY,
-        authority_score: hnAuthority(hit.points),
-        published_at:    hit.created_at ?? null,
-        title:           hit.title ?? null,
-        summary:         null,
-      });
-    }
+    out.push({
+      rawUrl,
+      domain,
+      category_id:     CATEGORY,
+      authority_score: hnAuthority(hit.points),
+      published_at:    hit.created_at ?? null,
+      title:           hit.title ?? null,
+      summary:         null,
+    });
   }
   return out;
+}
+
+// The queries are independent, so fan them out concurrently rather than serially
+// (a serial loop adds up to HN_QUERIES × API_TIMEOUT_MS of blocking wall-clock).
+async function fetchHackerNews(context) {
+  const settled = await Promise.allSettled(HN_QUERIES.map(q => fetchHnQuery(context, q)));
+  return settled.flatMap(r => (r.status === "fulfilled" ? r.value : []));
 }
 
 // ── GDELT Doc 2.0 ─────────────────────────────────────────────────────────────
@@ -127,16 +137,20 @@ async function fetchGdelt(context) {
 
   const out = [];
   for (const art of data?.articles ?? []) {
-    if (art?.language && art.language !== "English") continue; // English-only, client-side
+    // English-only, client-side. Require the field to be present and "English"
+    // (rather than "exclude only when explicitly non-English") so records with a
+    // missing/variant language tag don't slip into AI clusters.
+    if (art?.language !== "English") continue;
     const rawUrl = art?.url;
     if (!rawUrl) continue;
-    const domain = (art.domain ? String(art.domain) : domainFromUrl(rawUrl))?.toLowerCase();
+    // Prefer GDELT's own domain field, else derive from the URL — both through
+    // rootDomain() for consistency with RSS rows and the diversity layer.
+    const domain = art.domain ? rootDomain(String(art.domain)) : domainFromUrl(rawUrl);
     if (!domain) continue;
-    const cleanDomain = domain.startsWith("www.") ? domain.slice(4) : domain;
 
     out.push({
       rawUrl,
-      domain:          cleanDomain,
+      domain,
       category_id:     CATEGORY,
       authority_score: 0.3,                       // unknown outlet quality — keep modest
       published_at:    parseGdeltDate(art.seendate),
@@ -156,25 +170,27 @@ export async function fetchApiSourceCandidates(context) {
     return [];
   }
 
-  const results = await Promise.allSettled([
-    fetchHackerNews(context),
-    fetchGdelt(context),
-  ]);
+  // name-keyed so per-source counts stay correct as sources are added/reordered.
+  const sources = [
+    { name: "hn",    fetch: fetchHackerNews },
+    { name: "gdelt", fetch: fetchGdelt },
+  ];
+
+  const settled = await Promise.allSettled(sources.map(s => s.fetch(context)));
 
   const candidates = [];
-  let hn_count = 0;
-  let gdelt_count = 0;
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
+  const counts = {};
+  settled.forEach((r, i) => {
+    const name = sources[i].name;
     if (r.status === "fulfilled") {
       candidates.push(...r.value);
-      if (i === 0) hn_count = r.value.length;
-      else gdelt_count = r.value.length;
+      counts[name] = r.value.length;
     } else {
-      context.log.error(JSON.stringify({ event: "api_source_failed", index: i, error: r.reason?.message }));
+      counts[name] = 0;
+      context.log.error(JSON.stringify({ event: "api_source_failed", source: name, error: r.reason?.message }));
     }
-  }
+  });
 
-  context.log(JSON.stringify({ event: "api_sources_fetched", hn: hn_count, gdelt: gdelt_count }));
+  context.log(JSON.stringify({ event: "api_sources_fetched", ...counts }));
   return candidates;
 }
