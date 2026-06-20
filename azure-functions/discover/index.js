@@ -9,6 +9,7 @@ import Parser from "rss-parser";
 import { canonicalise, hashUrl } from "../lib/canonicalise.js";
 import { getSupabase, getSbSender } from "../lib/clients.js";
 import RSS_FEEDS from "../lib/rss-feeds.js";
+import { fetchApiSourceCandidates } from "../lib/api-sources.js";
 
 const FEED_TIMEOUT_MS = 10_000;
 const BATCH_SIZE      = 100;   // rows per Supabase dedup check
@@ -79,6 +80,38 @@ export default async function discover(context, timer) {
         });
       }
     }
+  }
+
+  // ── 1a. Supplementary API sources (HN Algolia + GDELT) ────────────────────
+  // Appended AFTER the RSS candidates so that on a url_hash collision the RSS
+  // entry wins the within-run dedup below — keeping RSS's geo/category tagging
+  // authoritative. These add AI multi-outlet corroboration the clusterer needs.
+  let api_candidates = 0;
+  try {
+    const apiRaw = await fetchApiSourceCandidates(context);
+    for (const c of apiRaw) {
+      let canonical;
+      try {
+        canonical = canonicalise(c.rawUrl);
+      } catch {
+        continue; // malformed URL — skip silently
+      }
+      candidates.push({
+        url_hash:        hashUrl(canonical),
+        canonical_url:   canonical,
+        domain:          c.domain,
+        category_id:     c.category_id,
+        authority_score: c.authority_score,
+        published_at:    c.published_at,
+        title:           c.title,
+        summary:         c.summary,
+      });
+      api_candidates++;
+    }
+  } catch (err) {
+    // fetchApiSourceCandidates is defensive and shouldn't throw, but guard the
+    // whole RSS run regardless — supplementary sources are never load-bearing.
+    context.log.error(JSON.stringify({ event: "api_sources_error", error: err.message }));
   }
 
   // ── 1b. Collapse within-run duplicates by url_hash ────────────────────────
@@ -181,6 +214,6 @@ export default async function discover(context, timer) {
 
   urls_skipped = candidates.length - newCandidates.length;
 
-  const summary = { feeds_attempted, feeds_ok, feeds_failed, urls_queued, urls_skipped };
+  const summary = { feeds_attempted, feeds_ok, feeds_failed, api_candidates, urls_queued, urls_skipped };
   context.log(JSON.stringify({ event: "discover_run", ...summary }));
 }

@@ -12,6 +12,19 @@ const FLAGS = {
     },
   },
 
+  // Clustering thresholds (article-clusterer). Scoring/eligibility knobs only.
+  clustering: {
+    // Entities an article must share with an existing cluster to MERGE into it.
+    // AI headlines are entity-poor and repetitive ("OpenAI", "AI", "model"), so
+    // genuinely-related AI coverage fails the default-3 gate, forms singletons,
+    // and dies at the >=2-domain quality gate. A lower bar for `ai` lets that
+    // coverage merge into one cluster that then accumulates >=2 domains. Other
+    // verticals keep the stricter default to avoid false-positive merges.
+    // hasSpecificHighSignalEntity still applies, so a bare region overlap alone
+    // never anchors a merge regardless of this count.
+    minSharedEntities: { default: 3, ai: 2 },
+  },
+
   // Social distribution pipeline thresholds (Phase 1+).
   // Scoring/eligibility knobs only — keep frontend flags in config/flags.js.
   social: {
