@@ -12,7 +12,7 @@
 //   - Duplicate SB messages are safe: story-synthesizer is idempotent on cluster_id.
 
 import { getSupabase, getSbSender } from "../lib/clients.js";
-import { extractEntities, hasHighSignalEntity, hasSpecificHighSignalEntity } from "../lib/nlp.js";
+import { extractEntities, hasHighSignalEntity, hasSpecificHighSignalEntity, hasSpecificNamedEntity } from "../lib/nlp.js";
 import { computeClusterScore } from "../lib/scoring.js";
 import { computePrimaryGeos, computeClusterGeoScores } from "../lib/geo.js";
 import FLAGS from "../lib/flags.js";
@@ -48,13 +48,18 @@ function findBestMatch(articleEntities, categoryId, candidates) {
   let best      = null;
   let bestCount = 0;
   const minShared = minSharedEntitiesFor(categoryId);
+  // On a relaxed (below-default) threshold, demand a STORY-specific anchor so
+  // generic category boilerplate ("ai" + "ceo") can't merge two unrelated
+  // articles. Default-threshold categories keep the original high-signal gate.
+  const relaxed   = minShared < MIN_SHARED_ENTITIES.default;
+  const anchorOk  = relaxed ? hasSpecificNamedEntity : hasSpecificHighSignalEntity;
 
   for (const cluster of candidates) {
     if (cluster.category_id !== categoryId) continue;
     const shared = articleEntities.filter(e => cluster.primary_entities.includes(e));
     if (
       shared.length >= minShared &&
-      hasSpecificHighSignalEntity(shared) &&
+      anchorOk(shared) &&
       shared.length > bestCount
     ) {
       best      = cluster;
