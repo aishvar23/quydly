@@ -101,3 +101,16 @@ export function hasSpecificHighSignalEntity(entities) {
     e => (e.includes(' ') || HIGH_SIGNAL_SINGLES.has(e)) && !BROAD_ENTITIES.has(e),
   );
 }
+
+// Strictest anchor — requires a genuinely STORY-specific named entity, not just
+// a category/geo/org boilerplate token. Used by the clusterer on the relaxed
+// (2-entity) merge path so that `ai` articles sharing only generic tokens like
+// "ai" + "ceo" do NOT merge: at the lower threshold, generic high-signal singles
+// (HIGH_SIGNAL_SINGLES: ai, ceo, us, nato, ...) are category-wide noise, so an
+// anchor must be a multi-word proper name (e.g. "Sam Altman") or a non-generic
+// single (e.g. "openai", "gpt", "nvidia"). Broad regions are excluded as before.
+export function hasSpecificNamedEntity(entities) {
+  return entities.some(
+    e => !BROAD_ENTITIES.has(e) && (e.includes(' ') || !HIGH_SIGNAL_SINGLES.has(e)),
+  );
+}

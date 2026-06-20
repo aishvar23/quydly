@@ -9,6 +9,7 @@ import Parser from "rss-parser";
 import { canonicalise, hashUrl } from "../lib/canonicalise.js";
 import { getSupabase, getSbSender } from "../lib/clients.js";
 import RSS_FEEDS from "../lib/rss-feeds.js";
+import { fetchApiSourceCandidates } from "../lib/api-sources.js";
 
 const FEED_TIMEOUT_MS = 10_000;
 const BATCH_SIZE      = 100;   // rows per Supabase dedup check
@@ -81,6 +82,38 @@ export default async function discover(context, timer) {
     }
   }
 
+  // ── 1a. Supplementary API sources (HN Algolia + GDELT) ────────────────────
+  // Appended AFTER the RSS candidates so that on a url_hash collision the RSS
+  // entry wins the within-run dedup below — keeping RSS's geo/category tagging
+  // authoritative. These add AI multi-outlet corroboration the clusterer needs.
+  let api_candidates = 0;
+  try {
+    const apiRaw = await fetchApiSourceCandidates(context);
+    for (const c of apiRaw) {
+      let canonical;
+      try {
+        canonical = canonicalise(c.rawUrl);
+      } catch {
+        continue; // malformed URL — skip silently
+      }
+      candidates.push({
+        url_hash:        hashUrl(canonical),
+        canonical_url:   canonical,
+        domain:          c.domain,
+        category_id:     c.category_id,
+        authority_score: c.authority_score,
+        published_at:    c.published_at,
+        title:           c.title,
+        summary:         c.summary,
+      });
+      api_candidates++;
+    }
+  } catch (err) {
+    // fetchApiSourceCandidates is defensive and shouldn't throw, but guard the
+    // whole RSS run regardless — supplementary sources are never load-bearing.
+    context.log.error(JSON.stringify({ event: "api_sources_error", error: err.message }));
+  }
+
   // ── 1b. Collapse within-run duplicates by url_hash ────────────────────────
   // The same article can surface in two feeds in a single run (e.g. a domain's
   // broad feed and its narrower AI sub-feed). RSS_FEEDS lists the AI feeds
@@ -146,7 +179,7 @@ export default async function discover(context, timer) {
       // Send in batches that fit within SB message size limits
       for (let i = 0; i < newCandidates.length; i += BATCH_SIZE) {
         const batch = newCandidates.slice(i, i + BATCH_SIZE);
-        const sbBatch = await sender.createMessageBatch();
+        let sbBatch = await sender.createMessageBatch();
 
         for (const c of batch) {
           const msg = {
@@ -164,10 +197,17 @@ export default async function discover(context, timer) {
           };
 
           if (!sbBatch.tryAddMessage(msg)) {
-            // Batch full — send it and start a new one
+            // Batch full — send it and start a fresh one, then add msg to the
+            // fresh batch. Must reassign sbBatch so subsequent messages (and the
+            // final flush below) target the new batch, or overflow messages are
+            // silently dropped and their URLs never get scraped.
             await sender.sendMessages(sbBatch);
-            const nextBatch = await sender.createMessageBatch();
-            nextBatch.tryAddMessage(msg);
+            sbBatch = await sender.createMessageBatch();
+            if (!sbBatch.tryAddMessage(msg)) {
+              // A single message that won't fit an empty batch — skip it rather
+              // than spin. Its scrape_queue row stays PENDING (rare; oversized).
+              context.log.error(JSON.stringify({ event: "sb_message_too_large", url_hash: c.url_hash }));
+            }
           }
         }
 
@@ -181,6 +221,6 @@ export default async function discover(context, timer) {
 
   urls_skipped = candidates.length - newCandidates.length;
 
-  const summary = { feeds_attempted, feeds_ok, feeds_failed, urls_queued, urls_skipped };
+  const summary = { feeds_attempted, feeds_ok, feeds_failed, api_candidates, urls_queued, urls_skipped };
   context.log(JSON.stringify({ event: "discover_run", ...summary }));
 }
