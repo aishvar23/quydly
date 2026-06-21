@@ -9,6 +9,7 @@
 import {
   QUYDLY_URL, keyPointStrings, firstSentences, truncate, bullets, assemble,
 } from "./_shared.js";
+import { validateMCQ, parseJSONFromLLM } from "../mcq.js";
 
 export const PLATFORM = "instagram";
 
@@ -278,18 +279,9 @@ export async function generateEngagementQuestion({ anthropic, supabase, story, a
       messages: [{ role: "user", content: buildEngagementPrompt(prev.story, audienceGeo) }],
     });
 
-    let raw = String(msg?.content?.[0]?.text || "").trim();
-    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-    const q = JSON.parse(raw);
+    const q = parseJSONFromLLM(msg?.content?.[0]?.text);
 
-    const valid =
-      q &&
-      typeof q.question === "string" && q.question.trim() &&
-      Array.isArray(q.options) && q.options.length === 4 &&
-      q.options.every((o) => typeof o === "string" && o.trim()) &&
-      Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3;
-
-    if (!valid) {
+    if (!validateMCQ(q)) {
       logger?.warn?.(JSON.stringify({ event: "ig_engagement_invalid", source_story_id: prev.story.id }));
       return null;
     }

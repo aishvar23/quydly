@@ -9,14 +9,26 @@
 //     (= published_at + 12h) and flips PENDING → SCHEDULED.
 // This worker is the final step: it claims due SCHEDULED rows and posts the comment.
 //
-// Safety / idempotency (mirrors social-publisher.js):
-//   - claims each row by flipping SCHEDULED → COMMENTING with a conditional update
-//     (comment_status still 'SCHEDULED'); a row that can't be claimed is skipped
-//     (another worker already took it / already posted) — so a comment is NEVER
-//     posted twice.
+// Safety / idempotency (mirrors social-publisher.js). A comment is posted
+// EXACTLY ONCE across both DB races AND retried posts:
+//   - DB race: claims each row by flipping SCHEDULED → COMMENTING with a
+//     conditional update (comment_status still 'SCHEDULED'); a row that can't be
+//     claimed is skipped (another worker already took it / already posted).
+//   - retried post: if a prior attempt actually posted the IG comment but then
+//     threw (lost the Graph response), the row was released back to SCHEDULED and
+//     would otherwise be re-posted. On any RETRY (comment_attempts ≥ 1) we first
+//     call listComments() for the media and, if a comment whose text exactly
+//     matches the message we're about to post already exists, treat it as already
+//     posted (mark POSTED with that comment id) and SKIP the post. The dedup check
+//     is retry-only so the common first attempt makes no extra Graph call.
 //   - on success: comment_status 'POSTED' + comment_platform_id.
 //   - on failure: bounded retry — released back to SCHEDULED until comment_attempts
 //     reaches MAX_ATTEMPTS, then left FAILED (terminal) with error_message.
+//   - stuck rows: a row left COMMENTING (post succeeded but the → POSTED update
+//     failed) is never re-fetched by the SCHEDULED claim filter, so at the start
+//     of each run we reclaim COMMENTING rows older than STUCK_MS back to SCHEDULED;
+//     the retry dedup check above then prevents any double-post for ones that did
+//     post.
 //
 // Gating: runs only when SOCIAL_IG_ENGAGEMENT_ENABLED is on. If the Meta creds are
 // unavailable (META_PAGE_ACCESS_TOKEN unset) it no-ops cleanly without claiming.
@@ -25,12 +37,20 @@
 //
 // Dependencies (postComment, getCreds) are injected so tests never hit the network.
 
-import { postComment as igPostComment, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
+import {
+  postComment as igPostComment,
+  listComments as igListComments,
+  credsFromEnv as igCredsFromEnv,
+} from "./instagram-graph.js";
 
 const BATCH = 20;
 // How many post attempts before a row is left FAILED (terminal). The 1st claim is
 // attempt 1; a transient Graph error releases it for the next window until this cap.
 const MAX_ATTEMPTS = 3;
+// A row claimed (COMMENTING) but never finalised this long ago is presumed stuck
+// (the → POSTED/FAILED update failed after the claim) and reclaimed to SCHEDULED
+// so the normal due path can reconcile it (dedup-guarded against double-posting).
+const STUCK_MS = 10 * 60 * 1000; // 10 minutes
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -53,6 +73,7 @@ export function buildCommentMessage(row) {
 export async function publishDueComments({
   supabase,
   postComment = igPostComment,
+  listComments = igListComments,
   getCreds = igCredsFromEnv,
   env = process.env,
   logger = noopLogger,
@@ -76,6 +97,23 @@ export async function publishDueComments({
   }
 
   const nowIso = new Date(now).toISOString();
+
+  // Reclaim stuck rows: a row left COMMENTING (claimed, but the → POSTED/FAILED
+  // update failed) is never re-fetched by the SCHEDULED claim filter, so release
+  // any COMMENTING row older than STUCK_MS back to SCHEDULED. These then flow
+  // through the normal due path; the retry dedup check below prevents a double-
+  // post for any that actually did post their comment.
+  const stuckBefore = new Date(new Date(now).getTime() - STUCK_MS).toISOString();
+  const { data: reclaimed, error: reclaimErr } = await supabase
+    .from("social_post_engagement")
+    .update({ comment_status: "SCHEDULED", updated_at: nowIso })
+    .eq("comment_status", "COMMENTING")
+    .lt("updated_at", stuckBefore)
+    .select("id");
+  if (reclaimErr) throw new Error(`[social-comment-publisher] reclaim stuck rows: ${reclaimErr.message}`);
+  if (reclaimed && reclaimed.length) {
+    logger(JSON.stringify({ event: "social_comment_reclaimed", count: reclaimed.length }));
+  }
 
   // Due, unposted comments: SCHEDULED, due, with an IG media id, oldest first.
   const { data: rows, error } = await supabase
@@ -111,6 +149,44 @@ export async function publishDueComments({
     if (!claimed) { skipped++; continue; } // lost the race / already moved
 
     const message = buildCommentMessage(row);
+
+    // Retry-only idempotency: if a PRIOR attempt already posted this comment but
+    // lost the Graph response (the row was released back to SCHEDULED), posting
+    // again would duplicate it. On any retry (row.comment_attempts ≥ 1) list the
+    // media's existing comments first; if one's text exactly matches the message
+    // we're about to post, it's already posted — mark POSTED and skip postComment.
+    // First attempts (the common path) skip this extra Graph call.
+    if ((row.comment_attempts || 0) >= 1) {
+      try {
+        const existing = await listComments({ creds, mediaId: row.ig_media_id, logger });
+        const dup = Array.isArray(existing) ? existing.find((c) => c && c.text === message) : null;
+        if (dup) {
+          await supabase
+            .from("social_post_engagement")
+            .update({
+              comment_status: "POSTED",
+              comment_platform_id: dup.id,
+              error_message: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", row.id);
+          posted++;
+          logger(JSON.stringify({
+            event: "social_comment_deduped",
+            engagement_id: row.id,
+            social_post_id: row.social_post_id,
+            ig_media_id: row.ig_media_id,
+            comment_id: dup.id,
+          }));
+          continue; // already posted — never post again
+        }
+      } catch (listErr) {
+        // A listComments failure is non-fatal: fall through and attempt the post
+        // (the worst case is the duplicate we were trying to avoid, which the next
+        // retry's dedup would still catch). Surface it for diagnosis.
+        logger.warn(JSON.stringify({ event: "social_comment_dedup_check_failed", engagement_id: row.id, error: listErr.message }));
+      }
+    }
 
     try {
       const { commentId } = await postComment({ creds, mediaId: row.ig_media_id, message, logger });

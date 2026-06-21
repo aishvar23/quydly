@@ -36,19 +36,25 @@ function dueRow(overrides = {}) {
 
 // Mock Supabase for the comment worker. `fetchRows` is what the due-row SELECT
 // returns; `claimable(id)` decides whether the conditional claim succeeds (models
-// the SCHEDULED guard / lost race). Captures every update payload by row id.
-function makeSupabase({ fetchRows = [], claimable = () => true } = {}) {
+// the SCHEDULED guard / lost race). `reclaimRows` is what the COMMENTING-reclaim
+// UPDATE ... .select("id") returns (the stuck rows released back to SCHEDULED).
+// Captures every update payload by row id.
+function makeSupabase({ fetchRows = [], claimable = () => true, reclaimRows = [] } = {}) {
   const updates = []; // { id, payload }
   const client = {
     from(table) {
-      const q = { table, _op: "select", _payload: null, _eqs: {} };
-      q.select = () => q;
+      const q = { table, _op: "select", _payload: null, _eqs: {}, _selected: false };
+      q.select = () => { q._selected = true; return q; };
       q.eq = (k, v) => { q._eqs[k] = v; return q; };
       q.lte = () => q;
+      q.lt = () => q;
       q.not = () => q;
       q.order = () => q;
       q.limit = () => q;
       q.update = (payload) => { q._op = "update"; q._payload = payload; return q; };
+      // The reclaim UPDATE filters on comment_status=COMMENTING with no row id.
+      const isReclaim = () =>
+        q._op === "update" && q._eqs.comment_status === "COMMENTING" && q._eqs.id == null;
       q.maybeSingle = async () => {
         // The claim update: SCHEDULED → COMMENTING, conditional on still SCHEDULED.
         if (q._op === "update" && q._payload.comment_status === "COMMENTING") {
@@ -58,11 +64,18 @@ function makeSupabase({ fetchRows = [], claimable = () => true } = {}) {
         }
         return { data: null, error: null };
       };
-      // Finalize updates (POSTED / FAILED / released SCHEDULED) resolve as thenables.
+      // Reclaim update + due-row SELECT + finalize updates resolve as thenables.
       q.then = (res, rej) => {
-        if (q._op === "update") updates.push({ id: q._eqs.id, payload: q._payload });
-        // The due-row SELECT also resolves here (no maybeSingle on it).
-        const value = q._op === "select" ? { data: fetchRows, error: null } : { error: null };
+        let value;
+        if (isReclaim()) {
+          updates.push({ id: null, payload: q._payload, reclaim: true });
+          value = { data: reclaimRows, error: null };
+        } else if (q._op === "update") {
+          updates.push({ id: q._eqs.id, payload: q._payload });
+          value = { error: null };
+        } else {
+          value = { data: fetchRows, error: null };
+        }
         return Promise.resolve(value).then(res, rej);
       };
       return q;
@@ -219,11 +232,107 @@ test("publishDueComments: Graph failure at cap → FAILED (terminal)", async () 
     supabase: sb.client,
     env: ENABLED,
     getCreds: () => CREDS,
+    // attempts ≥ 1 → dedup check runs first; no existing comment → falls through.
+    listComments: async () => [],
     postComment: async () => { throw new Error("Instagram Graph 400: boom"); },
   });
   assert.deepEqual(res, { posted: 0, failed: 1, skipped: 0 });
   const fin = sb.updates.find((u) => u.payload.error_message);
   assert.equal(fin.payload.comment_status, "FAILED");
+});
+
+// ── worker: retry idempotency (Fix 1 — dedup via listComments) ──────────────────
+
+test("publishDueComments: retry where matching comment already exists → marked POSTED, postComment NOT called", async () => {
+  // Prior attempt actually posted (comment_attempts=1) but lost the response.
+  const row = dueRow({ comment_attempts: 1 });
+  const sb = makeSupabase({ fetchRows: [row] });
+  const message = buildCommentMessage(row);
+  let listedMedia, postCalled = false;
+  const res = await publishDueComments({
+    supabase: sb.client,
+    env: ENABLED,
+    getCreds: () => CREDS,
+    listComments: async ({ mediaId }) => { listedMedia = mediaId; return [{ id: "EXISTING_99", text: message }]; },
+    postComment: async () => { postCalled = true; return { commentId: "SHOULD_NOT_HAPPEN" }; },
+  });
+  assert.deepEqual(res, { posted: 1, failed: 0, skipped: 0 });
+  assert.equal(postCalled, false); // never double-posts
+  assert.equal(listedMedia, "IGMEDIA_1");
+  const done = sb.updates.find((u) => u.payload.comment_status === "POSTED");
+  assert.ok(done);
+  assert.equal(done.payload.comment_platform_id, "EXISTING_99"); // adopts the existing comment's id
+});
+
+test("publishDueComments: retry with NO matching comment → posts normally", async () => {
+  const row = dueRow({ comment_attempts: 1 });
+  const sb = makeSupabase({ fetchRows: [row] });
+  let postCalled = false;
+  const res = await publishDueComments({
+    supabase: sb.client,
+    env: ENABLED,
+    getCreds: () => CREDS,
+    // Existing comments exist but none match the message we're about to post.
+    listComments: async () => [{ id: "OTHER_1", text: "an unrelated comment" }],
+    postComment: async () => { postCalled = true; return { commentId: "COMMENT_77" }; },
+  });
+  assert.deepEqual(res, { posted: 1, failed: 0, skipped: 0 });
+  assert.equal(postCalled, true);
+  const done = sb.updates.find((u) => u.payload.comment_status === "POSTED");
+  assert.equal(done.payload.comment_platform_id, "COMMENT_77");
+});
+
+test("publishDueComments: first attempt (comment_attempts=0) skips the dedup listComments call", async () => {
+  const sb = makeSupabase({ fetchRows: [dueRow({ comment_attempts: 0 })] });
+  let listCalled = false;
+  const res = await publishDueComments({
+    supabase: sb.client,
+    env: ENABLED,
+    getCreds: () => CREDS,
+    listComments: async () => { listCalled = true; return []; },
+    postComment: async () => ({ commentId: "COMMENT_5" }),
+  });
+  assert.deepEqual(res, { posted: 1, failed: 0, skipped: 0 });
+  assert.equal(listCalled, false); // no extra Graph call on the common first-attempt path
+});
+
+// ── worker: reclaim stuck COMMENTING rows (Fix 2) ───────────────────────────────
+
+test("publishDueComments: stale COMMENTING row is reclaimed to SCHEDULED, then processed", async () => {
+  // The reclaim UPDATE returns one row id; that same row then comes back as a due
+  // SCHEDULED row (comment_attempts=1 since it was claimed before) and posts.
+  const due = dueRow({ comment_attempts: 1 });
+  const sb = makeSupabase({ fetchRows: [due], reclaimRows: [{ id: "eng-1" }] });
+  let postCalled = false;
+  const res = await publishDueComments({
+    supabase: sb.client,
+    env: ENABLED,
+    getCreds: () => CREDS,
+    listComments: async () => [], // no existing comment → posts
+    postComment: async () => { postCalled = true; return { commentId: "COMMENT_R" }; },
+    now: new Date("2026-06-21T00:00:00Z"),
+  });
+  assert.deepEqual(res, { posted: 1, failed: 0, skipped: 0 });
+  assert.equal(postCalled, true);
+  // A reclaim UPDATE (COMMENTING → SCHEDULED) was issued.
+  const reclaim = sb.updates.find((u) => u.reclaim);
+  assert.ok(reclaim);
+  assert.equal(reclaim.payload.comment_status, "SCHEDULED");
+});
+
+test("publishDueComments: fresh COMMENTING row is left alone (reclaim returns none)", async () => {
+  // No stuck rows to reclaim, and no due SCHEDULED rows → nothing posted/claimed.
+  const sb = makeSupabase({ fetchRows: [], reclaimRows: [] });
+  const res = await publishDueComments({
+    supabase: sb.client,
+    env: ENABLED,
+    getCreds: () => CREDS,
+    listComments: async () => { throw new Error("should not be called"); },
+    postComment: async () => { throw new Error("should not be called"); },
+  });
+  assert.deepEqual(res, { posted: 0, failed: 0, skipped: 0 });
+  // The reclaim UPDATE still ran, but matched nothing → no finalize/claim updates.
+  assert.ok(!sb.updates.some((u) => u.payload && u.payload.comment_status === "COMMENTING"));
 });
 
 // ── worker: empty ──────────────────────────────────────────────────────────────

@@ -182,3 +182,20 @@ export async function postComment({ creds, mediaId, message, fetchImpl = fetch, 
   logger(JSON.stringify({ event: "ig_comment_posted", media_id: mediaId, comment_id: raw.id }));
   return { commentId: raw.id, rawResponse: raw };
 }
+
+// List the comments already on an IG media. Used by the comment-publisher's
+// idempotency check on retries: if a prior attempt actually posted the comment
+// but lost the response, this surfaces it so we mark POSTED instead of double-
+// posting. Returns [{ id, text }] (empty array when the media has no comments).
+//   creds   : { igUserId, accessToken, graphVersion } (credsFromEnv)
+//   mediaId : the published IG media id (social_post_engagement.ig_media_id)
+// Throws "Instagram Graph <status>: …" on a Graph error.
+export async function listComments({ creds, mediaId, fetchImpl = fetch, logger = noopLogger } = {}) {
+  if (!creds) throw new Error("Instagram listComments: missing Graph creds");
+  if (!mediaId) throw new Error("Instagram listComments: missing mediaId");
+  const url = `${graphUrl(creds, `${mediaId}/comments`)}?fields=id,text&access_token=${encodeURIComponent(creds.accessToken)}`;
+  const raw = await graphGet(url, fetchImpl);
+  const data = Array.isArray(raw.data) ? raw.data : [];
+  logger(JSON.stringify({ event: "ig_comments_listed", media_id: mediaId, count: data.length }));
+  return data.map((c) => ({ id: c.id, text: c.text }));
+}

@@ -85,6 +85,23 @@ CREATE TABLE IF NOT EXISTS social_post_engagement (
 CREATE INDEX IF NOT EXISTS social_post_engagement_due_idx
   ON social_post_engagement (comment_status, comment_due_at);
 
+-- options must be a JSON array of exactly 4 elements (one per MCQ choice). The
+-- table already exists in prod, so add the CHECK only if it's absent (guarded so
+-- re-running the migration is safe). ADD CONSTRAINT has no IF NOT EXISTS, hence
+-- the catalogue probe.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'social_post_engagement_options_len'
+      AND conrelid = 'social_post_engagement'::regclass
+  ) THEN
+    ALTER TABLE social_post_engagement
+      ADD CONSTRAINT social_post_engagement_options_len
+      CHECK (jsonb_typeof(options) = 'array' AND jsonb_array_length(options) = 4);
+  END IF;
+END $$;
+
 -- ─────────────────────────────────────────────
 -- Verification (run manually, commented out)
 -- ─────────────────────────────────────────────

@@ -23,6 +23,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { PNG } from "pngjs";
 import jpeg from "jpeg-js";
 import { accentFor } from "./_categories.js";
+import { validateMCQ } from "./mcq.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
@@ -60,15 +61,8 @@ function carouselSlidesFor(whyItMatters, question) {
 
 // A usable engagement MCQ: a question string + exactly 4 option strings + a valid
 // correctIndex. Anything short of that → no engagement slide (silent fallback).
-function isEngagementQuestion(q) {
-  return !!(
-    q &&
-    typeof q.question === "string" && q.question.trim() &&
-    Array.isArray(q.options) && q.options.length === 4 &&
-    q.options.every((o) => typeof o === "string" && o.trim()) &&
-    Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3
-  );
-}
+// Shared with the platform MCQ generators via validateMCQ (same semantics).
+const isEngagementQuestion = validateMCQ;
 const JPEG_QUALITY = 85;
 
 // ── Instagram-grid safe zone ─────────────────────────────────────────────────

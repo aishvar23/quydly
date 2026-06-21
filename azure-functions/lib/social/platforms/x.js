@@ -10,6 +10,7 @@ import {
 } from "./_shared.js";
 import { cashtagsFor } from "./_cashtags.js";
 import { buildAuthHeader } from "../x-oauth1.js";
+import { validateMCQ, parseJSONFromLLM } from "../mcq.js";
 
 export const PLATFORM = "x";
 
@@ -283,18 +284,10 @@ export async function generateQuizQuestion({ anthropic, story, audienceGeo, logg
       messages: [{ role: "user", content: buildQuestionPrompt(story, audienceGeo) }],
     });
 
-    let raw = String(msg?.content?.[0]?.text || "").trim();
-    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-    const q = JSON.parse(raw);
+    const q = parseJSONFromLLM(msg?.content?.[0]?.text);
 
     const tldr = q.tldr || q.insight_tldr;
-    const valid =
-      q &&
-      typeof q.question === "string" && q.question.trim() &&
-      Array.isArray(q.options) && q.options.length === 4 &&
-      q.options.every((o) => typeof o === "string" && o.trim()) &&
-      Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3 &&
-      typeof tldr === "string" && tldr.trim();
+    const valid = validateMCQ(q) && typeof tldr === "string" && tldr.trim();
 
     if (!valid) {
       logger?.warn?.(JSON.stringify({ event: "x_question_invalid", story_id: story?.id }));
