@@ -15,6 +15,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
+import FLAGS from "../lib/flags.js";
 import { AUDIENCES, computeAudienceProjection, countryCodeForPlaceName } from "../lib/geo.js";
 import { resolvePrimaryPlaces } from "../lib/places.js";
 import { auditStory, persistAudit } from "../lib/storyAudit.js";
@@ -42,6 +43,16 @@ const RIVER_WINDOW_MS   = 24 * 60 * 60 * 1000;
 // for any cluster a dead invocation left behind (those rows are minutes-to-
 // hours stale).
 const PROCESSING_LEASE_MS = 15 * 60 * 1000;
+
+// Per-category synthesis gate resolution. Mirrors article-clusterer's
+// minSharedEntitiesFor(): look up the category-specific value, fall back to
+// `default`. Thresholds themselves live in lib/flags.js (project rule: pipeline
+// scoring knobs in azure-functions/lib/flags.js only). A null/unknown category
+// resolves to `default`, so non-AI verticals are untouched.
+const SYNTH = FLAGS.synthesis;
+function synthThreshold(group, categoryId) {
+  return group[categoryId] ?? group.default;
+}
 
 let _anthropic = null;
 function getAnthropic() {
@@ -1030,17 +1041,42 @@ export async function run(context, message) {
   // ── 4b. Phase B: quality gates + River lookup + DB write ─────────────────
   const now = new Date().toISOString();
 
+  // Per-category synthesis gate thresholds (lib/flags.js). For `ai` these are
+  // relaxed (confidence 6, key_points 2, story review 28) so PR #132's thinner
+  // AI clusters can write a story; every other category resolves to `default`
+  // and is byte-for-byte identical to the prior hard-coded constants (6 / 3 / 35).
+  const synthCategory   = cluster.category_id;
+  const minConfidence   = synthThreshold(SYNTH.confidence,  synthCategory);
+  const minKeyPoints    = synthThreshold(SYNTH.keyPoints,   synthCategory);
+  const minStoryReview  = synthThreshold(SYNTH.storyReview, synthCategory);
+  const minDomainsGate  = synthThreshold(SYNTH.minUniqueDomains, synthCategory);
+
+  // Corroboration floor: the relaxed AI bar is only sound on multi-source
+  // clusters. Clustering already enforces >=2 domains, but assert it here so a
+  // future clustering change can't leak a single-domain singleton through the
+  // lowered gates. A cluster below its category's domain floor is rejected
+  // regardless of confidence/score (default floor is 1 → no-op for non-AI).
+  const uniqueDomainCount = Array.isArray(cluster.unique_domains)
+    ? new Set(cluster.unique_domains).size
+    : 0;
+  if (uniqueDomainCount < minDomainsGate) {
+    context.log(JSON.stringify({ event: "LOW_DOMAIN_DIVERSITY", cluster_id, category_id: synthCategory, unique_domains: uniqueDomainCount, min: minDomainsGate }));
+    await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
+    // Return normally → runtime auto-completes the SB message
+    return;
+  }
+
   // Quality gate: confidence
-  if (narrative.confidence_score < 6) {
-    context.log(JSON.stringify({ event: "LOW_CONFIDENCE", cluster_id, confidence: narrative.confidence_score }));
+  if (narrative.confidence_score < minConfidence) {
+    context.log(JSON.stringify({ event: "LOW_CONFIDENCE", cluster_id, category_id: synthCategory, confidence: narrative.confidence_score, min: minConfidence }));
     await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
     // Return normally → runtime auto-completes the SB message
     return;
   }
 
   // Quality gate: key_points completeness
-  if (narrative.key_points.length < 3) {
-    context.log(JSON.stringify({ event: "LOW_KEY_POINTS", cluster_id, count: narrative.key_points.length }));
+  if (narrative.key_points.length < minKeyPoints) {
+    context.log(JSON.stringify({ event: "LOW_KEY_POINTS", cluster_id, category_id: synthCategory, count: narrative.key_points.length, min: minKeyPoints }));
     await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
     // Return normally → runtime auto-completes the SB message
     return;
@@ -1049,10 +1085,13 @@ export async function run(context, message) {
   // Scoring
   const synthesisResult = { ...narrative, facts };
   const { story_score, consistency_score, source_count } = computeStoryScore(cluster, synthesisResult);
+  // disposition still uses the global thresholds for downstream labelling
+  // (publish/review/reject); the *reject* gate below uses the per-category
+  // review floor so `ai` passes at a lower bar without re-labelling other paths.
   const disposition = storyDisposition(story_score);
 
-  if (disposition === "reject") {
-    context.log(JSON.stringify({ event: "LOW_STORY_SCORE", cluster_id, story_score, disposition }));
+  if (story_score < minStoryReview) {
+    context.log(JSON.stringify({ event: "LOW_STORY_SCORE", cluster_id, category_id: synthCategory, story_score, min: minStoryReview, disposition }));
     await supabase.from("clusters").update({ status: "PROCESSED", updated_at: now }).eq("id", cluster_id);
     // Return normally → runtime auto-completes the SB message
     return;
