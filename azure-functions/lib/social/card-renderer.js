@@ -38,18 +38,36 @@ const SHAPES = {
 };
 
 // Carousel slide order. "Key points" and "Why it matters" are SEPARATE slides:
-// cover / what happened / key points / why it matters / CTA. The "why" slide is
-// included only when the generator supplied historical points for it
-// (whyItMatters) — otherwise the set is 4 slides and no empty "Why it matters"
-// slide is shown. CAROUSEL_SLIDES is the full ordered set.
-const CAROUSEL_SLIDES = ["cover", "what", "keypoints", "why", "cta"];
-const CAROUSEL_SLIDES_NO_WHY = ["cover", "what", "keypoints", "cta"];
+// cover / what happened / key points / why it matters / engagement / CTA. The
+// "why" slide is included only when the generator supplied historical points for
+// it (whyItMatters) — otherwise it is dropped. The "engagement" slide (an MCQ
+// drawn from the PREVIOUS post's story, inviting a reply) is included only when a
+// question is supplied; it always sits SECOND-TO-LAST, immediately before the
+// CTA, in both order arrays. CAROUSEL_SLIDES is the full ordered set.
+const CAROUSEL_SLIDES = ["cover", "what", "keypoints", "why", "engagement", "cta"];
+const CAROUSEL_SLIDES_NO_WHY = ["cover", "what", "keypoints", "engagement", "cta"];
 
 // Pick the slide list for a story based on whether historical "why it matters"
-// points were supplied. Keeps the "why" slide out of the set when it would be empty.
-function carouselSlidesFor(whyItMatters) {
+// points were supplied and whether an engagement MCQ was supplied. Each optional
+// slide is dropped when it would be empty, so a story with neither renders the
+// original 4-slide set (cover/what/keypoints/cta).
+function carouselSlidesFor(whyItMatters, question) {
   const why = Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : [];
-  return why.length ? CAROUSEL_SLIDES : CAROUSEL_SLIDES_NO_WHY;
+  let list = why.length ? CAROUSEL_SLIDES : CAROUSEL_SLIDES_NO_WHY;
+  if (!isEngagementQuestion(question)) list = list.filter((k) => k !== "engagement");
+  return list;
+}
+
+// A usable engagement MCQ: a question string + exactly 4 option strings + a valid
+// correctIndex. Anything short of that → no engagement slide (silent fallback).
+function isEngagementQuestion(q) {
+  return !!(
+    q &&
+    typeof q.question === "string" && q.question.trim() &&
+    Array.isArray(q.options) && q.options.length === 4 &&
+    q.options.every((o) => typeof o === "string" && o.trim()) &&
+    Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3
+  );
 }
 const JPEG_QUALITY = 85;
 
@@ -363,6 +381,23 @@ function bulletRow(text, accent, size) {
   ]);
 }
 
+// One MCQ option row on the engagement slide: a lettered chip (A/B/C/D) + the
+// option text. The slide NEVER reveals which is correct — the answer is posted
+// later as a comment — so all four chips render identically.
+function optionRow(letter, text, accent, size) {
+  return el("div", { style: { display: "flex", alignItems: "center", marginBottom: 20 } }, [
+    el("div", {
+      style: {
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: Math.round(size * 0.06), height: Math.round(size * 0.06), borderRadius: 12,
+        backgroundColor: accent, color: BG, fontWeight: 700, fontSize: Math.round(size * 0.03),
+        marginRight: 22, flexShrink: 0,
+      },
+    }, letter),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.036), color: FG, lineHeight: 1.25 } }, text),
+  ]);
+}
+
 // The cover headline block, sized to its length.
 function coverHeadline(headline, size) {
   return el("div", {
@@ -410,8 +445,9 @@ function coverPortraitBlock({ portrait, accent, size }) {
 }
 
 // Build the inner body for one slide kind. `size` is the square edge length.
-// `portrait` (cover only) is { dataUri, name, credit } or null.
-function slideBody({ kind, story, accent, size, portrait, whyItMatters }) {
+// `portrait` (cover only) is { dataUri, name, credit } or null. `question`
+// (engagement only) is the MCQ { question, options, correctIndex } or null.
+function slideBody({ kind, story, accent, size, portrait, whyItMatters, question }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
 
   if (kind === "cover") {
@@ -461,6 +497,25 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters }) {
     ]);
   }
 
+  if (kind === "engagement") {
+    // The MCQ drawn from the PREVIOUS post's story. Poses the question + 4
+    // lettered options and invites a reply with the reader's pick. The correct
+    // answer is NEVER shown here — it is revealed in a comment 12h later.
+    const q = oneLine(question?.question) || "Today's quiz question";
+    const options = (Array.isArray(question?.options) ? question.options : []).slice(0, 4);
+    const letters = ["A", "B", "C", "D"];
+    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+      eyebrow("Yesterday's question", accent, size),
+      el("div", {
+        style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.046), lineHeight: 1.25, marginBottom: Math.round(size * 0.05) },
+      }, q),
+      ...options.map((opt, i) => optionRow(letters[i], oneLine(opt), accent, size)),
+      el("div", {
+        style: { display: "flex", fontSize: Math.round(size * 0.032), color: MUTED, lineHeight: 1.3, marginTop: Math.round(size * 0.03) },
+      }, "Reply with your pick \u{1F447}"),
+    ]);
+  }
+
   // cta
   return el("div", { style: { display: "flex", flexDirection: "column" } }, [
     el("div", {
@@ -472,10 +527,12 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters }) {
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, portrait, whyItMatters }) {
+function slideTree({ kind, story, accent, category, index, total, size, portrait, whyItMatters, question }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
-  const hint = kind === "cta" ? "quydly.com" : (kind === "cover" ? "Swipe to read →" : "");
+  const hint = kind === "cta" ? "quydly.com"
+    : (kind === "cover" ? "Swipe to read →"
+    : (kind === "engagement" ? "Tap to comment →" : ""));
   return el("div", {
     style: {
       width: size, height: size, display: "flex", flexDirection: "column",
@@ -485,7 +542,7 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait, whyItMatters }),
+      slideBody({ kind, story, accent, size, portrait, whyItMatters, question }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -498,14 +555,16 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
 // gains a circular portrait inset (licensed photo + credit). Resolving the
 // portrait is best-effort and happens once up front; any failure leaves the
 // cover text-only. `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, fetchImpl } = {}) {
   const { width: size } = SHAPES.square;
   const accent = accentFor(story?.category_id);
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
   // Default slide set depends on whether historical "why it matters" points were
-  // supplied (the "why" slide is dropped when empty). An explicit `slides` wins.
-  const slideList = slides || carouselSlidesFor(whyItMatters);
+  // supplied (the "why" slide is dropped when empty) and whether an engagement
+  // MCQ was supplied (the "engagement" slide is dropped when absent). An explicit
+  // `slides` wins.
+  const slideList = slides || carouselSlidesFor(whyItMatters, question);
   const total = slideList.length;
 
   let portrait = null;
@@ -521,7 +580,7 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null, whyItMatters }),
+      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null }),
       { width: size, height: size, fonts }
     );
     const { buffer, contentType } = rasterize(svg, { width: size, format });

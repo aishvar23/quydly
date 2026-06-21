@@ -153,3 +153,32 @@ export async function publish(post, { creds, slides = null, fetchImpl = fetch, s
   logger(JSON.stringify({ event: "ig_published", mode: isCarousel ? "carousel" : "single", slides: urls.length, media_id: mediaId }));
   return { platformPostId: mediaId, rawResponse: { creation_id: creationId, media_id: mediaId } };
 }
+
+// Post a comment on an IG media (the engagement "answer" comment, ~12h after
+// publish). Requires the Page/System-User token to carry `instagram_manage_comments`.
+//   creds   : { igUserId, accessToken, graphVersion } (credsFromEnv)
+//   mediaId : the published IG media id (social_post_engagement.ig_media_id)
+//   message : the comment text
+//   dryRun  : assemble + log the request but call NO Meta endpoint (synthetic id)
+// Returns { commentId, rawResponse }. Throws "Instagram Graph <status>: …" on a
+// Graph error (e.g. 400 / code=190 expired-or-unscoped token, 100 invalid media).
+export async function postComment({ creds, mediaId, message, fetchImpl = fetch, logger = noopLogger, dryRun = false } = {}) {
+  if (!creds) throw new Error("Instagram postComment: missing Graph creds");
+  if (!mediaId) throw new Error("Instagram postComment: missing mediaId");
+  const text = String(message || "");
+  if (!text.trim()) throw new Error("Instagram postComment: empty message");
+
+  if (dryRun) {
+    logger(JSON.stringify({ event: "ig_comment_dry_run", media_id: mediaId, message_len: text.length, graph_version: creds.graphVersion }));
+    return { commentId: `DRYRUN-COMMENT-${mediaId}`, rawResponse: { dryRun: true, mediaId, message: text } };
+  }
+
+  const raw = await graphPost(
+    graphUrl(creds, `${mediaId}/comments`),
+    { access_token: creds.accessToken, message: text },
+    fetchImpl
+  );
+  if (!raw.id) throw new Error(`Instagram Graph: no comment id in response: ${JSON.stringify(raw).slice(0, 200)}`);
+  logger(JSON.stringify({ event: "ig_comment_posted", media_id: mediaId, comment_id: raw.id }));
+  return { commentId: raw.id, rawResponse: raw };
+}

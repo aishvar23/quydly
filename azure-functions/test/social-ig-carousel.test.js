@@ -70,10 +70,13 @@ test("renderCarouselSlides: no whyItMatters → 4 slides (cover/what/keypoints/c
   });
 });
 
-test("renderCarouselSlides: whyItMatters → 5 slides with a separate Why it matters slide", async () => {
+test("renderCarouselSlides: whyItMatters (no question) → 5 slides with a separate Why it matters slide, no engagement slide", async () => {
+  // The full CAROUSEL_SLIDES set now also includes "engagement", but with no
+  // question supplied that slide is dropped — so the rendered set is the 5-slide
+  // why-included carousel WITHOUT engagement (CAROUSEL_SLIDES minus engagement).
   const slides = await renderCarouselSlides(STORY, { whyItMatters: ["Third cut since 2023", "Echoes the 2019 stimulus"] });
   assert.equal(slides.length, 5);
-  assert.deepEqual(slides.map((s) => s.slideType), CAROUSEL_SLIDES);
+  assert.deepEqual(slides.map((s) => s.slideType), CAROUSEL_SLIDES.filter((k) => k !== "engagement"));
   assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "why", "cta"]);
   slides.forEach((s, i) => {
     assert.equal(s.index, i);
@@ -233,6 +236,91 @@ test("renderCarouselSlides: non-image content-type is rejected (text-only cover)
   });
   const slides = await renderCarouselSlides(STORY_PERSON, { withPortrait: true, fetchImpl });
   assert.equal(slides.length, 4);
+});
+
+// ── renderer: engagement slide (MCQ from the previous post's story) ────────────
+
+const ENGAGEMENT_Q = {
+  question: "What did the central bank do?",
+  options: ["Cut rates", "Raised rates", "Held rates", "Paused QT"],
+  correctIndex: 0,
+};
+
+test("renderCarouselSlides: question → engagement slide inserted SECOND-TO-LAST (before cta)", async () => {
+  const slides = await renderCarouselSlides(STORY, { question: ENGAGEMENT_Q });
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "engagement", "cta"]);
+  slides.forEach((s, i) => {
+    assert.equal(s.index, i);
+    assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEG
+  });
+});
+
+test("renderCarouselSlides: question + whyItMatters → engagement still sits before cta", async () => {
+  const slides = await renderCarouselSlides(STORY, { whyItMatters: ["Third cut since 2023"], question: ENGAGEMENT_Q });
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "why", "engagement", "cta"]);
+});
+
+test("renderCarouselSlides: no question → no engagement slide (silent fallback)", async () => {
+  const slides = await renderCarouselSlides(STORY);
+  assert.ok(!slides.some((s) => s.slideType === "engagement"));
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what", "keypoints", "cta"]);
+});
+
+test("renderCarouselSlides: malformed question (3 options) → engagement slide dropped", async () => {
+  const slides = await renderCarouselSlides(STORY, { question: { question: "q", options: ["a", "b", "c"], correctIndex: 0 } });
+  assert.ok(!slides.some((s) => s.slideType === "engagement"));
+  assert.equal(slides.length, 4);
+});
+
+// ── platform: generateEngagementQuestion (sources from previous POSTED IG post) ─
+
+test("instagram.generateEngagementQuestion: pulls prev POSTED IG story, returns MCQ + sourcePostId", async () => {
+  const PREV_STORY = { id: 7, headline: "Bank cut rates", summary: "The bank cut rates.", key_points: ["Rates fell"], category_id: "finance" };
+  const queries = [];
+  const supabase = {
+    from(table) {
+      const q = { table, _eq: {}, _calls: [] };
+      q.select = () => q;
+      q.eq = (k, v) => { q._eq[k] = v; return q; };
+      q.not = () => q; q.neq = (k, v) => { q._eq[`neq_${k}`] = v; return q; };
+      q.order = () => q; q.limit = () => q;
+      q.maybeSingle = async () => {
+        queries.push({ table, eq: q._eq });
+        if (table === "social_posts") return { data: { id: "prev-post-1", story_id: 7, published_at: "2026-06-20T00:00:00Z" }, error: null };
+        if (table === "stories") return { data: PREV_STORY, error: null };
+        return { data: null, error: null };
+      };
+      return q;
+    },
+  };
+  const anthropic = {
+    messages: { create: async () => ({ content: [{ text: JSON.stringify({ question: "What happened to rates?", options: ["Cut", "Raised", "Held", "Paused"], correctIndex: 0 }) }] }) },
+  };
+  const out = await instagram.generateEngagementQuestion({ anthropic, supabase, story: STORY, audienceGeo: "global" });
+  assert.equal(out.question, "What happened to rates?");
+  assert.equal(out.options.length, 4);
+  assert.equal(out.correctIndex, 0);
+  assert.equal(out.answer, "Cut");
+  assert.equal(out.sourcePostId, "prev-post-1");
+  // Sourced from the prev IG POSTED post, excluding the current story id.
+  const postQ = queries.find((x) => x.table === "social_posts");
+  assert.equal(postQ.eq.platform, "instagram");
+  assert.equal(postQ.eq.status, "POSTED");
+  assert.equal(postQ.eq.neq_story_id, STORY.id);
+});
+
+test("instagram.generateEngagementQuestion: no previous post → null (no engagement slide)", async () => {
+  const supabase = {
+    from() {
+      const q = {};
+      q.select = () => q; q.eq = () => q; q.not = () => q; q.neq = () => q; q.order = () => q; q.limit = () => q;
+      q.maybeSingle = async () => ({ data: null, error: null });
+      return q;
+    },
+  };
+  const anthropic = { messages: { create: async () => { throw new Error("should not be called"); } } };
+  const out = await instagram.generateEngagementQuestion({ anthropic, supabase, story: STORY, audienceGeo: "global" });
+  assert.equal(out, null);
 });
 
 // ── slide storage ──────────────────────────────────────────────────────────────
@@ -409,6 +497,7 @@ test("generatePlatformPost: IG without carousel flag falls back to a single JPEG
 function makeGenSupabase({ candidateStatus = "PENDING" } = {}) {
   const assets = [];
   const posts = [];
+  const engagement = [];
   let seq = 0;
   const client = {
     from(table) {
@@ -433,15 +522,17 @@ function makeGenSupabase({ candidateStatus = "PENDING" } = {}) {
         }
         return { data: null, error: null };
       };
-      // social_media_assets upsert resolves as a thenable (no maybeSingle).
+      // social_media_assets + social_post_engagement upserts resolve as thenables
+      // (no maybeSingle).
       q.then = (res, rej) => {
         if (q.table === "social_media_assets" && q._payload) assets.push(...q._payload);
+        if (q.table === "social_post_engagement" && q._payload) engagement.push(q._payload);
         return Promise.resolve({ error: null }).then(res, rej);
       };
       return q;
     },
   };
-  return { client, assets, posts };
+  return { client, assets, posts, engagement };
 }
 
 test("generateSocialPosts: AUTO_APPROVED + carousel media → IG post APPROVED (auto-publishes)", async () => {
@@ -487,6 +578,68 @@ test("generateSocialPosts: carousel slides persist as ordered instagram_carousel
   assert.ok(sb.assets.every((a) => a.asset_type === "instagram_carousel_slide"));
   assert.ok(sb.assets.every((a) => a.format === "jpeg"));
   assert.ok(sb.assets.every((a) => a.social_post_id));
+});
+
+test("generateSocialPosts: IG engagement question → persists a PENDING social_post_engagement row", async () => {
+  // Purpose-built supabase: routes social_posts reads to (a) the dedupe/existing
+  // check (none) and (b) the engagement "previous POSTED IG post" lookup; routes
+  // stories to the current story for the candidate and the prev story for the MCQ.
+  const PREV_STORY = { id: 7, headline: "Bank cut rates", summary: "Rates fell.", key_points: ["Rates fell"], category_id: "finance" };
+  const engagement = [];
+  const inserts = [];
+  let seq = 0;
+  const supabase = {
+    from(table) {
+      const q = { table, _eq: {}, _payload: null, _op: null, _hasNot: false };
+      q.select = () => q;
+      q.eq = (k, v) => { q._eq[k] = v; return q; };
+      q.neq = (k, v) => { q._eq[`neq_${k}`] = v; return q; };
+      q.not = () => { q._hasNot = true; return q; };       // marks the engagement prev-post query
+      q.order = () => q; q.limit = () => q;
+      q.upsert = (p) => { q._payload = p; q._op = "upsert"; return q; };
+      q.update = (p) => { q._payload = p; q._op = "update"; return q; };
+      q.maybeSingle = async () => {
+        if (table === "social_publication_candidates") {
+          return { data: { id: "cand-1", story_id: STORY.id, audience_geo: "global", status: "PENDING" }, error: null };
+        }
+        if (table === "stories") {
+          return { data: q._eq.id === 7 ? PREV_STORY : STORY, error: null };
+        }
+        if (table === "social_posts") {
+          if (q._op === "update") return { data: null, error: null };
+          if (q._hasNot) return { data: { id: "prev-post-1", story_id: 7, published_at: "2026-06-20T00:00:00Z" }, error: null }; // engagement prev-post lookup
+          if (q._op === "upsert") { const row = { id: `post-${++seq}`, ...q._payload }; inserts.push(row); return { data: { id: row.id }, error: null }; }
+          return { data: null, error: null }; // existing-check → none
+        }
+        return { data: null, error: null };
+      };
+      q.then = (res, rej) => {
+        if (table === "social_post_engagement" && q._payload) engagement.push(q._payload);
+        return Promise.resolve({ error: null }).then(res, rej);
+      };
+      return q;
+    },
+  };
+  const cardService = {
+    getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.jpg`,
+    getCarouselSlideUrls: async () => [
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "engagement", width: 1080, height: 1080 },
+    ],
+  };
+  const anthropic = {
+    messages: { create: async () => ({ content: [{ text: JSON.stringify({ question: "What did the bank do?", options: ["Cut", "Raised", "Held", "Paused"], correctIndex: 0 }) }] }) },
+  };
+  await generateSocialPosts({ supabase, anthropic, cardService, igCarousel: true, igEngagement: true, candidateId: "cand-1" });
+
+  assert.equal(engagement.length, 1);
+  const row = engagement[0];
+  assert.equal(row.comment_status, "PENDING");
+  assert.equal(row.question, "What did the bank do?");
+  assert.equal(row.correct_index, 0);
+  assert.equal(row.answer, "Cut");
+  assert.equal(row.source_post_id, "prev-post-1");
+  assert.ok(row.social_post_id);
 });
 
 // ── publisher: IG ordered-slide fetch + creds-skip ──────────────────────────────

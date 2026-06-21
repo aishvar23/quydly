@@ -184,3 +184,126 @@ ${timelineLines(story)}
 
 Write the 3 historical "Why it matters" points now.`;
 }
+
+// ── Engagement slide MCQ (carousel second-to-last slide) ─────────────────────
+//
+// The engagement slide poses a multiple-choice question drawn from the PREVIOUS
+// post's story — the most recent POSTED IG post for the SAME audience_geo — and
+// invites followers to reply with their pick. Twelve hours later the answer is
+// (eventually) posted as a comment on the IG media. This mirrors X's
+// generateQuizQuestion, but the question is about YESTERDAY'S news (so a reader
+// who already saw the prior post can answer it), not today's.
+//
+// Best-effort: no prior post, no story, an LLM/parse failure, or an invalid MCQ
+// → returns null. The renderer then drops the engagement slide entirely (silent
+// fallback to the current carousel), so this can never make a post worse.
+
+const ENGAGEMENT_QUESTION_MODEL = "claude-sonnet-4-6";
+
+// Columns the engagement MCQ prompt needs from the previous post's story.
+const ENGAGEMENT_STORY_COLUMNS = "id, headline, summary, key_points, category_id";
+
+function buildEngagementPrompt(story, audienceGeo) {
+  const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
+  return `You write a single multiple-choice quiz question for Quydly (a daily news quiz) from a news story we posted to Instagram YESTERDAY. The question goes on a carousel slide and followers answer it in a comment; the answer is revealed in a comment the next day.
+
+Audience region: ${audienceGeo}
+
+YESTERDAY'S STORY (use ONLY these facts — invent nothing):
+Headline: ${story.headline}
+Summary: ${story.summary}
+Key points:
+${facts}
+
+The slide shows ONLY your question and the four options — NOT the headline — so the reader answers from memory of yesterday's post. Ask about the gist a reader would remember: who did what, to whom, why it matters, or the direction of a change. Never test recall of an exact number, date, percentage, or amount.
+
+Write the question:
+- Punchy, jargon-free, answerable from the gist of the story.
+- Exactly 4 options: 1 correct, 3 plausible but clearly distinct distractors of the same kind (don't mix a number among names).
+- correctIndex is the 0-based index of the correct option.
+- The question must contain NO URL/link, NO hashtag, and not the word "breaking".
+
+Respond ONLY with valid JSON, no markdown:
+{ "question": "...", "options": ["A","B","C","D"], "correctIndex": 0 }`;
+}
+
+// Find the most recent POSTED IG post for this audience_geo and return its story
+// row, or null. ORDER BY published_at DESC LIMIT 1. `excludeStoryId` skips the
+// current candidate's own story (it can't be "yesterday's" question for itself).
+async function previousPostedStory({ supabase, audienceGeo, excludeStoryId, logger }) {
+  try {
+    let postQuery = supabase
+      .from("social_posts")
+      .select("id, story_id, published_at")
+      .eq("platform", "instagram")
+      .eq("audience_geo", audienceGeo)
+      .eq("status", "POSTED")
+      .not("published_at", "is", null);
+    if (excludeStoryId != null) postQuery = postQuery.neq("story_id", excludeStoryId);
+    const { data: prevPost, error: postErr } = await postQuery
+      .order("published_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (postErr) throw postErr;
+    if (!prevPost) return null;
+
+    const { data: story, error: storyErr } = await supabase
+      .from("stories")
+      .select(ENGAGEMENT_STORY_COLUMNS)
+      .eq("id", prevPost.story_id)
+      .maybeSingle();
+    if (storyErr) throw storyErr;
+    if (!story) return null;
+    return { story, sourcePostId: prevPost.id };
+  } catch (err) {
+    logger?.warn?.(JSON.stringify({ event: "ig_engagement_prev_post_failed", audience_geo: audienceGeo, error: err.message }));
+    return null;
+  }
+}
+
+// Generate ONE engagement MCQ for the carousel's engagement slide, sourced from
+// the PREVIOUS post's story. Returns
+//   { question, options, correctIndex, answer, sourcePostId }
+// or null on any failure (no prior post, no story, LLM/parse error, invalid MCQ)
+// — the carousel then renders without an engagement slide. Never throws.
+export async function generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger } = {}) {
+  if (!anthropic || !supabase) return null;
+  const prev = await previousPostedStory({ supabase, audienceGeo, excludeStoryId: story?.id, logger });
+  if (!prev) return null;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: ENGAGEMENT_QUESTION_MODEL,
+      max_tokens: 512,
+      messages: [{ role: "user", content: buildEngagementPrompt(prev.story, audienceGeo) }],
+    });
+
+    let raw = String(msg?.content?.[0]?.text || "").trim();
+    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const q = JSON.parse(raw);
+
+    const valid =
+      q &&
+      typeof q.question === "string" && q.question.trim() &&
+      Array.isArray(q.options) && q.options.length === 4 &&
+      q.options.every((o) => typeof o === "string" && o.trim()) &&
+      Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3;
+
+    if (!valid) {
+      logger?.warn?.(JSON.stringify({ event: "ig_engagement_invalid", source_story_id: prev.story.id }));
+      return null;
+    }
+
+    const options = q.options.map((o) => o.trim());
+    return {
+      question: q.question.trim(),
+      options,
+      correctIndex: q.correctIndex,
+      answer: options[q.correctIndex],
+      sourcePostId: prev.sourcePostId,
+    };
+  } catch (err) {
+    logger?.warn?.(JSON.stringify({ event: "ig_engagement_generation_failed", source_story_id: prev.story.id, error: err.message }));
+    return null;
+  }
+}

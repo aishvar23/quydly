@@ -218,14 +218,15 @@ export async function publishApprovedPosts({
       // Instagram may publish a multi-slide carousel — pass its ordered slides.
       const slides = post.platform === "instagram" ? await carouselSlidesFor(post.id) : null;
       const result = await publishers[post.platform](post, { creds, slides, logger });
+      const publishedAt = new Date().toISOString();
       await supabase
         .from("social_posts")
         .update({
           status: "POSTED",
           platform_post_id: result.platformPostId,
           platform_response: result.rawResponse,
-          published_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          published_at: publishedAt,
+          updated_at: publishedAt,
           error_message: null,
         })
         .eq("id", post.id);
@@ -237,6 +238,37 @@ export async function publishApprovedPosts({
         platform: post.platform,
         platform_post_id: result.platformPostId,
       }));
+
+      // IG engagement: schedule the answer comment. If this post carried an
+      // engagement slide, its social_post_engagement row (written PENDING at
+      // generation time) is now armed: record the IG media id, set the comment
+      // due 12h after publish, and flip PENDING → SCHEDULED. This is a DB write
+      // ONLY — no Graph call, so it needs no token scope. Rows accumulate as
+      // SCHEDULED, ready for the (deferred) comment-publisher worker to claim
+      // once the Meta token gains instagram_manage_comments. NON-FATAL: a failure
+      // here only costs the eventual answer comment, never the published post.
+      if (post.platform === "instagram") {
+        try {
+          const commentDueAt = new Date(new Date(publishedAt).getTime() + 12 * 60 * 60 * 1000).toISOString();
+          const { error: engErr } = await supabase
+            .from("social_post_engagement")
+            .update({
+              ig_media_id: result.platformPostId,
+              comment_due_at: commentDueAt,
+              comment_status: "SCHEDULED",
+              updated_at: publishedAt,
+            })
+            .eq("social_post_id", post.id)
+            .eq("comment_status", "PENDING");
+          if (engErr) throw engErr;
+        } catch (engErr) {
+          logger.warn(JSON.stringify({
+            event: "social_engagement_schedule_failed",
+            post_id: post.id,
+            error: engErr.message,
+          }));
+        }
+      }
 
       // Fire-and-forget: reply to the just-published X tweet with the answer-page
       // link. Non-fatal — the parent is already POSTED, so a reply failure only

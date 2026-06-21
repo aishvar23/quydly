@@ -24,6 +24,16 @@ function whyFingerprint(whyItMatters) {
   return createHash("sha1").update(JSON.stringify(whyItMatters)).digest("hex").slice(0, 12);
 }
 
+// The engagement MCQ is also part of the rendered slide set, so the per-story
+// memo must key on it too — otherwise an earlier render (e.g. no question) would
+// be returned for a later call that did produce one, dropping the engagement
+// slide. "noq" for the empty case; fingerprints the question+options otherwise.
+function questionFingerprint(question) {
+  if (!question || !question.question) return "noq";
+  const seed = JSON.stringify([question.question, question.options, question.correctIndex]);
+  return createHash("sha1").update(seed).digest("hex").slice(0, 12);
+}
+
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
   // When on, carousel cover slides for person-led stories carry a licensed
@@ -68,8 +78,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
 
   // Render + upload every carousel slide. Returns an ordered array of
   // { url, index, slideType, width, height, contentType } — order IS publish order.
-  async function buildCarousel({ story, whyItMatters = [] }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${s.index}-${s.slideType}.jpg`;
@@ -99,11 +109,11 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [] }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null }) {
       if (!story || story.id == null) return null;
-      const key = `${story.id}:carousel:${whyFingerprint(whyItMatters)}`;
+      const key = `${story.id}:carousel:${whyFingerprint(whyItMatters)}:${questionFingerprint(question)}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

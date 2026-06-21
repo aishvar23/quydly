@@ -85,7 +85,7 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
 // leaves the draft text-only, exactly as before).
-export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, cardService = null, igCarousel = false, logger = noopLogger }) {
+export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, logger = noopLogger }) {
   const draft = platform.format(story, audienceGeo); // deterministic base
 
   if (cardService && platform.CONSTRAINTS) {
@@ -100,7 +100,17 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       if (anthropic && platform.buildWhyItMattersPrompt) {
         whyItMatters = await generateWhyItMatters(anthropic, platform, story, logger);
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters });
+      // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
+      // PREVIOUS post's story, inserted second-to-last (before the CTA). Best-
+      // effort: null → the renderer drops the engagement slide (silent fallback
+      // to the current carousel). Surfaced on the draft so the generator can
+      // persist the engagement row at insert time.
+      let engagementQuestion = null;
+      if (igEngagement && supabase && anthropic && platform.generateEngagementQuestion) {
+        engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
+        if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
+      }
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;
@@ -166,7 +176,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igHashtags = false, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, candidateId, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -220,7 +230,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     if (existing) { skipped++; continue; }
 
     const post = await generatePlatformPost({
-      platform, story, audienceGeo: candidate.audience_geo, anthropic, cardService, igCarousel, logger,
+      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, logger,
     });
 
     // Append source attribution + the curated hashtag block to IG captions
@@ -320,6 +330,43 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
           .from("social_media_assets")
           .upsert(assetRows, { onConflict: "social_post_id,position", ignoreDuplicates: true });
         if (assetErr) throw new Error(`[social-post-generator] insert carousel assets: ${assetErr.message}`);
+      }
+
+      // Persist the engagement MCQ (the question rendered on this post's
+      // engagement slide, drawn from the PREVIOUS post's story) as a
+      // social_post_engagement row with comment_status='PENDING'. The publisher
+      // fills ig_media_id + comment_due_at and flips it to 'SCHEDULED' once the
+      // post is POSTED; the (deferred) comment worker posts the answer comment.
+      // NON-FATAL + additive: a failure here must not abort the run (the post is
+      // already committed and publishes fine — it just won't get an answer
+      // comment) nor block the candidate's advance. Only IG sets engagementQuestion.
+      if (post.engagementQuestion) {
+        try {
+          const eq = post.engagementQuestion;
+          const { error: engErr } = await supabase
+            .from("social_post_engagement")
+            .upsert(
+              {
+                social_post_id: inserted.id,
+                source_post_id: eq.sourcePostId || null,
+                audience_geo: candidate.audience_geo,
+                question: eq.question,
+                options: eq.options,
+                correct_index: eq.correctIndex,
+                answer: eq.answer,
+                comment_status: "PENDING",
+              },
+              { onConflict: "social_post_id", ignoreDuplicates: true }
+            );
+          if (engErr) throw engErr;
+        } catch (engErr) {
+          logger.warn(JSON.stringify({
+            event: "social_engagement_persist_failed",
+            post_id: inserted.id,
+            story_id: story.id,
+            error: engErr.message,
+          }));
+        }
       }
 
       logger(JSON.stringify({
