@@ -24,6 +24,16 @@ function whyFingerprint(whyItMatters) {
   return createHash("sha1").update(JSON.stringify(whyItMatters)).digest("hex").slice(0, 12);
 }
 
+// The engagement MCQ is also part of the rendered slide set, so the per-story
+// memo must key on it too — otherwise an earlier render (e.g. no question) would
+// be returned for a later call that did produce one, dropping the engagement
+// slide. "noq" for the empty case; fingerprints the question+options otherwise.
+function questionFingerprint(question) {
+  if (!question || !question.question) return "noq";
+  const seed = JSON.stringify([question.question, question.options, question.correctIndex]);
+  return createHash("sha1").update(seed).digest("hex").slice(0, 12);
+}
+
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
   // When on, carousel cover slides for person-led stories carry a licensed
@@ -68,11 +78,19 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
 
   // Render + upload every carousel slide. Returns an ordered array of
   // { url, index, slideType, width, height, contentType } — order IS publish order.
-  async function buildCarousel({ story, whyItMatters = [] }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters }); // JPEG (Instagram requires it)
+  //
+  // `variant` (whyFingerprint-questionFingerprint) is part of the object PATH, not
+  // just the in-memory cache key: the slide bytes differ by whyItMatters AND the
+  // engagement question (which is sourced per audience_geo / previous post), so two
+  // renders of the same story with different content must NOT share a storage URL.
+  // Keying only on story.id let a later render upsert-overwrite an earlier post's
+  // slide, so that post could publish the wrong engagement question while its
+  // social_post_engagement row still held the original Q&A (wrong 12h answer).
+  async function buildCarousel({ story, whyItMatters = [], question = null, variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
-      const path = `cards/${story.id}/carousel/${s.index}-${s.slideType}.jpg`;
+      const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
       const url = await upload({ path, buffer: s.buffer, contentType: s.contentType });
       out.push({ url, index: s.index, slideType: s.slideType, width: s.width, height: s.height, contentType: s.contentType });
     }
@@ -99,11 +117,14 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [] }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null }) {
       if (!story || story.id == null) return null;
-      const key = `${story.id}:carousel:${whyFingerprint(whyItMatters)}`;
+      // One fingerprint drives BOTH the memo key and the storage object path, so a
+      // distinct (whyItMatters, question) variant never overwrites another's bytes.
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}`;
+      const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

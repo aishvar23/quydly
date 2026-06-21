@@ -43,6 +43,14 @@ export default async function socialPostGenerator(context, message) {
   // Opt-in and requires cards to be on (the slides ARE cards).
   const igCarousel = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_CAROUSEL_ENABLED || ""));
 
+  // Instagram engagement slide: an MCQ drawn from the PREVIOUS post's story,
+  // inserted second-to-last in the carousel (before the CTA), inviting a reply.
+  // Opt-in; only effective when the carousel is also on (the slide IS a carousel
+  // slide) and an Anthropic client is available (the MCQ is LLM-generated).
+  // Persists a social_post_engagement row so the answer comment can be posted
+  // 12h later once the Meta token gains instagram_manage_comments.
+  const igEngagement = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_ENGAGEMENT_ENABLED || ""));
+
   // Instagram hashtags (reach §8.3): append a curated hashtag block to IG
   // captions. ON by default after live verification — set
   // SOCIAL_IG_HASHTAGS_ENABLED=false (or 0) to disable.
@@ -53,6 +61,7 @@ export default async function socialPostGenerator(context, message) {
     anthropic,
     cardService,
     igCarousel,
+    igEngagement,
     igHashtags,
     candidateId,
     logger: context.log,
