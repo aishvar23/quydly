@@ -12,6 +12,48 @@ const FLAGS = {
     },
   },
 
+  // Synthesis quality gates (story-synthesizer Phase B). Per-category, mirroring
+  // the { default, ai } shape used by clustering.minSharedEntities. The default
+  // bar is unchanged from the original hard-coded constants; only `ai` is relaxed.
+  //
+  // Why `ai` is relaxed: PR #132 deliberately lets thinner AI clusters
+  // (2 articles / 2 domains, entity-poor) through clustering so genuinely-related
+  // AI coverage merges instead of dying as singletons. Those clusters give the
+  // LLM less corroborated material, so they disproportionately trip the three
+  // terminal synthesis gates (confidence / key_points / story_score=reject) and
+  // get marked PROCESSED with no story row. Of 9 eligible AI clusters post-#132,
+  // only 2 produced a story (yield 48%→22%). A lower-but-sane AI bar lets the
+  // substantive ones (e.g. 4–6 article / 4–5 domain clusters scoring 33–41) write
+  // a story. The 2-domain corroboration floor (synthesis.minUniqueDomains.ai = 2)
+  // is asserted explicitly in the synthesizer so the relaxed bar can never admit a
+  // single-domain singleton even if a future clustering change leaks one through.
+  synthesis: {
+    // narrative.confidence_score floor. Kept at 6 for `ai` (NOT lowered) on
+    // purpose: backend fetchStoryPool (the global quiz path) requires
+    // confidence_score >= 6, so a confidence-5 story would write but be invisible
+    // to the daily quiz — a dead row. Holding ai at 6 keeps every created AI story
+    // quiz-reachable, which is the actual goal ("more AI stories in the quiz").
+    confidence:        { default: 6, ai: 6 },
+    // key_points completeness. AI write-ups frequently land 2 solid points off a
+    // 2-source cluster; demanding 3 discards otherwise-usable stories. The audit
+    // (storyAudit.js) still independently rejects hollow/circular key_points for
+    // quiz candidacy, so this is a creation gate, not a quality bypass.
+    keyPoints:         { default: 3, ai: 2 },
+    // story_score below this → disposition "reject" → no story row. Default mirrors
+    // scoring.story.review (35). Lowered to 28 for `ai`: a 2-article/2-domain AI
+    // cluster at confidence 6 / consistency ~0.36 lands ~32–36, straddling 35, so
+    // the default review bar drops coherent AI stories on noise. 28 still rejects
+    // genuinely incoherent low-consistency output (the 2 AI stories that DID write
+    // post-#132 scored 48 and 51, far above either bar).
+    storyReview:       { default: 35, ai: 28 },
+    // Corroboration floor for the relaxed `ai` path: never synthesize a cluster
+    // with fewer than this many distinct domains. Clustering's own quality gate
+    // already enforces >=2 domains; asserting it here makes the synthesis side
+    // defensive so a future clustering relaxation can't leak a single-source
+    // singleton through the lowered AI gates.
+    minUniqueDomains:  { default: 1, ai: 2 },
+  },
+
   // Clustering thresholds (article-clusterer). Scoring/eligibility knobs only.
   clustering: {
     // Entities an article must share with an existing cluster to MERGE into it.
