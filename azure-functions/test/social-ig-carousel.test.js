@@ -344,8 +344,9 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   const slides = await svc.getCarouselSlideUrls({ story: STORY });
   assert.equal(slides.length, 4);
   assert.deepEqual(slides.map((s) => s.index), [0, 1, 2, 3]);
-  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/0-cover.jpg");
-  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/3-cta.jpg");
+  // No why / no question → "nowhy-noq" variant segment in the object path.
+  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq/0-cover.jpg");
+  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq/3-cta.jpg");
   assert.equal(slides[0].contentType, "image/jpeg");
   assert.equal(mock.uploads.length, 4);
   assert.ok(mock.uploads.every((u) => /\.jpg$/.test(u.path)));
@@ -354,6 +355,23 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   const again = await svc.getCarouselSlideUrls({ story: STORY });
   assert.equal(again, slides);
   assert.equal(mock.uploads.length, 4);
+});
+
+test("cardService.getCarouselSlideUrls: distinct engagement questions get distinct storage paths (no overwrite)", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+
+  const q1 = { question: "Q one?", options: ["a", "b", "c", "d"], correctIndex: 0 };
+  const q2 = { question: "Q two?", options: ["w", "x", "y", "z"], correctIndex: 2 };
+
+  const s1 = await svc.getCarouselSlideUrls({ story: STORY, question: q1 });
+  const s2 = await svc.getCarouselSlideUrls({ story: STORY, question: q2 });
+
+  // Different questions ⇒ different variant segment ⇒ no shared URL to upsert over.
+  const eng1 = s1.find((s) => s.slideType === "engagement").url;
+  const eng2 = s2.find((s) => s.slideType === "engagement").url;
+  assert.notEqual(eng1, eng2);
+  assert.ok(mock.uploads.every((u) => u.path.includes("/carousel/")));
 });
 
 test("cardService.getCarouselSlideUrls: returns null (non-fatal) when an upload fails", async () => {
