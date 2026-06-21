@@ -1085,10 +1085,10 @@ export async function run(context, message) {
   // Scoring
   const synthesisResult = { ...narrative, facts };
   const { story_score, consistency_score, source_count } = computeStoryScore(cluster, synthesisResult);
-  // disposition still uses the global thresholds for downstream labelling
-  // (publish/review/reject); the *reject* gate below uses the per-category
-  // review floor so `ai` passes at a lower bar without re-labelling other paths.
-  const disposition = storyDisposition(story_score);
+  // disposition uses the global thresholds for publish/review labelling; the
+  // *reject* gate below uses the per-category review floor so `ai` passes at a
+  // lower bar without re-labelling other paths.
+  let disposition = storyDisposition(story_score);
 
   if (story_score < minStoryReview) {
     context.log(JSON.stringify({ event: "LOW_STORY_SCORE", cluster_id, category_id: synthCategory, story_score, min: minStoryReview, disposition }));
@@ -1096,6 +1096,13 @@ export async function run(context, message) {
     // Return normally → runtime auto-completes the SB message
     return;
   }
+
+  // Story admitted (story_score >= minStoryReview). On the relaxed `ai` path a
+  // story can clear its category floor (28) while still below the global review
+  // tier (35), where storyDisposition() returns "reject". Relabel that to
+  // "review" so the story_written / story_merged telemetry below never logs a
+  // "reject" disposition for a story that was actually created.
+  if (disposition === "reject") disposition = "review";
 
   // Geo metadata for story
   const globalSignificanceScore = computeGlobalSignificance(cluster, narrative, articles);
