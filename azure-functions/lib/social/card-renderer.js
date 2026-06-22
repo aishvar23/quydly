@@ -499,7 +499,7 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     const options = (Array.isArray(question?.options) ? question.options : []).slice(0, 4);
     const letters = ["A", "B", "C", "D"];
     return el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow("Yesterday's question", accent, size),
+      eyebrow("Knowledge test", accent, size),
       el("div", {
         style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.046), lineHeight: 1.25, marginBottom: Math.round(size * 0.05) },
       }, q),
