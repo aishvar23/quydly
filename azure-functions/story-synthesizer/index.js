@@ -15,6 +15,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
+import { isSpecificNamedEntity, normalizeEntity } from "../lib/nlp.js";
 import FLAGS from "../lib/flags.js";
 import { AUDIENCES, computeAudienceProjection, countryCodeForPlaceName } from "../lib/geo.js";
 import { resolvePrimaryPlaces } from "../lib/places.js";
@@ -682,28 +683,59 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   }
   if (byCluster) return byCluster;
 
-  // Strategy 2: entity overlap in same category
-  const { data: candidates, error: e2 } = await supabase
-    .from("stories")
-    .select("id, primary_entities, key_points, source_documents, updated_at, story_decay_at, published_at")
-    .eq("category_id", cluster.category_id)
-    .gte("updated_at", riverCutoff)
-    .order("updated_at", { ascending: false })
-    .limit(20);
+  // Strategy 2: entity overlap. Cross-category matches are now allowed — a single
+  // breaking event gets RSS-tagged into multiple verticals (the "Starmer resigns"
+  // event landed in both `world` and `finance`), and the old `.eq(category_id)`
+  // filter left those as separate stories → duplicate social posts. To keep
+  // cross-category merges safe we gate them harder than same-category ones:
+  //   - same category:  >= 2 shared entities (original bar, now containment-tolerant)
+  //   - cross category:  >= 2 shared SPECIFIC named entities, so two unrelated
+  //                      stories sharing one proper name + a broad region (e.g.
+  //                      two Trump stories sharing "trump" + "us") never collapse.
+  // The same- and cross-category pools are fetched as SEPARATE bounded queries so
+  // a busy day's cross-category volume can never push the genuine same-category
+  // duplicate out of the candidate window (the old single .limit() did exactly
+  // that). Same-category matches are also PREFERRED over cross-category ones when
+  // both qualify — a same-vertical story is the safer merge target.
+  const SELECT_COLS =
+    "id, category_id, primary_entities, key_points, source_documents, updated_at, story_decay_at, published_at";
 
-  if (e2) {
-    throw new Error(`river lookup (entity overlap): ${e2.message}`);
-  }
-  if (!candidates || candidates.length === 0) return null;
+  const [{ data: sameCatRows, error: e2 }, { data: crossCatRows, error: e3 }] = await Promise.all([
+    supabase.from("stories").select(SELECT_COLS)
+      .eq("category_id", cluster.category_id)
+      .gte("updated_at", riverCutoff)
+      .order("updated_at", { ascending: false })
+      .limit(30),
+    supabase.from("stories").select(SELECT_COLS)
+      .neq("category_id", cluster.category_id)
+      .gte("updated_at", riverCutoff)
+      .order("updated_at", { ascending: false })
+      .limit(30),
+  ]);
 
-  let best = null, bestOverlap = 0;
-  for (const story of candidates) {
-    const overlap = countEntityOverlap(cluster.primary_entities, story.primary_entities);
-    if (overlap >= 2 && overlap > bestOverlap) {
+  if (e2) throw new Error(`river lookup (same-category overlap): ${e2.message}`);
+  if (e3) throw new Error(`river lookup (cross-category overlap): ${e3.message}`);
+
+  let best = null, bestSame = false, bestOverlap = 0;
+  const consider = (story, sameCategory) => {
+    const { overlap, specificShared } = tolerantEntityOverlap(
+      cluster.primary_entities, story.primary_entities,
+    );
+    if (!(sameCategory ? overlap >= 2 : specificShared >= 2)) return;
+    // Prefer a same-category match over any cross-category one; within the same
+    // tier, prefer the higher raw overlap.
+    const better = best === null
+      || (sameCategory && !bestSame)
+      || (sameCategory === bestSame && overlap > bestOverlap);
+    if (better) {
       best        = story;
+      bestSame    = sameCategory;
       bestOverlap = overlap;
     }
-  }
+  };
+
+  for (const story of sameCatRows ?? [])  consider(story, true);
+  for (const story of crossCatRows ?? []) consider(story, false);
 
   return best;
 }
@@ -835,6 +867,79 @@ export function countEntityOverlap(clusterEntities, storyEntities) {
     if (storySet.has(e)) overlap++;
   }
   return overlap;
+}
+
+// Token-level containment match for two normalised entities. Beyond exact
+// equality it accepts:
+//   - a MULTI-WORD entity that appears as a contiguous token run in the other
+//     ("keir starmer" within "prime minister keir starmer"), and
+//   - a SINGLE word that is the FIRST or LAST token of a multi-word entity
+//     ("labour" ↔ "labour party", "trump" ↔ "donald trump").
+// A single word in the MIDDLE of a phrase does NOT align — that is what made
+// "china" wrongly match "south china sea" (and "art" must never match "smart").
+function entitiesAlign(a, b) {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const st = short.split(" ");
+  const lt = long.split(" ");
+  if (lt.length < 2) return false; // nothing longer to contain the short token(s)
+  if (st.length >= 2) {
+    // contiguous token-subsequence test
+    for (let i = 0; i + st.length <= lt.length; i++) {
+      let hit = true;
+      for (let j = 0; j < st.length; j++) {
+        if (lt[i + j] !== st[j]) { hit = false; break; }
+      }
+      if (hit) return true;
+    }
+    return false;
+  }
+  // single-word short: only the head or tail token of the longer phrase
+  return lt[0] === short || lt[lt.length - 1] === short;
+}
+
+// Tolerant entity overlap for the River merge. Unlike countEntityOverlap (exact,
+// case-insensitive), this also matches an entity that is a whole-word subset of
+// the other side's entity — needed because the cluster extractor and the LLM
+// proper-caser disagree on title prefixes ("keir starmer" vs "prime minister
+// keir starmer") and qualifiers ("labour" vs "labour party"), which is exactly
+// how the 3-way "Starmer resigns" duplication slipped past the same-category
+// exact-overlap gate. Entities are normalised through the shared normalizeEntity
+// (cleanEntity + EQUIVALENCE_MAP) so "uk" and "united kingdom" unify here too.
+// Matching is ONE-TO-ONE: each story entity is consumed by at most one cluster
+// entity, so a cluster holding both "keir starmer" and "starmer" cannot count
+// the same shared person twice. Returns the raw overlap and how many of the
+// shared entities are STORY-SPECIFIC named entities (not a broad region or
+// generic boilerplate). Cross-category merges gate on specificShared so two
+// unrelated stories that merely share one proper name plus a broad region (two
+// different Trump stories sharing "trump" + "us") do NOT collapse together.
+export function tolerantEntityOverlap(clusterEntities, storyEntities) {
+  const prep = (arr) => [...new Set(
+    (Array.isArray(arr) ? arr : [])
+      .map((e) => normalizeEntity(String(e ?? "")))
+      .filter(Boolean),
+  )];
+  const cl = prep(clusterEntities);
+  const st = prep(storyEntities);
+  const used = new Array(st.length).fill(false);
+
+  let overlap = 0, specificShared = 0;
+  for (const c of cl) {
+    // Pick the longest UNUSED aligning story entity so "labour" pairs with the
+    // richer "labour party" form when judging specificity, and so each story
+    // entity is matched at most once.
+    let matchIdx = -1;
+    for (let i = 0; i < st.length; i++) {
+      if (used[i] || !entitiesAlign(c, st[i])) continue;
+      if (matchIdx === -1 || st[i].length > st[matchIdx].length) matchIdx = i;
+    }
+    if (matchIdx === -1) continue;
+    used[matchIdx] = true;
+    overlap++;
+    const richer = st[matchIdx].length >= c.length ? st[matchIdx] : c;
+    if (isSpecificNamedEntity(richer)) specificShared++;
+  }
+  return { overlap, specificShared };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
