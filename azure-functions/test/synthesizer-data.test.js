@@ -19,6 +19,7 @@ import {
   mergeEntityAndClusterGeos,
   cleanPrimaryEntities,
   countEntityOverlap,
+  tolerantEntityOverlap,
   pickRelatedStories,
   relatedStoryCutoff,
 } from "../story-synthesizer/index.js";
@@ -980,6 +981,53 @@ test("P3-5 countEntityOverlap: empty / null inputs are safe", () => {
   assert.equal(countEntityOverlap([], []), 0);
   assert.equal(countEntityOverlap(null, ["x"]), 0);
   assert.equal(countEntityOverlap(["x"], null), 0);
+});
+
+// ── tolerantEntityOverlap (Starmer 3-way dup fix) ────────────────────────────
+
+test("tolerantEntityOverlap: title-prefix variant of a name still aligns", () => {
+  // Cluster extractor kept the office title; the LLM story did not. Exact
+  // overlap would miss "keir starmer"; tolerant whole-word containment catches it.
+  const { overlap, specificShared } = tolerantEntityOverlap(
+    ["prime minister keir starmer", "labour"],
+    ["Keir Starmer", "Labour Party"],
+  );
+  assert.equal(overlap, 2);
+  assert.equal(specificShared, 2, "both shared tokens are story-specific named entities");
+});
+
+test("tolerantEntityOverlap: qualifier variant aligns (labour ↔ labour party)", () => {
+  const { overlap } = tolerantEntityOverlap(["labour"], ["Labour Party"]);
+  assert.equal(overlap, 1);
+});
+
+test("tolerantEntityOverlap: cross-category guard — one proper name + broad region is NOT enough", () => {
+  // Two unrelated Trump stories sharing only "trump" + "us". overlap is 2 but
+  // "us" is a BROAD region, so specificShared is 1 → cross-category merge rejected.
+  const { overlap, specificShared } = tolerantEntityOverlap(
+    ["donald trump", "us", "tariffs"],
+    ["Donald Trump", "US", "NATO summit"],
+  );
+  assert.equal(overlap, 2, "trump + us both align");
+  assert.equal(specificShared, 1, "only trump is a specific named entity; us is broad");
+});
+
+test("tolerantEntityOverlap: whole-word safety — substrings do not align", () => {
+  const { overlap } = tolerantEntityOverlap(["art"], ["smart"]);
+  assert.equal(overlap, 0, "'art' must not be treated as contained in 'smart'");
+});
+
+test("tolerantEntityOverlap: duplicate/case variants collapse, empties drop", () => {
+  const { overlap } = tolerantEntityOverlap(
+    ["Keir Starmer", "keir starmer", "", null],
+    ["Keir Starmer", "  "],
+  );
+  assert.equal(overlap, 1);
+});
+
+test("tolerantEntityOverlap: null inputs are safe", () => {
+  assert.deepEqual(tolerantEntityOverlap(null, ["x"]), { overlap: 0, specificShared: 0 });
+  assert.deepEqual(tolerantEntityOverlap([], []), { overlap: 0, specificShared: 0 });
 });
 
 // ── P2-2: pickRelatedStories ─────────────────────────────────────────────────

@@ -15,6 +15,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "../lib/clients.js";
 import { computeStoryScore, storyDisposition } from "../lib/scoring.js";
+import { isSpecificNamedEntity } from "../lib/nlp.js";
 import FLAGS from "../lib/flags.js";
 import { AUDIENCES, computeAudienceProjection, countryCodeForPlaceName } from "../lib/geo.js";
 import { resolvePrimaryPlaces } from "../lib/places.js";
@@ -682,14 +683,21 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
   }
   if (byCluster) return byCluster;
 
-  // Strategy 2: entity overlap in same category
+  // Strategy 2: entity overlap. Cross-category matches are now allowed — a single
+  // breaking event gets RSS-tagged into multiple verticals (the "Starmer resigns"
+  // event landed in both `world` and `finance`), and the old `.eq(category_id)`
+  // filter left those as separate stories → duplicate social posts. To keep
+  // cross-category merges safe we gate them harder than same-category ones:
+  //   - same category:  >= 2 shared entities (original bar, now containment-tolerant)
+  //   - cross category:  >= 2 shared SPECIFIC named entities, so two unrelated
+  //                      stories sharing one proper name + a broad region (e.g.
+  //                      two Trump stories sharing "trump" + "us") never collapse.
   const { data: candidates, error: e2 } = await supabase
     .from("stories")
-    .select("id, primary_entities, key_points, source_documents, updated_at, story_decay_at, published_at")
-    .eq("category_id", cluster.category_id)
+    .select("id, category_id, primary_entities, key_points, source_documents, updated_at, story_decay_at, published_at")
     .gte("updated_at", riverCutoff)
     .order("updated_at", { ascending: false })
-    .limit(20);
+    .limit(50);
 
   if (e2) {
     throw new Error(`river lookup (entity overlap): ${e2.message}`);
@@ -698,8 +706,12 @@ async function findExistingStory(supabase, cluster, riverCutoff) {
 
   let best = null, bestOverlap = 0;
   for (const story of candidates) {
-    const overlap = countEntityOverlap(cluster.primary_entities, story.primary_entities);
-    if (overlap >= 2 && overlap > bestOverlap) {
+    const { overlap, specificShared } = tolerantEntityOverlap(
+      cluster.primary_entities, story.primary_entities,
+    );
+    const sameCategory = story.category_id === cluster.category_id;
+    const qualifies = sameCategory ? overlap >= 2 : specificShared >= 2;
+    if (qualifies && overlap > bestOverlap) {
       best        = story;
       bestOverlap = overlap;
     }
@@ -835,6 +847,51 @@ export function countEntityOverlap(clusterEntities, storyEntities) {
     if (storySet.has(e)) overlap++;
   }
   return overlap;
+}
+
+// Whole-word containment match: "keir starmer" aligns with "prime minister keir
+// starmer", "labour" with "labour party". Padding both sides with spaces keeps it
+// token-boundary-safe so unrelated substrings ("art" vs "smart") do NOT align.
+function entitiesAlign(a, b) {
+  if (a === b) return true;
+  return ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `);
+}
+
+// Tolerant entity overlap for the River merge. Unlike countEntityOverlap (exact,
+// case-insensitive), this also matches an entity that is a whole-word subset of
+// the other side's entity — needed because the cluster extractor and the LLM
+// proper-caser disagree on title prefixes ("keir starmer" vs "prime minister
+// keir starmer") and qualifiers ("labour" vs "labour party"), which is exactly
+// how the 3-way "Starmer resigns" duplication slipped past the same-category
+// exact-overlap gate. Returns both the raw overlap and how many of the shared
+// entities are STORY-SPECIFIC named entities (not a broad region or a generic
+// high-signal single like "us"/"ai"). Cross-category merges gate on
+// specificShared so two unrelated stories that merely share one proper name plus
+// a broad region (e.g. two different Trump stories sharing "trump" + "us") do
+// NOT collapse together.
+export function tolerantEntityOverlap(clusterEntities, storyEntities) {
+  const norm = (e) => String(e ?? "").toLowerCase().trim();
+  const cl = [...new Set(
+    (Array.isArray(clusterEntities) ? clusterEntities : []).map(norm).filter(Boolean),
+  )];
+  const st = [...new Set(
+    (Array.isArray(storyEntities) ? storyEntities : []).map(norm).filter(Boolean),
+  )];
+
+  let overlap = 0, specificShared = 0;
+  for (const c of cl) {
+    // Pick the longest aligning story entity so "labour" pairs with the richer
+    // "labour party" form when judging specificity.
+    let match = null;
+    for (const s of st) {
+      if (entitiesAlign(c, s) && (!match || s.length > match.length)) match = s;
+    }
+    if (!match) continue;
+    overlap++;
+    const richer = match.length >= c.length ? match : c;
+    if (isSpecificNamedEntity(richer)) specificShared++;
+  }
+  return { overlap, specificShared };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
