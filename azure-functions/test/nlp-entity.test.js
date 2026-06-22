@@ -21,6 +21,8 @@ test("normalizeEntity: strips a range of clearly-personal titles", () => {
   assert.equal(normalizeEntity("Chancellor Merz"), "merz");
   assert.equal(normalizeEntity("Vice President Vance"), "vance");
   assert.equal(normalizeEntity("Deputy Prime Minister Rayner"), "rayner");
+  // Starmer is actually "Sir Keir Starmer" — `sir` must strip.
+  assert.equal(normalizeEntity("Sir Keir Starmer"), "keir starmer");
 });
 
 test("normalizeEntity: bare title with no name is NOT stripped to empty", () => {
@@ -28,12 +30,17 @@ test("normalizeEntity: bare title with no name is NOT stripped to empty", () => 
   assert.equal(normalizeEntity("President"), "president");
 });
 
-test("normalizeEntity: org names that begin with a role word are preserved", () => {
-  // These role words are deliberately excluded from the prefix list precisely
-  // because stripping them would corrupt organisation entities.
+test("normalizeEntity: org / brand / competition / place names are preserved", () => {
+  // Role words that commonly begin a non-person entity are deliberately excluded
+  // from the prefix list — stripping them would corrupt the entity into a generic
+  // noun (the code-review collateral findings).
   assert.equal(normalizeEntity("General Motors"), "general motors");
   assert.equal(normalizeEntity("Justice Department"), "justice department");
   assert.equal(normalizeEntity("Captain America"), "captain america");
+  assert.equal(normalizeEntity("Premier League"), "premier league"); // not "league"
+  assert.equal(normalizeEntity("Doctor Who"), "doctor who");          // not "who"
+  assert.equal(normalizeEntity("Dr Pepper"), "dr pepper");            // not "pepper"
+  assert.equal(normalizeEntity("Sheikh Hasina"), "sheikh hasina");    // not "hasina"
 });
 
 // ── extractEntities: same person, two headline forms → same token ────────────
@@ -56,4 +63,14 @@ test("isSpecificNamedEntity: broad regions and generic singles are NOT specific"
   assert.equal(isSpecificNamedEntity("us"), false);
   assert.equal(isSpecificNamedEntity("ai"), false);
   assert.equal(isSpecificNamedEntity("middle east"), false);
+});
+
+test("isSpecificNamedEntity: generic multi-word boilerplate is NOT specific", () => {
+  // A space alone must not make a phrase "specific" — else two unrelated stories
+  // sharing only "general election" + one name would satisfy the cross-category
+  // merge gate.
+  assert.equal(isSpecificNamedEntity("general election"), false);
+  assert.equal(isSpecificNamedEntity("supreme court"), false);
+  assert.equal(isSpecificNamedEntity("trade war"), false);
+  assert.equal(isSpecificNamedEntity("prime minister"), false);
 });

@@ -32,6 +32,16 @@ const BROAD_ENTITIES = new Set([
   'gulf war', 'cold war', 'world war',
 ]);
 
+// Multi-word phrases that read as named entities (they contain a space) but are
+// category-wide boilerplate, not story-specific. Without this, isSpecificNamedEntity
+// would treat them as "specific" purely because they contain a space, letting two
+// unrelated stories that merely share "general election" + one name satisfy the
+// cross-category River-merge gate (and weakening the relaxed clustering anchor).
+const GENERIC_PHRASES = new Set([
+  'prime minister', 'vice president', 'general election', 'supreme court',
+  'trade war', 'trade deal', 'press conference', 'breaking news',
+]);
+
 const STOP_ENTITIES = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
   'breaking', 'news', 'update', 'report', 'latest', 'exclusive', 'live',
@@ -48,14 +58,21 @@ const MAX_ENTITIES = 10;
 // defeating the River entity-overlap merge (the 3-way "Starmer resigns" dup).
 // Stripping the title leaves the residual proper name, which matches everywhere.
 //
-// Curated to CLEARLY-PERSONAL titles only. Role words that also begin
-// organisation names are deliberately EXCLUDED — "General" (General Motors),
-// "Justice" (Justice Department), "Captain"/"King"/"Prince"/"Queen" — because
-// stripping them would corrupt org entities. Multi-word titles are listed first
-// so the alternation prefers the longest match. The strip only fires when a name
-// remains after it (guarded in cleanEntity) so a bare "Prime Minister" survives.
+// Curated to CLEARLY-PERSONAL governmental/honorific titles whose collateral is
+// rare. Role words that commonly BEGIN an organisation, brand, competition, or
+// place name are deliberately EXCLUDED because stripping them corrupts that
+// entity into a generic noun:
+//   - "General" → General Motors, "Justice" → Justice Department, "Captain"/
+//     "King"/"Prince"/"Queen" → never in the list.
+//   - "Premier" → "Premier League"/"Premier Inn" (would become "league"/"inn").
+//   - "Doctor"/"Dr" → "Doctor Who"/"Dr Pepper" (would become "who"/"pepper").
+//   - "Sheikh" → "Sheikh Zayed Road"/"Sheikh Jarrah" (Gulf/Jerusalem places).
+//   - "Pope"/"Sultan"/"Professor" → low value, high name/place collision.
+// Multi-word titles are listed first so the alternation prefers the longest
+// match. The strip only fires when a name remains after it (guarded in
+// cleanEntity) so a bare "Prime Minister" survives.
 const TITLE_PREFIX_RE =
-  /^(?:deputy prime minister|prime minister|vice president|chief minister|chief justice|foreign secretary|home secretary|defen[cs]e secretary|finance minister|president|chancellor|ambassador|reverend|professor|ayatollah|senator|governor|premier|doctor|sultan|sheikh|mayor|pope|prof|rev|dame|dr|sir|pm|vp)\s+/i;
+  /^(?:deputy prime minister|prime minister|vice president|chief minister|chief justice|foreign secretary|home secretary|defen[cs]e secretary|finance minister|president|chancellor|ambassador|ayatollah|reverend|senator|governor|mayor|dame|sir)\s+/i;
 
 function cleanEntity(entity) {
   let s = entity;
@@ -131,7 +148,8 @@ export function hasSpecificHighSignalEntity(entities) {
 // anchor must be a multi-word proper name (e.g. "Sam Altman") or a non-generic
 // single (e.g. "openai", "gpt", "nvidia"). Broad regions are excluded as before.
 export function isSpecificNamedEntity(e) {
-  return !BROAD_ENTITIES.has(e) && (e.includes(' ') || !HIGH_SIGNAL_SINGLES.has(e));
+  return !BROAD_ENTITIES.has(e) && !GENERIC_PHRASES.has(e)
+    && (e.includes(' ') || !HIGH_SIGNAL_SINGLES.has(e));
 }
 
 export function hasSpecificNamedEntity(entities) {

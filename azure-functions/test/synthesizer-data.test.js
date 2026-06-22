@@ -1030,6 +1030,43 @@ test("tolerantEntityOverlap: null inputs are safe", () => {
   assert.deepEqual(tolerantEntityOverlap([], []), { overlap: 0, specificShared: 0 });
 });
 
+// Review finding #2 — a single generic word in the MIDDLE of a phrase must not
+// align ("china" is not a head/tail token of "south china sea").
+test("tolerantEntityOverlap: mid-phrase single word does NOT align (china ⊄ south china sea)", () => {
+  const { overlap } = tolerantEntityOverlap(
+    ["us", "china"],
+    ["US", "South China Sea"],
+  );
+  assert.equal(overlap, 1, "only 'us' aligns; 'china' is a mid-phrase token of 'south china sea'");
+});
+
+// Single word that IS the head or tail token still aligns (labour↔labour party,
+// trump↔donald trump) — the intended tolerance.
+test("tolerantEntityOverlap: head/tail single word aligns (trump ↔ donald trump)", () => {
+  assert.equal(tolerantEntityOverlap(["trump"], ["Donald Trump"]).overlap, 1);
+});
+
+// Review finding #3 — one-to-one matching: a cluster holding both a name and its
+// substring cannot count the same shared person twice.
+test("tolerantEntityOverlap: name + its substring count the shared person ONCE", () => {
+  const { overlap, specificShared } = tolerantEntityOverlap(
+    ["keir starmer", "starmer"],
+    ["Keir Starmer"],
+  );
+  assert.equal(overlap, 1, "the single story entity is consumed once");
+  assert.equal(specificShared, 1, "must not double-count one shared person toward the cross-category gate");
+});
+
+// Review finding #6 — entities normalise through EQUIVALENCE_MAP, so "uk" and
+// "united kingdom" unify here too.
+test("tolerantEntityOverlap: equivalence map unifies uk ↔ united kingdom", () => {
+  const { overlap } = tolerantEntityOverlap(
+    ["uk", "keir starmer"],
+    ["United Kingdom", "Keir Starmer"],
+  );
+  assert.equal(overlap, 2);
+});
+
 // ── P2-2: pickRelatedStories ─────────────────────────────────────────────────
 
 test("P2-2 pickRelatedStories: ranks by overlap desc, returns ≤ 3", () => {
