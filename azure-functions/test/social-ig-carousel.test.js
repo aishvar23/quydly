@@ -286,8 +286,8 @@ test("instagram.generateEngagementQuestion: pulls prev POSTED IG story, returns 
       q.order = () => q; q.limit = () => q;
       q.maybeSingle = async () => {
         queries.push({ table, eq: q._eq });
-        if (table === "social_posts") return { data: { id: "prev-post-1", story_id: 7, published_at: "2026-06-20T00:00:00Z" }, error: null };
-        if (table === "stories") return { data: PREV_STORY, error: null };
+        // Embedded !inner join: the prev story rides on the social_posts row.
+        if (table === "social_posts") return { data: { id: "prev-post-1", published_at: "2026-06-20T00:00:00Z", stories: PREV_STORY }, error: null };
         return { data: null, error: null };
       };
       return q;
@@ -302,10 +302,11 @@ test("instagram.generateEngagementQuestion: pulls prev POSTED IG story, returns 
   assert.equal(out.correctIndex, 0);
   assert.equal(out.answer, "Cut");
   assert.equal(out.sourcePostId, "prev-post-1");
-  // Sourced from the prev IG POSTED post, excluding the current story id.
+  // Sourced from the prev IG POSTED post in the SAME category, excluding the current story id.
   const postQ = queries.find((x) => x.table === "social_posts");
   assert.equal(postQ.eq.platform, "instagram");
   assert.equal(postQ.eq.status, "POSTED");
+  assert.equal(postQ.eq["stories.category_id"], STORY.category_id);
   assert.equal(postQ.eq.neq_story_id, STORY.id);
 });
 
@@ -625,7 +626,7 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
         }
         if (table === "social_posts") {
           if (q._op === "update") return { data: null, error: null };
-          if (q._hasNot) return { data: { id: "prev-post-1", story_id: 7, published_at: "2026-06-20T00:00:00Z" }, error: null }; // engagement prev-post lookup
+          if (q._hasNot) return { data: { id: "prev-post-1", published_at: "2026-06-20T00:00:00Z", stories: PREV_STORY }, error: null }; // engagement prev-post lookup (embedded !inner story)
           if (q._op === "upsert") { const row = { id: `post-${++seq}`, ...q._payload }; inserts.push(row); return { data: { id: row.id }, error: null }; }
           return { data: null, error: null }; // existing-check → none
         }
