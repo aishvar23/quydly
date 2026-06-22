@@ -101,7 +101,8 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         whyItMatters = await generateWhyItMatters(anthropic, platform, story, logger);
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
-      // PREVIOUS post's story, inserted second-to-last (before the CTA). Best-
+      // PREVIOUS post's story in the SAME category, inserted second-to-last
+      // (before the CTA). Best-
       // effort: null → the renderer drops the engagement slide (silent fallback
       // to the current carousel). Surfaced on the draft so the generator can
       // persist the engagement row at insert time.

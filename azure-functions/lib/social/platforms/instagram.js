@@ -189,8 +189,8 @@ Write the 3 historical "Why it matters" points now.`;
 // ── Engagement slide MCQ (carousel second-to-last slide) ─────────────────────
 //
 // The engagement slide poses a multiple-choice question drawn from the PREVIOUS
-// post's story — the most recent POSTED IG post for the SAME audience_geo — and
-// invites followers to reply with their pick. Twelve hours later the answer is
+// post's story — the most recent POSTED IG post for the SAME audience_geo and the
+// SAME category as today's post — and invites followers to reply with their pick. Twelve hours later the answer is
 // (eventually) posted as a comment on the IG media. This mirrors X's
 // generateQuizQuestion, but the question is about YESTERDAY'S news (so a reader
 // who already saw the prior post can answer it), not today's.
@@ -228,17 +228,23 @@ Respond ONLY with valid JSON, no markdown:
 { "question": "...", "options": ["A","B","C","D"], "correctIndex": 0 }`;
 }
 
-// Find the most recent POSTED IG post for this audience_geo and return its story
-// row, or null. ORDER BY published_at DESC LIMIT 1. `excludeStoryId` skips the
-// current candidate's own story (it can't be "yesterday's" question for itself).
-async function previousPostedStory({ supabase, audienceGeo, excludeStoryId, logger }) {
+// Find the most recent POSTED IG post for this audience_geo IN THE SAME CATEGORY
+// and return its story row, or null. The engagement MCQ tests recall of the prior
+// post a follower in this category already saw, so it must come from the same
+// category as today's post — not just whatever was posted last. An `!inner` join
+// on stories filters by category_id in one query; ORDER BY published_at DESC
+// LIMIT 1. `excludeStoryId` skips the current candidate's own story (it can't be
+// "yesterday's" question for itself). Null categoryId → null (can't category-match).
+async function previousPostedStory({ supabase, audienceGeo, categoryId, excludeStoryId, logger }) {
+  if (categoryId == null) return null;
   try {
     let postQuery = supabase
       .from("social_posts")
-      .select("id, story_id, published_at")
+      .select(`id, published_at, stories!inner(${ENGAGEMENT_STORY_COLUMNS})`)
       .eq("platform", "instagram")
       .eq("audience_geo", audienceGeo)
       .eq("status", "POSTED")
+      .eq("stories.category_id", categoryId)
       .not("published_at", "is", null);
     if (excludeStoryId != null) postQuery = postQuery.neq("story_id", excludeStoryId);
     const { data: prevPost, error: postErr } = await postQuery
@@ -246,30 +252,22 @@ async function previousPostedStory({ supabase, audienceGeo, excludeStoryId, logg
       .limit(1)
       .maybeSingle();
     if (postErr) throw postErr;
-    if (!prevPost) return null;
-
-    const { data: story, error: storyErr } = await supabase
-      .from("stories")
-      .select(ENGAGEMENT_STORY_COLUMNS)
-      .eq("id", prevPost.story_id)
-      .maybeSingle();
-    if (storyErr) throw storyErr;
-    if (!story) return null;
-    return { story, sourcePostId: prevPost.id };
+    if (!prevPost?.stories) return null;
+    return { story: prevPost.stories, sourcePostId: prevPost.id };
   } catch (err) {
-    logger?.warn?.(JSON.stringify({ event: "ig_engagement_prev_post_failed", audience_geo: audienceGeo, error: err.message }));
+    logger?.warn?.(JSON.stringify({ event: "ig_engagement_prev_post_failed", audience_geo: audienceGeo, category_id: categoryId, error: err.message }));
     return null;
   }
 }
 
 // Generate ONE engagement MCQ for the carousel's engagement slide, sourced from
-// the PREVIOUS post's story. Returns
+// the PREVIOUS post's story IN THE SAME CATEGORY as today's post. Returns
 //   { question, options, correctIndex, answer, sourcePostId }
 // or null on any failure (no prior post, no story, LLM/parse error, invalid MCQ)
 // — the carousel then renders without an engagement slide. Never throws.
 export async function generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger } = {}) {
   if (!anthropic || !supabase) return null;
-  const prev = await previousPostedStory({ supabase, audienceGeo, excludeStoryId: story?.id, logger });
+  const prev = await previousPostedStory({ supabase, audienceGeo, categoryId: story?.category_id, excludeStoryId: story?.id, logger });
   if (!prev) return null;
 
   try {
