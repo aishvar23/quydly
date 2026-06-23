@@ -495,14 +495,25 @@ function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, 
   const gap = Math.round(fontSize * 0.26);     // inter-word space
   const rowGap = Math.round(fontSize * 0.2);   // line spacing between wrapped rows
   const padX = Math.round(fontSize * 0.14);
-  const children = words.map((w, i) => {
-    const base = { display: "flex", fontWeight: 700, fontSize, lineHeight: 1.15, marginRight: gap, marginBottom: rowGap };
-    if (!hi.has(i)) return el("div", { style: { ...base, color: FG } }, w);
-    if (mode === "accent") return el("div", { style: { ...base, color: accent } }, w);
-    return el("div", {
-      style: { ...base, color: BG, backgroundColor: HIGHLIGHT_MARKER, paddingLeft: padX, paddingRight: padX, borderRadius: Math.round(fontSize * 0.09) },
-    }, w);
-  });
+  const base = { display: "flex", fontWeight: 700, fontSize, lineHeight: 1.15, marginRight: gap, marginBottom: rowGap };
+
+  // The highlight span is contiguous, so render it as ONE block (a single
+  // continuous marker box / accent run) rather than a box per word. As an
+  // unbreakable unit it also wraps whole to the next line if it doesn't fit.
+  const idx = [...hi].sort((a, b) => a - b);
+  const hiStart = idx[0];
+  const hiEnd = idx[idx.length - 1];
+  const children = [];
+  for (let i = 0; i < words.length; i++) {
+    if (i < hiStart || i > hiEnd) {
+      children.push(el("div", { style: { ...base, color: FG } }, words[i]));
+    } else if (i === hiStart) {
+      const phrase = words.slice(hiStart, hiEnd + 1).join(" ");
+      children.push(mode === "accent"
+        ? el("div", { style: { ...base, color: accent } }, phrase)
+        : el("div", { style: { ...base, color: BG, backgroundColor: HIGHLIGHT_MARKER, paddingLeft: padX, paddingRight: padX, borderRadius: Math.round(fontSize * 0.09) } }, phrase));
+    } // words strictly inside (hiStart, hiEnd] are folded into the phrase above
+  }
   return el("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "flex-start" } }, children);
 }
 
