@@ -7,7 +7,7 @@
 // validation (see _sources.js / _hashtags.js / social-post-generator.js).
 
 import {
-  QUYDLY_URL, keyPointStrings, firstSentences, truncate, bullets, assemble,
+  QUYDLY_URL, QUYDLY_IG_HANDLE, keyPointStrings, firstSentences, truncate, bullets, assemble, entityNames,
 } from "./_shared.js";
 import { validateMCQ, parseJSONFromLLM } from "../mcq.js";
 
@@ -38,7 +38,7 @@ export function format(story, audienceGeo) {
   const summary = firstSentences(story.summary, 1);
   const kps = keyPointStrings(story).slice(0, 3);
   const know = kps.length ? `What to know:\n${bullets(kps)}` : "";
-  const cta = `Can you answer today's news quiz?\nVisit ${url}`;
+  const cta = `Follow ${QUYDLY_IG_HANDLE()} for your daily news brief + quiz.\nPlay today's quiz → ${url}`;
 
   const text = truncate(
     assemble([headline, summary, know, cta], CONSTRAINTS.maxLength),
@@ -77,13 +77,14 @@ What to know:
 • {point}
 • {point}
 
-Can you answer today's news quiz?
-Visit ${QUYDLY_URL()}
+Follow ${QUYDLY_IG_HANDLE()} for your daily news brief + quiz.
+Play today's quiz → ${QUYDLY_URL()}
 
 RULES:
 - Max ${CONSTRAINTS.maxLength} characters. Do NOT add source links yourself — a
   "Sources" block is appended automatically.
-- Must include the "Visit ${QUYDLY_URL()}" CTA. No invented facts or numbers.
+- Must end with the "Follow ${QUYDLY_IG_HANDLE()}" CTA followed by the
+  "Play today's quiz → ${QUYDLY_URL()}" line. No invented facts or numbers.
 - Neutral tone for any sensitive subject. No clickbait.
 - Do NOT add hashtags yourself — a curated hashtag block is appended automatically.
 
@@ -189,8 +190,9 @@ Write the 3 historical "Why it matters" points now.`;
 // ── Engagement slide MCQ (carousel second-to-last slide) ─────────────────────
 //
 // The engagement slide poses a multiple-choice question drawn from the PREVIOUS
-// post's story — the most recent POSTED IG post for the SAME audience_geo and the
-// SAME category as today's post — and invites followers to reply with their pick. Twelve hours later the answer is
+// post's story — a recent POSTED IG post for the SAME audience_geo and category
+// that is ALSO topically related to today's post (shares ≥1 entity; see
+// previousPostedStory) — and invites followers to reply with their pick. Twelve hours later the answer is
 // (eventually) posted as a comment on the IG media. This mirrors X's
 // generateQuizQuestion, but the question is about YESTERDAY'S news (so a reader
 // who already saw the prior post can answer it), not today's.
@@ -201,8 +203,31 @@ Write the 3 historical "Why it matters" points now.`;
 
 const ENGAGEMENT_QUESTION_MODEL = "claude-sonnet-4-6";
 
-// Columns the engagement MCQ prompt needs from the previous post's story.
-const ENGAGEMENT_STORY_COLUMNS = "id, headline, summary, key_points, category_id";
+// Columns the engagement MCQ prompt needs from the previous post's story, plus
+// the entity columns used to gate topical relevance (see previousPostedStory).
+const ENGAGEMENT_STORY_COLUMNS = "id, headline, summary, key_points, category_id, primary_entities, primary_entities_enriched";
+
+// Normalise an entity name for case/whitespace-insensitive overlap matching.
+const normEntityKey = (name) => String(name).toLowerCase().replace(/\s+/g, " ").trim();
+
+// Normalised set of a story's entity names, for topical-overlap matching.
+function entityKeySet(story) {
+  const set = new Set();
+  for (const name of entityNames(story)) {
+    const key = normEntityKey(name);
+    if (key) set.add(key);
+  }
+  return set;
+}
+
+// True when `story` shares ≥1 entity with the (pre-normalised) `keySet`.
+function sharesEntity(keySet, story) {
+  for (const name of entityNames(story)) {
+    const key = normEntityKey(name);
+    if (key && keySet.has(key)) return true;
+  }
+  return false;
+}
 
 function buildEngagementPrompt(story, audienceGeo) {
   const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
@@ -228,14 +253,21 @@ Respond ONLY with valid JSON, no markdown:
 { "question": "...", "options": ["A","B","C","D"], "correctIndex": 0 }`;
 }
 
-// Find the most recent POSTED IG post for this audience_geo IN THE SAME CATEGORY
-// and return its story row, or null. The engagement MCQ tests recall of the prior
-// post a follower in this category already saw, so it must come from the same
-// category as today's post — not just whatever was posted last. An `!inner` join
-// on stories filters by category_id in one query; ORDER BY published_at DESC
-// LIMIT 1. `excludeStoryId` skips the current candidate's own story (it can't be
-// "yesterday's" question for itself). Null categoryId → null (can't category-match).
-async function previousPostedStory({ supabase, audienceGeo, categoryId, excludeStoryId, logger }) {
+// How many recent same-category posts to scan for a topically-relevant match.
+const ENGAGEMENT_PREV_SCAN = 12;
+
+// Find a recent POSTED IG post for this audience_geo whose story is BOTH in the
+// same category AND topically related to today's post, and return its story row,
+// or null. Category alone is too coarse: a "world" bucket mixing geopolitics and
+// sport produced jarring mismatches (an Iran post asking an IPL cricket question).
+// So we scan the most recent ENGAGEMENT_PREV_SCAN same-category posts (newest
+// first) and pick the first that shares ≥1 entity with today's story —
+// preserving "recall of a prior post you saw" while keeping the question on-topic.
+// When today's story has no usable entities we cannot gate on overlap, so we fall
+// back to the most recent same-category post (pre-fix behaviour). `excludeStoryId`
+// skips the current story (it can't be "yesterday's" question for itself). Null
+// categoryId → null (can't category-match).
+async function previousPostedStory({ supabase, audienceGeo, categoryId, excludeStoryId, todayEntities, logger }) {
   if (categoryId == null) return null;
   try {
     let postQuery = supabase
@@ -247,13 +279,22 @@ async function previousPostedStory({ supabase, audienceGeo, categoryId, excludeS
       .eq("stories.category_id", categoryId)
       .not("published_at", "is", null);
     if (excludeStoryId != null) postQuery = postQuery.neq("story_id", excludeStoryId);
-    const { data: prevPost, error: postErr } = await postQuery
+    const { data: prevPosts, error: postErr } = await postQuery
       .order("published_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(ENGAGEMENT_PREV_SCAN);
     if (postErr) throw postErr;
-    if (!prevPost?.stories) return null;
-    return { story: prevPost.stories, sourcePostId: prevPost.id };
+    const posts = (Array.isArray(prevPosts) ? prevPosts : []).filter((p) => p?.stories);
+    if (!posts.length) return null;
+
+    const gate = todayEntities && todayEntities.size > 0;
+    for (const post of posts) {
+      if (!gate || sharesEntity(todayEntities, post.stories)) {
+        return { story: post.stories, sourcePostId: post.id };
+      }
+    }
+    // Same-category posts exist but none is topically related → drop the slide
+    // rather than ask an unrelated question.
+    return null;
   } catch (err) {
     logger?.warn?.(JSON.stringify({ event: "ig_engagement_prev_post_failed", audience_geo: audienceGeo, category_id: categoryId, error: err.message }));
     return null;
@@ -267,7 +308,14 @@ async function previousPostedStory({ supabase, audienceGeo, categoryId, excludeS
 // — the carousel then renders without an engagement slide. Never throws.
 export async function generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger } = {}) {
   if (!anthropic || !supabase) return null;
-  const prev = await previousPostedStory({ supabase, audienceGeo, categoryId: story?.category_id, excludeStoryId: story?.id, logger });
+  const prev = await previousPostedStory({
+    supabase,
+    audienceGeo,
+    categoryId: story?.category_id,
+    excludeStoryId: story?.id,
+    todayEntities: entityKeySet(story),
+    logger,
+  });
   if (!prev) return null;
 
   try {

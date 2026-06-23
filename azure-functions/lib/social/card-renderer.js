@@ -24,6 +24,7 @@ import { PNG } from "pngjs";
 import jpeg from "jpeg-js";
 import { accentFor } from "./_categories.js";
 import { validateMCQ } from "./mcq.js";
+import { QUYDLY_IG_HANDLE } from "./platforms/_shared.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
@@ -506,18 +507,22 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
       ...options.map((opt, i) => optionRow(letters[i], oneLine(opt), accent, size)),
       el("div", {
         style: { display: "flex", fontSize: Math.round(size * 0.032), color: MUTED, lineHeight: 1.3, marginTop: Math.round(size * 0.03) },
-      }, "Reply with your pick \u{1F447}"),
+      }, "Reply with your pick in the comments"),
     ]);
   }
 
-  // cta
+  // cta — lead with the follow ask (the durable value), with the daily-quiz
+  // ritual as the supporting line. The handle sits in the category accent colour.
   return el("div", { style: { display: "flex", flexDirection: "column" } }, [
     el("div", {
-      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.07), lineHeight: 1.15, marginBottom: 28 },
-    }, "Take today's news quiz"),
+      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.062), lineHeight: 1.15, marginBottom: Math.round(size * 0.014) },
+    }, "Follow for tomorrow's brief"),
     el("div", {
-      style: { display: "flex", fontSize: Math.round(size * 0.04), color: MUTED, lineHeight: 1.3 },
-    }, "5 questions · about 3 minutes · resets daily"),
+      style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.05), lineHeight: 1.2, marginBottom: Math.round(size * 0.045) },
+    }, QUYDLY_IG_HANDLE()),
+    el("div", {
+      style: { display: "flex", fontSize: Math.round(size * 0.038), color: MUTED, lineHeight: 1.35 },
+    }, "Daily news quiz · 5 questions · ~3 min · resets daily"),
   ]);
 }
 
