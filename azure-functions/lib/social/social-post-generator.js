@@ -82,15 +82,16 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
 }
 
 // Generate the carousel COVER HOOK (slide 1) — a 6-12 word concrete, swipe-
-// earning line that leads with the story's specifics. Returns the hook string,
-// or "" on any failure — the renderer then falls back to the raw headline, so a
-// failure here is never worse than the pre-feature cover. Best-effort and
-// additive: it must not throw into the platform loop.
+// earning line that leads with the story's specifics, plus the key span to
+// emphasise. Returns { hook, highlight } (both strings; highlight is a verbatim
+// substring of hook or ""), or { hook: "", highlight: "" } on any failure — the
+// renderer then falls back to the raw headline, so a failure here is never worse
+// than the pre-feature cover. Best-effort and additive: must not throw.
 async function generateCoverHook(anthropic, platform, story, logger) {
   try {
     const msg = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 128,
+      max_tokens: 160,
       system: platform.HOOK_SYSTEM,
       messages: [{ role: "user", content: platform.buildHookPrompt(story) }],
     });
@@ -99,7 +100,9 @@ async function generateCoverHook(anthropic, platform, story, logger) {
     raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
 
     const parsed = JSON.parse(raw);
-    return typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
+    const hook = typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
+    const highlight = typeof parsed?.highlight === "string" ? parsed.highlight.trim() : "";
+    return { hook, highlight };
   } catch (err) {
     logger.warn(JSON.stringify({
       event: "social_cover_hook_failed",
@@ -107,7 +110,7 @@ async function generateCoverHook(anthropic, platform, story, logger) {
       story_id: story.id,
       error: err.message,
     }));
-    return "";
+    return { hook: "", highlight: "" };
   }
 }
 
@@ -131,10 +134,12 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         whyItMatters = await generateWhyItMatters(anthropic, platform, story, logger);
       }
       // Cover hook (slide 1): a concrete, swipe-earning line that replaces the raw
-      // headline on the cover. Best-effort: "" → renderer falls back to headline.
+      // headline on the cover, plus the key span to emphasise. Best-effort: empty
+      // → renderer falls back to the plain headline.
       let coverHook = "";
+      let coverHighlight = "";
       if (anthropic && platform.buildHookPrompt) {
-        coverHook = await generateCoverHook(anthropic, platform, story, logger);
+        ({ hook: coverHook, highlight: coverHighlight } = await generateCoverHook(anthropic, platform, story, logger));
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
       // PREVIOUS post's story in the SAME category, inserted second-to-last
@@ -147,7 +152,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook });
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;

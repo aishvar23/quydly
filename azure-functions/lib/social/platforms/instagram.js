@@ -207,6 +207,8 @@ WHAT MAKES A GOOD HOOK (use the story's strongest concrete element):
 - A short VERBATIM quote + who said it, when the story hinges on it.
 - Name the stake or consequence directly: who wins, who loses, what changes.
 
+Also pick the HIGHLIGHT: the single most important span WITHIN your hook to emphasise — the number/stat, the named subject, or the core stake (1-3 words). It MUST be an exact, contiguous, verbatim substring of the hook (same words, same order). Prefer a number or proper noun when the hook has one. If nothing clearly deserves emphasis, return "".
+
 RULES
 - 6-12 words. Active, present tense. Plain language, no jargon.
 - Use ONLY facts, numbers, names, and quotes present in the provided story — never invent or inflate. If the story has no specific number, lead with the concrete action or stake instead; do not fabricate one.
@@ -215,7 +217,7 @@ RULES
 - BANNED phrasings: "you won't believe", "here's why/what/how", "this is why", "breaks/broke silence", "changes everything", "shocking", "wait until you see", and ANY hook that hides the subject or the news.
 
 Respond ONLY with JSON, no markdown:
-{ "hook": "..." }`;
+{ "hook": "...", "highlight": "..." }`;
 
 export function buildHookPrompt(story) {
   const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";

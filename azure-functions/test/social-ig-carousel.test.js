@@ -164,6 +164,32 @@ test("renderCarouselSlides: non-person entities (org/place) are ignored", async 
   assert.equal(called, false);
 });
 
+test("renderCarouselSlides: cover hook + highlight renders a valid JPEG in both modes", async () => {
+  // Exercises the word-level highlight layout: a multi-word highlight span that
+  // matches the hook is emphasised; both render modes must produce a valid cover.
+  for (const highlightMode of ["marker", "accent"]) {
+    const slides = await renderCarouselSlides(STORY, {
+      slides: ["cover"],
+      coverHook: "Oracle cut 21,000 jobs in a year",
+      coverHighlight: "21,000 jobs",
+      highlightMode,
+    });
+    assert.equal(slides.length, 1);
+    assert.equal(slides[0].slideType, "cover");
+    assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // JPEG SOI
+  }
+});
+
+test("renderCarouselSlides: a highlight that doesn't match the hook still renders (no emphasis, no throw)", async () => {
+  const slides = await renderCarouselSlides(STORY, {
+    slides: ["cover"],
+    coverHook: "Markets rally as inflation cools",
+    coverHighlight: "not in the hook at all",
+  });
+  assert.equal(slides.length, 1);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]);
+});
+
 test("renderCarouselSlides: lead person has no photo → text-only cover even if a LATER person does", async () => {
   // First person entity is the lead subject; it has no portrait. A later person
   // entity does — but we must NOT fall through to it (that put the wrong face on
@@ -434,6 +460,17 @@ test("cardService.getCarouselSlideUrls: distinct cover hooks get distinct storag
   const s0 = await svc.getCarouselSlideUrls({ story: STORY });
   assert.ok(s0[0].url.includes("-nohook/"));
   assert.ok(!s1[0].url.includes("-nohook/"));
+});
+
+test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ distinct storage paths", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+
+  const hook = "Oracle cut 21,000 jobs in a year";
+  const a = await svc.getCarouselSlideUrls({ story: STORY, coverHook: hook, coverHighlight: "21,000 jobs" });
+  const b = await svc.getCarouselSlideUrls({ story: STORY, coverHook: hook, coverHighlight: "Oracle" });
+  // The highlighted span changes the cover bytes, so the fingerprint must differ.
+  assert.notEqual(a[0].url, b[0].url);
 });
 
 test("cardService.getCarouselSlideUrls: returns null (non-fatal) when an upload fails", async () => {

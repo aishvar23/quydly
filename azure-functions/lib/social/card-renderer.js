@@ -33,6 +33,11 @@ const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "asse
 const BG = "#0B0F1A";
 const FG = "#FFFFFF";
 const MUTED = "#9CA3AF";
+// Cover-hook keyword highlight. HIGHLIGHT_MARKER is the filled "highlighter"
+// colour (TSJ-style) used in the default "marker" mode; "accent" mode tints the
+// key span in the category accent instead. Mode is a single brand-level choice.
+const HIGHLIGHT_MARKER = "#FFE14D";
+const HIGHLIGHT_MODE = "marker"; // "marker" | "accent"
 
 const SHAPES = {
   landscape: { width: 1600, height: 900 },
@@ -396,14 +401,54 @@ function optionRow(letter, text, accent, size) {
   ]);
 }
 
-// The cover headline block, sized to its length.
-function coverHeadline(headline, size) {
-  return el("div", {
-    style: {
-      display: "flex", color: FG, fontWeight: 700,
-      fontSize: Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072)), lineHeight: 1.15,
-    },
-  }, headline);
+// Reduce a token to a comparison key: lowercase, strip everything except
+// alphanumerics, $ and % (so "21,000" and "strikes." compare cleanly).
+function hlKey(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9$%]/g, "");
+}
+
+// Indices of the words in `words` that fall inside `highlight` — the first
+// contiguous run whose normalised tokens match the highlight's. Empty set when
+// the highlight is blank or not found (→ the cover renders without emphasis).
+function highlightWordIndices(words, highlight) {
+  const set = new Set();
+  const hi = String(highlight || "").split(/\s+/).map(hlKey).filter(Boolean);
+  if (!hi.length) return set;
+  const keys = words.map(hlKey);
+  for (let i = 0; i + hi.length <= keys.length; i++) {
+    let match = true;
+    for (let j = 0; j < hi.length; j++) { if (keys[i + j] !== hi[j]) { match = false; break; } }
+    if (match) { for (let j = 0; j < hi.length; j++) set.add(i + j); return set; }
+  }
+  return set;
+}
+
+// The cover headline block, sized to its length. When `highlight` matches a span
+// of the hook, those words are emphasised (filled marker, or accent-tinted text
+// in "accent" mode) — rendered as word-level flex items so the line wraps
+// naturally while the highlight hugs only its words. Falls back to a single plain
+// text node when there is nothing to highlight (the pre-highlight layout).
+function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, accent = HIGHLIGHT_MARKER } = {}) {
+  const fontSize = Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072));
+  const words = headline.split(/\s+/).filter(Boolean);
+  const hi = highlightWordIndices(words, highlight);
+
+  if (!hi.size) {
+    return el("div", { style: { display: "flex", color: FG, fontWeight: 700, fontSize, lineHeight: 1.15 } }, headline);
+  }
+
+  const gap = Math.round(fontSize * 0.26);     // inter-word space
+  const rowGap = Math.round(fontSize * 0.2);   // line spacing between wrapped rows
+  const padX = Math.round(fontSize * 0.14);
+  const children = words.map((w, i) => {
+    const base = { display: "flex", fontWeight: 700, fontSize, lineHeight: 1.15, marginRight: gap, marginBottom: rowGap };
+    if (!hi.has(i)) return el("div", { style: { ...base, color: FG } }, w);
+    if (mode === "accent") return el("div", { style: { ...base, color: accent } }, w);
+    return el("div", {
+      style: { ...base, color: BG, backgroundColor: HIGHLIGHT_MARKER, paddingLeft: padX, paddingRight: padX, borderRadius: Math.round(fontSize * 0.09) },
+    }, w);
+  });
+  return el("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "flex-start" } }, children);
 }
 
 // "Tuesday · 3 June 2026" eyebrow above the cover headline. Returns null when
@@ -445,18 +490,20 @@ function coverPortraitBlock({ portrait, accent, size }) {
 // Build the inner body for one slide kind. `size` is the square edge length.
 // `portrait` (cover only) is { dataUri, name, credit } or null. `question`
 // (engagement only) is the MCQ { question, options, correctIndex } or null.
-function slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook }) {
+function slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
 
   if (kind === "cover") {
-    // Prefer the open-loop hook (a 5-8 word curiosity gap generated upstream)
-    // for the cover; fall back to the raw headline when no hook was supplied.
+    // Prefer the concrete hook generated upstream for the cover; fall back to the
+    // raw headline when none was supplied. The hook's key span (coverHighlight)
+    // is emphasised on the hook only — on the headline fallback it won't match,
+    // so the cover renders plain.
     const cover = oneLine(coverHook) || headline;
     const dateRow = coverDateRow(story, accent, size);
     const children = [];
     if (dateRow) children.push(dateRow);
     if (portrait && portrait.dataUri) children.push(coverPortraitBlock({ portrait, accent, size }));
-    children.push(coverHeadline(cover, size));
+    children.push(coverHeadline(cover, size, { highlight: coverHighlight, mode: highlightMode, accent }));
     // Single child and no date → keep the original bare-headline node (matches
     // the pre-feature layout exactly for stories with no publish date).
     if (children.length === 1) return children[0];
@@ -464,10 +511,14 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
   }
 
   if (kind === "what") {
-    const summary = firstSentences(story?.summary, 3) || headline;
+    // Density: a single lede sentence (not a paragraph), larger type and line
+    // height. News sentences run long, so cutting the COUNT to one — not two — is
+    // what actually keeps the slide skimmable; the 4:5 slide carries the rest as
+    // whitespace, and the key-points slide picks up the detail.
+    const summary = firstSentences(story?.summary, 1) || headline;
     return el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("What happened", accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.044), color: FG, lineHeight: 1.3 } }, summary),
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4 } }, summary),
     ]);
   }
 
@@ -532,7 +583,7 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, height, portrait, whyItMatters, question, coverHook }) {
+function slideTree({ kind, story, accent, category, index, total, size, height, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
   const hint = kind === "cta" ? "quydly.com"
@@ -547,7 +598,7 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook }),
+      slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -560,7 +611,7 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
 // gains a circular portrait inset (licensed photo + credit). Resolving the
 // portrait is best-effort and happens once up front; any failure leaves the
 // cover text-only. `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, fetchImpl } = {}) {
   const { width, height } = SHAPES.portrait;
   const size = width; // scaling base for typography/padding; height adds 4:5 room
   const accent = accentFor(story?.category_id);
@@ -586,7 +637,7 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null }),
+      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null, coverHighlight: kind === "cover" ? coverHighlight : null, highlightMode }),
       { width, height, fonts }
     );
     const { buffer, contentType } = rasterize(svg, { width, format });
