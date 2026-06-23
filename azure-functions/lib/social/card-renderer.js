@@ -249,6 +249,13 @@ function entityImages(story) {
   return out;
 }
 
+// Whether the story has ANY licensed entity image — lets the generator decide
+// up front whether to spend an illustration generation (only when there's no
+// photo to use).
+export function hasEntityImage(story) {
+  return entityImages(story).length > 0;
+}
+
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or
 // null). Best-effort — used for both the cover and the body-slide images.
 async function resolveImage(spec, fetchImpl) {
@@ -738,7 +745,7 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
 // lead entity (person, else org/place) with a credit. Resolving the image is
 // best-effort and happens once up front; any failure leaves the cover text-only.
 // `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrl = null, fetchImpl } = {}) {
   const { width, height } = SHAPES.portrait;
   const size = width; // scaling base for typography/padding; height adds 4:5 room
   const accent = accentFor(story?.category_id);
@@ -769,6 +776,12 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
       ...bodySpecs.map((s) => resolveImage(s, fetchImpl)),
     ]);
     portrait = coverImg;
+    // No licensed photo for the cover → use the generated illustration (Tier 2)
+    // before falling to the brand-graphic floor. No caption (it isn't a photo).
+    if (!portrait && illustrationUrl && slideList.includes("cover")) {
+      const dataUri = await fetchImageDataUri(illustrationUrl, fetchImpl ? { fetchImpl } : {});
+      if (dataUri) portrait = { dataUri };
+    }
     bodyImgs.forEach((img, i) => { if (img) bodyImageByKind[bodyKinds[i]] = img; });
   }
 

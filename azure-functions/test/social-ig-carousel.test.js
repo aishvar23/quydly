@@ -464,8 +464,8 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   assert.equal(slides.length, 4);
   assert.deepEqual(slides.map((s) => s.index), [0, 1, 2, 3]);
   // No why / no question / no hook → "nowhy-noq-nohook" variant segment in the path.
-  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook/0-cover.jpg");
-  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook/3-cta.jpg");
+  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/0-cover.jpg");
+  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/3-cta.jpg");
   assert.equal(slides[0].contentType, "image/jpeg");
   assert.equal(mock.uploads.length, 4);
   assert.ok(mock.uploads.every((u) => /\.jpg$/.test(u.path)));
@@ -504,8 +504,8 @@ test("cardService.getCarouselSlideUrls: distinct cover hooks get distinct storag
   assert.notEqual(s1[0].url, s2[0].url);
   // A hook-less render gets the "nohook" segment, distinct from both hooked ones.
   const s0 = await svc.getCarouselSlideUrls({ story: STORY });
-  assert.ok(s0[0].url.includes("-nohook/"));
-  assert.ok(!s1[0].url.includes("-nohook/"));
+  assert.ok(s0[0].url.includes("-nohook-noill/"));
+  assert.ok(!s1[0].url.includes("-nohook-noill/"));
 });
 
 test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ distinct storage paths", async () => {
@@ -517,6 +517,13 @@ test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ disti
   const b = await svc.getCarouselSlideUrls({ story: STORY, coverHook: hook, coverHighlight: "Oracle" });
   // The highlighted span changes the cover bytes, so the fingerprint must differ.
   assert.notEqual(a[0].url, b[0].url);
+});
+
+test("cardService.getIllustrationUrl: null when OPENAI_API_KEY is absent (Tier-2 disabled)", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} }); // no OPENAI_API_KEY
+  assert.equal(await svc.getIllustrationUrl({ story: STORY, anthropic: {} }), null);
+  assert.equal(mock.uploads.length, 0); // never generated/uploaded
 });
 
 test("cardService.getCarouselSlideUrls: returns null (non-fatal) when an upload fails", async () => {

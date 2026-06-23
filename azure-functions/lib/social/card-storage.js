@@ -12,6 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { renderStoryCard, renderCarouselSlides } from "./card-renderer.js";
+import { generateIllustration } from "./illustration.js";
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -55,6 +56,10 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // with an explicit SOCIAL_IG_PORTRAIT_ENABLED=false/0. Image fetch is
   // best-effort (a failure leaves a clean text cover), so default-on is safe.
   const igPortrait = !/^(0|false)$/i.test(String(env.SOCIAL_IG_PORTRAIT_ENABLED || ""));
+  // Editorial illustration (Tier 2) requires an OpenAI key; on by default once
+  // the key is present, disable with SOCIAL_IG_ILLUSTRATION_ENABLED=false/0.
+  const openaiKey = env.OPENAI_API_KEY || "";
+  const igIllustration = !!openaiKey && !/^(0|false)$/i.test(String(env.SOCIAL_IG_ILLUSTRATION_ENABLED || ""));
   const cache = new Map(); // `${storyId}:${shape}` → Promise<string|null>
   let bucketReady = null;
 
@@ -102,8 +107,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Keying only on story.id let a later render upsert-overwrite an earlier post's
   // slide, so that post could publish the wrong engagement question while its
   // social_post_engagement row still held the original Q&A (wrong 12h answer).
-  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, variant }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrl = null, variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrl }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
@@ -113,7 +118,30 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     return out;
   }
 
+  // Generate (once per story) a stylized editorial illustration and upload it,
+  // returning its public URL — the Tier-2 cover image for stories with no
+  // licensed photo. Best-effort: null when disabled, no client, or generation
+  // fails (the renderer then falls back to the brand-graphic floor). Memoised so
+  // the expensive generation runs at most once per story.
+  async function buildIllustration({ story, anthropic }) {
+    const result = await generateIllustration({ anthropic, openaiKey, story, logger });
+    if (!result) return null;
+    return upload({ path: `cards/${story.id}/illustration.png`, buffer: result.buffer, contentType: result.contentType });
+  }
+
   return {
+    async getIllustrationUrl({ story, anthropic } = {}) {
+      if (!igIllustration || !anthropic || !story || story.id == null) return null;
+      const key = `${story.id}:illustration`;
+      if (cache.has(key)) return cache.get(key);
+      const p = buildIllustration({ story, anthropic }).catch((err) => {
+        logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
+        return null;
+      });
+      cache.set(key, p);
+      return p;
+    },
+
     // Returns a public card URL, or null on any failure (caller proceeds without
     // media — X posts text-only; Instagram stays media-gated, as before).
     async getCardUrl({ story, shape = "landscape", format = "png" }) {
@@ -133,15 +161,15 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrl = null }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
-      // distinct (whyItMatters, question, coverHook+highlight) variant never
-      // overwrites another's bytes.
-      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}`;
+      // distinct (whyItMatters, question, coverHook+highlight, illustration?) variant
+      // never overwrites another's bytes.
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illustrationUrl ? "ill" : "noill"}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, variant }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrl, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

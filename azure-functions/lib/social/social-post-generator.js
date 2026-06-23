@@ -11,6 +11,7 @@
 
 import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
 import { validatePost, validateCoverHook } from "./social-validation.js";
+import { hasEntityImage } from "./card-renderer.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 
@@ -152,6 +153,13 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       if (anthropic && platform.buildHookPrompt) {
         ({ hook: coverHook, highlight: coverHighlight } = await generateCoverHook(anthropic, platform, story, logger));
       }
+      // Editorial illustration (Tier 2): only when the story has NO licensed photo
+      // (otherwise the photo wins) and the cardService + key are configured.
+      // Best-effort: null → renderer uses the brand-graphic floor.
+      let illustrationUrl = null;
+      if (anthropic && cardService.getIllustrationUrl && !hasEntityImage(story)) {
+        illustrationUrl = await cardService.getIllustrationUrl({ story, anthropic });
+      }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
       // PREVIOUS post's story in the SAME category, inserted second-to-last
       // (before the CTA). Best-
@@ -163,7 +171,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight });
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrl });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;
