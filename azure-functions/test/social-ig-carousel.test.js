@@ -64,7 +64,7 @@ test("renderCarouselSlides: no whyItMatters → 4 slides (cover/what/keypoints/c
   slides.forEach((s, i) => {
     assert.equal(s.index, i);
     assert.equal(s.contentType, "image/jpeg");
-    assert.deepEqual([s.width, s.height], [1080, 1080]);
+    assert.deepEqual([s.width, s.height], [1080, 1350]);
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
   });
@@ -154,14 +154,68 @@ test("renderCarouselSlides: withPortrait but no person entity → no fetch, text
   assert.equal(slides.length, 4);
 });
 
-test("renderCarouselSlides: non-person entities (org/place) are ignored", async () => {
+test("renderCarouselSlides: an org/place lead image is used on the cover (no lead person)", async () => {
+  // With no person entity, the cover falls back to the first org/place image so
+  // non-person stories aren't bland — the wrong-face risk doesn't apply to logos
+  // or landmarks.
   const story = { ...STORY, primary_entities_enriched: [
     { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
   ] };
-  let called = false;
-  const fetchImpl = async () => { called = true; return imgResponse(); };
-  await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
-  assert.equal(called, false);
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  const slides = await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/acme.png"]); // org image fetched
+  assert.equal(slides.length, 4);
+});
+
+test("renderCarouselSlides: a lead person image wins over a later org image (cover)", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png" },
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/jane.png"]); // person preferred on cover
+});
+
+test("renderCarouselSlides: body slides get OTHER story entities' images (real imagery, not text)", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png" },
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  // cover + what + keypoints → cover uses the person, a body slide uses the org.
+  await renderCarouselSlides(story, { slides: ["cover", "what", "keypoints"], withPortrait: true, fetchImpl });
+  assert.ok(calls.includes("https://upload.wikimedia.org/jane.png")); // cover (person)
+  assert.ok(calls.includes("https://upload.wikimedia.org/acme.png")); // body slide (org)
+});
+
+test("renderCarouselSlides: cover hook + highlight renders a valid JPEG in both modes", async () => {
+  // Exercises the word-level highlight layout: a multi-word highlight span that
+  // matches the hook is emphasised; both render modes must produce a valid cover.
+  for (const highlightMode of ["marker", "accent"]) {
+    const slides = await renderCarouselSlides(STORY, {
+      slides: ["cover"],
+      coverHook: "Oracle cut 21,000 jobs in a year",
+      coverHighlight: "21,000 jobs",
+      highlightMode,
+    });
+    assert.equal(slides.length, 1);
+    assert.equal(slides[0].slideType, "cover");
+    assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // JPEG SOI
+  }
+});
+
+test("renderCarouselSlides: a highlight that doesn't match the hook still renders (no emphasis, no throw)", async () => {
+  const slides = await renderCarouselSlides(STORY, {
+    slides: ["cover"],
+    coverHook: "Markets rally as inflation cools",
+    coverHighlight: "not in the hook at all",
+  });
+  assert.equal(slides.length, 1);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]);
 });
 
 test("renderCarouselSlides: lead person has no photo → text-only cover even if a LATER person does", async () => {
@@ -174,10 +228,45 @@ test("renderCarouselSlides: lead person has no photo → text-only cover even if
   ] };
   let called = false;
   const fetchImpl = async () => { called = true; return imgResponse(); };
-  const slides = await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
-  assert.equal(called, false); // never fetched the later person's photo
-  assert.equal(slides.length, 4);
+  // Render the cover in isolation: the cover must never fetch a later person's
+  // face (the no-wrong-face guard). Captioned later-entity images may still
+  // appear on BODY slides — that's covered separately.
+  const slides = await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.equal(called, false); // cover never fetched the later person's photo
+  assert.equal(slides.length, 1);
   assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
+});
+
+test("renderCarouselSlides: no entity image → brand-graphic floor, every slide still a valid JPEG", async () => {
+  // A story with no licensed entity image must never render bare text: the cover
+  // and body slides fall back to the designed brand graphic (no fetch needed).
+  const story = { ...STORY, primary_entities_enriched: [{ name: "Some Org", type: "org" }] };
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  const slides = await renderCarouselSlides(story, {
+    slides: ["cover", "what", "keypoints"], withPortrait: true,
+    coverHook: "City exam glitch stranded thousands of students", coverHighlight: "exam glitch", fetchImpl,
+  });
+  assert.equal(called, false); // no image to fetch — floor is procedural
+  assert.equal(slides.length, 3);
+  for (const s of slides) assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEGs
+});
+
+test("renderCarouselSlides: oversize full-image override falls back to its thumbnail", async () => {
+  // An override with BOTH a full press photo and a thumbnail: if the full image
+  // fails to fetch (e.g. over PORTRAIT_MAX_BYTES), the thumbnail must still be
+  // tried before giving up to the floor.
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", portrait_image_url: "https://upload.wikimedia.org/full.jpg", portrait_thumbnail_url: "https://upload.wikimedia.org/thumb.jpg" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    return String(url).includes("full.jpg") ? { ok: false, status: 400, headers: { get: () => null } } : imgResponse();
+  };
+  await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.ok(calls.includes("https://upload.wikimedia.org/full.jpg"));  // tried the full image first
+  assert.ok(calls.includes("https://upload.wikimedia.org/thumb.jpg")); // then the thumbnail
 });
 
 test("renderCarouselSlides: non-HTTPS portrait url is skipped (no fetch)", async () => {
@@ -391,9 +480,9 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   const slides = await svc.getCarouselSlideUrls({ story: STORY });
   assert.equal(slides.length, 4);
   assert.deepEqual(slides.map((s) => s.index), [0, 1, 2, 3]);
-  // No why / no question → "nowhy-noq" variant segment in the object path.
-  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq/0-cover.jpg");
-  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq/3-cta.jpg");
+  // No why / no question / no hook → "nowhy-noq-nohook" variant segment in the path.
+  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/0-cover.jpg");
+  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/3-cta.jpg");
   assert.equal(slides[0].contentType, "image/jpeg");
   assert.equal(mock.uploads.length, 4);
   assert.ok(mock.uploads.every((u) => /\.jpg$/.test(u.path)));
@@ -419,6 +508,39 @@ test("cardService.getCarouselSlideUrls: distinct engagement questions get distin
   const eng2 = s2.find((s) => s.slideType === "engagement").url;
   assert.notEqual(eng1, eng2);
   assert.ok(mock.uploads.every((u) => u.path.includes("/carousel/")));
+});
+
+test("cardService.getCarouselSlideUrls: distinct cover hooks get distinct storage paths (no overwrite)", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+
+  const s1 = await svc.getCarouselSlideUrls({ story: STORY, coverHook: "Markets just hit a three-year inflation low" });
+  const s2 = await svc.getCarouselSlideUrls({ story: STORY, coverHook: "Rate cuts are suddenly back on the table" });
+
+  // Different hooks ⇒ different variant segment ⇒ the cover bytes never collide.
+  assert.notEqual(s1[0].url, s2[0].url);
+  // A hook-less render gets the "nohook" segment, distinct from both hooked ones.
+  const s0 = await svc.getCarouselSlideUrls({ story: STORY });
+  assert.ok(s0[0].url.includes("-nohook-noill/"));
+  assert.ok(!s1[0].url.includes("-nohook-noill/"));
+});
+
+test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ distinct storage paths", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+
+  const hook = "Oracle cut 21,000 jobs in a year";
+  const a = await svc.getCarouselSlideUrls({ story: STORY, coverHook: hook, coverHighlight: "21,000 jobs" });
+  const b = await svc.getCarouselSlideUrls({ story: STORY, coverHook: hook, coverHighlight: "Oracle" });
+  // The highlighted span changes the cover bytes, so the fingerprint must differ.
+  assert.notEqual(a[0].url, b[0].url);
+});
+
+test("cardService.getIllustrationUrls: [] when OPENAI_API_KEY is absent (Tier-2 disabled)", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} }); // no OPENAI_API_KEY
+  assert.deepEqual(await svc.getIllustrationUrls({ story: STORY, anthropic: {}, count: 4 }), []);
+  assert.equal(mock.uploads.length, 0); // never generated/uploaded
 });
 
 test("cardService.getCarouselSlideUrls: returns null (non-fatal) when an upload fails", async () => {
@@ -535,8 +657,8 @@ test("waitForContainer: throws when status_code is ERROR", async () => {
 test("generatePlatformPost: IG carousel attaches slides + cover media_url when enabled", async () => {
   const cardService = {
     getCarouselSlideUrls: async ({ story }) => [
-      { url: `https://cdn.test/${story.id}/0.jpg`, index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: `https://cdn.test/${story.id}/1.jpg`, index: 1, slideType: "what", width: 1080, height: 1080 },
+      { url: `https://cdn.test/${story.id}/0.jpg`, index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: `https://cdn.test/${story.id}/1.jpg`, index: 1, slideType: "what", width: 1080, height: 1350 },
     ],
     getCardUrl: async () => "https://cdn.test/should-not-be-used.jpg",
   };
@@ -605,8 +727,8 @@ test("generateSocialPosts: AUTO_APPROVED + carousel media → IG post APPROVED (
   const cardService = {
     getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`,
     getCarouselSlideUrls: async () => [
-      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1080 },
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1350 },
     ],
   };
   await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1" });
@@ -629,10 +751,10 @@ test("generateSocialPosts: carousel slides persist as ordered instagram_carousel
   const cardService = {
     getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`, // X/FB single cards
     getCarouselSlideUrls: async () => [
-      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1080 },
-      { url: "https://cdn.test/2.jpg", index: 2, slideType: "why", width: 1080, height: 1080 },
-      { url: "https://cdn.test/3.jpg", index: 3, slideType: "cta", width: 1080, height: 1080 },
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1350 },
+      { url: "https://cdn.test/2.jpg", index: 2, slideType: "why", width: 1080, height: 1350 },
+      { url: "https://cdn.test/3.jpg", index: 3, slideType: "cta", width: 1080, height: 1350 },
     ],
   };
   await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1" });
@@ -693,8 +815,8 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
   const cardService = {
     getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.jpg`,
     getCarouselSlideUrls: async () => [
-      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: "https://cdn.test/1.jpg", index: 1, slideType: "engagement", width: 1080, height: 1080 },
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "engagement", width: 1080, height: 1350 },
     ],
   };
   const anthropic = {

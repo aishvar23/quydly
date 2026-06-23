@@ -35,6 +35,37 @@ function storyFactBlob(story) {
   return parts.filter(Boolean).join(" ");
 }
 
+// Banned clickbait phrasings for the IG cover hook (mirrors HOOK_SYSTEM's ban
+// list). The hook is rendered into the cover IMAGE, which bypasses the caption
+// validatePost path, so it is guarded deterministically here.
+const HOOK_BANNED_RE = /\byou won'?t believe\b|\bhere'?s (why|what|how)\b|\bthis is why\b|\b(break|breaks|broke|breaking)\b.{0,15}\bsilence\b|\bchanges everything\b|\bshocking\b|\bwait until you see\b/i;
+
+const HOOK_MAX_WORDS = 14; // prompt asks for 6-12; allow a little slack
+
+// Validate an LLM-generated cover hook before it is rendered into media. The
+// hook never passes through validatePost (that runs on caption text), so a
+// well-formed-but-noncompliant hook — banned phrasing, a fabricated number, or
+// an overlong line — would otherwise reach the cover image. On failure the
+// caller falls back to the raw headline (empty hook). Returns { valid, errors }.
+export function validateCoverHook({ hook, story }) {
+  const value = String(hook || "").trim();
+  if (!value) return { valid: false, errors: ["empty hook"] };
+
+  const errors = [];
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length > HOOK_MAX_WORDS) errors.push(`hook too long (${words.length} words)`);
+  if (HOOK_BANNED_RE.test(value)) errors.push("banned clickbait phrasing");
+
+  // Every number in the hook must be supported by the story facts (same rule the
+  // caption uses) — the cover must never publish a fabricated figure.
+  const allowed = new Set([...normaliseNumbers(storyFactBlob(story)), ...WHITELISTED_NUMBERS]);
+  for (const n of normaliseNumbers(value)) {
+    if (!allowed.has(n)) errors.push(`unsupported number "${n}"`);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 export function validatePost({ platform, text, story, constraints }) {
   const errors = [];
   const value = String(text || "").trim();

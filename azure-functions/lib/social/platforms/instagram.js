@@ -38,7 +38,7 @@ export function format(story, audienceGeo) {
   const summary = firstSentences(story.summary, 1);
   const kps = keyPointStrings(story).slice(0, 3);
   const know = kps.length ? `What to know:\n${bullets(kps)}` : "";
-  const cta = `Follow ${QUYDLY_IG_HANDLE()} for your daily news brief + quiz.\nPlay today's quiz → ${url}`;
+  const cta = `Follow ${QUYDLY_IG_HANDLE()} for the day's biggest stories, decoded.`;
 
   const text = truncate(
     assemble([headline, summary, know, cta], CONSTRAINTS.maxLength),
@@ -77,14 +77,12 @@ What to know:
 • {point}
 • {point}
 
-Follow ${QUYDLY_IG_HANDLE()} for your daily news brief + quiz.
-Play today's quiz → ${QUYDLY_URL()}
+Follow ${QUYDLY_IG_HANDLE()} for the day's biggest stories, decoded.
 
 RULES:
 - Max ${CONSTRAINTS.maxLength} characters. Do NOT add source links yourself — a
   "Sources" block is appended automatically.
-- Must end with the "Follow ${QUYDLY_IG_HANDLE()}" CTA followed by the
-  "Play today's quiz → ${QUYDLY_URL()}" line. No invented facts or numbers.
+- Must end with the "Follow ${QUYDLY_IG_HANDLE()}" CTA. No invented facts, numbers, or links.
 - Neutral tone for any sensitive subject. No clickbait.
 - Do NOT add hashtags yourself — a curated hashtag block is appended automatically.
 
@@ -185,6 +183,49 @@ TIMELINE ON FILE
 ${timelineLines(story)}
 
 Write the 3 historical "Why it matters" points now.`;
+}
+
+// ── Cover hook (carousel slide 1) ────────────────────────────────────────────
+//
+// The cover hook is the single line on slide 1 that has to earn the swipe. It
+// works by leading with the story's CONCRETE specifics (subject + action +
+// number/stake), never by withholding them: vague curiosity-gap clickbait
+// ("you won't believe…", "here's why…", "X breaks silence") reads as bait, gets
+// scrolled past, and is algorithmically penalised. Best-effort: empty/failed
+// generation → the renderer falls back to the raw headline (never worse than the
+// pre-feature cover).
+
+export const HOOK_SYSTEM = `You write the COVER HOOK for Quydly's daily news quiz Instagram carousel — the single line on slide 1 that must earn the swipe.
+
+A hook works by leading with the CONCRETE specifics of the story, never by withholding them. The reader should think "tell me more / why", not be teased by a hidden answer. Vague curiosity-gap clickbait gets scrolled past and is algorithmically penalised — never use it.
+
+WHAT MAKES A GOOD HOOK (use the story's strongest concrete element):
+- Lead with the recognizable subject (person / country / company) + a present-tense action, often "just …": "Iran's president just made his first foreign trip since the strikes."
+- Anchor it in a specific number, stake, or superlative when the story has one: "Manipal's $1B IPO could be India's biggest this year."
+- A short VERBATIM quote + who said it, when the story hinges on it.
+- Name the stake or consequence directly: who wins, who loses, what changes.
+
+Also pick the HIGHLIGHT: the single most important span WITHIN your hook to emphasise — the number/stat, the named subject, or the core stake. It MUST be 1-3 COMPLETE words copied verbatim from the hook, in order (whole words only — never a partial word or mid-number fragment). Prefer a number or proper noun when the hook has one. If nothing clearly deserves emphasis, return "".
+
+RULES
+- 6-12 words. Active, present tense. Plain language, no jargon.
+- Use ONLY facts, numbers, names, and quotes present in the provided story — never invent or inflate. If the story has no specific number, lead with the concrete action or stake instead; do not fabricate one.
+- Neutral and factual on any sensitive subject (conflict, death, disaster). No sensationalism, no moralising, no clickbait, no emoji, no hashtags.
+- No trailing arrow, no "swipe", no "read more", no colon-ellipsis teaser.
+- BANNED phrasings: "you won't believe", "here's why/what/how", "this is why", "breaks/broke silence", "changes everything", "shocking", "wait until you see", and ANY hook that hides the subject or the news.
+
+Respond ONLY with JSON, no markdown:
+{ "hook": "...", "highlight": "..." }`;
+
+export function buildHookPrompt(story) {
+  const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
+  return `STORY
+Headline: ${story.headline}
+Summary: ${story.summary}
+Key points:
+${facts}
+
+Write the cover hook now.`;
 }
 
 // ── Engagement slide MCQ (carousel second-to-last slide) ─────────────────────

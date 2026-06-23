@@ -33,10 +33,18 @@ const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "asse
 const BG = "#0B0F1A";
 const FG = "#FFFFFF";
 const MUTED = "#9CA3AF";
+// Cover-hook keyword highlight. HIGHLIGHT_MARKER is the filled "highlighter"
+// colour (TSJ-style) used in the default "marker" mode; "accent" mode tints the
+// key span in the category accent instead. Mode is a single brand-level choice.
+const HIGHLIGHT_MARKER = "#FFE14D";
+const HIGHLIGHT_MODE = "marker"; // "marker" | "accent"
 
 const SHAPES = {
   landscape: { width: 1600, height: 900 },
   square: { width: 1080, height: 1080 },
+  // 4:5 portrait — the carousel slide format. Takes ~25% more vertical feed
+  // space than square; the extra height becomes breathing room for the hook.
+  portrait: { width: 1080, height: 1350 },
 };
 
 // Carousel slide order. "Key points" and "Why it matters" are SEPARATE slides:
@@ -184,21 +192,85 @@ function portraitCredit(entity) {
     : credit;
 }
 
-// Surface the portrait of the story's LEAD person only. primary_entities_enriched
-// is ordered by primacy, so the first `type:"person"` entry is the lead subject.
-// We consider ONLY that lead person — we never fall through to a later person, as
-// that would put the wrong face on the cover. Returns null when there is no person
-// entity, or the lead person has no usable licensed HTTPS portrait (text-only cover).
-function leadPersonPortrait(story) {
+// Wikimedia thumbnail URLs carry a "/NNNpx-<file>" size token; bump it so the
+// large cover image isn't upscaled-blurry. Non-Wikimedia or non-thumb URLs are
+// returned unchanged.
+function upscaleWikimedia(url, px) {
+  if (typeof url !== "string") return url;
+  if (!/^https:\/\/upload\.wikimedia\.org\/.+\/thumb\//.test(url)) return url;
+  return url.replace(/\/\d+px-([^/]+)$/, `/${px}px-$1`);
+}
+
+// The image for the cover hero. primary_entities_enriched is ordered by primacy.
+// Prefer the LEAD person (first person entity) — never a later person, which
+// would put the wrong face on the cover — then fall back to the first org/place
+// with a licensed image (a logo or landmark carries no wrong-face risk and gives
+// the many non-person stories a real graphic). Only already-licensed Wikipedia/
+// override sources are used, and always credited. Returns { url, name, credit }
+// or null (text-only cover). The thumbnail is upscaled for the large render.
+// Candidate image URLs for an entity, in fetch-preference order. EVERY licensed
+// source (full override → thumbnail → Wikipedia) contributes a couple of larger
+// Wikimedia renders plus the original. The caller tries them until one fetches,
+// so a too-large full-resolution override (rejected over PORTRAIT_MAX_BYTES)
+// falls through to its smaller thumbnail rather than to the generic floor.
+// (Wikimedia 400s on a thumbnail wider than the source — hence the size ladder.)
+function entityImageUrls(e) {
+  const sources = [e?.portrait_image_url, e?.portrait_thumbnail_url, e?.wikipedia_thumbnail_url]
+    .filter((u) => typeof u === "string" && /^https:\/\//i.test(u));
+  return [...new Set(sources.flatMap((s) => [upscaleWikimedia(s, 800), upscaleWikimedia(s, 500), s]))];
+}
+
+function leadCoverImage(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
-  const lead = ents.find((e) => e && e.type === "person");
-  if (!lead) return null;
-  // Cover inset is small (~0.3× the card edge), so prefer the thumbnail over
-  // the full-resolution override image — a large press photo would otherwise
-  // download only to be rejected by PORTRAIT_MAX_BYTES.
-  const url = lead.portrait_thumbnail_url || lead.portrait_image_url || lead.wikipedia_thumbnail_url;
-  if (typeof url !== "string" || !/^https:\/\//i.test(url)) return null;
-  return { url, name: oneLine(lead.name), credit: portraitCredit(lead) };
+  const pick = (e) => {
+    if (!e) return null;
+    const urls = entityImageUrls(e);
+    return urls.length ? { urls, name: oneLine(e.name), credit: portraitCredit(e) } : null;
+  };
+  const leadPerson = pick(ents.find((e) => e && e.type === "person"));
+  if (leadPerson) return leadPerson;
+  for (const e of ents) {
+    if (e && (e.type === "org" || e.type === "place")) {
+      const img = pick(e);
+      if (img) return img;
+    }
+  }
+  return null;
+}
+
+// All entities with a licensed image, in primacy order (de-duped by name) — used
+// to spread real imagery across the body slides. Unlike the cover, body images
+// are captioned with the entity name, so a non-lead entity is fine here.
+function entityImages(story) {
+  const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
+  const out = [];
+  const seen = new Set();
+  for (const e of ents) {
+    if (!e || seen.has(e.name)) continue;
+    const urls = entityImageUrls(e);
+    if (!urls.length) continue;
+    seen.add(e.name);
+    out.push({ urls, name: oneLine(e.name), credit: portraitCredit(e) });
+  }
+  return out;
+}
+
+// Whether the story has ANY licensed entity image — lets the generator decide
+// up front whether to spend an illustration generation (only when there's no
+// photo to use).
+export function hasEntityImage(story) {
+  return entityImages(story).length > 0;
+}
+
+// Fetch the first of an image spec's candidate URLs that yields a data URI (or
+// null). Best-effort — used for both the cover and the body-slide images.
+async function resolveImage(spec, fetchImpl) {
+  if (!spec) return null;
+  for (const url of spec.urls) {
+    const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
+    if (dataUri) return { dataUri, name: spec.name, credit: spec.credit };
+  }
+  return null;
 }
 
 // Read a fetch Response body, aborting once it exceeds maxBytes. Streams via
@@ -393,14 +465,69 @@ function optionRow(letter, text, accent, size) {
   ]);
 }
 
-// The cover headline block, sized to its length.
-function coverHeadline(headline, size) {
-  return el("div", {
-    style: {
-      display: "flex", color: FG, fontWeight: 700,
-      fontSize: Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072)), lineHeight: 1.15,
-    },
-  }, headline);
+// Reduce a token to a comparison key: lowercase, strip everything except
+// alphanumerics, $ and % (so "21,000" and "strikes." compare cleanly).
+function hlKey(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9$%]/g, "");
+}
+
+// Indices of the words in `words` that fall inside `highlight` — the first
+// contiguous run whose normalised tokens match the highlight's. Empty set when
+// the highlight is blank or not found (→ the cover renders without emphasis).
+function highlightWordIndices(words, highlight) {
+  const set = new Set();
+  const hi = String(highlight || "").split(/\s+/).map(hlKey).filter(Boolean);
+  if (!hi.length) return set;
+  // Match over only the words with a non-empty key, keeping their original index,
+  // so a punctuation-only token (e.g. a standalone "—") between two highlighted
+  // words doesn't break the contiguous run.
+  const toks = [];
+  words.forEach((w, idx) => { const k = hlKey(w); if (k) toks.push({ idx, k }); });
+  for (let i = 0; i + hi.length <= toks.length; i++) {
+    let match = true;
+    for (let j = 0; j < hi.length; j++) { if (toks[i + j].k !== hi[j]) { match = false; break; } }
+    if (match) { for (let j = 0; j < hi.length; j++) set.add(toks[i + j].idx); return set; }
+  }
+  return set;
+}
+
+// The cover headline block, sized to its length. When `highlight` matches a span
+// of the hook, those words are emphasised (filled marker, or accent-tinted text
+// in "accent" mode) — rendered as word-level flex items so the line wraps
+// naturally while the highlight hugs only its words. Falls back to a single plain
+// text node when there is nothing to highlight (the pre-highlight layout).
+function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, accent = FG } = {}) {
+  const fontSize = Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072));
+  const words = headline.split(/\s+/).filter(Boolean);
+  const hi = highlightWordIndices(words, highlight);
+
+  if (!hi.size) {
+    return el("div", { style: { display: "flex", color: FG, fontWeight: 700, fontSize, lineHeight: 1.15 } }, headline);
+  }
+
+  const gap = Math.round(fontSize * 0.26);     // inter-word space
+  const rowGap = Math.round(fontSize * 0.2);   // line spacing between wrapped rows
+  const padX = Math.round(fontSize * 0.14);
+  const base = { display: "flex", fontWeight: 700, fontSize, lineHeight: 1.15, marginRight: gap, marginBottom: rowGap };
+
+  // The highlight span is contiguous, so render it as ONE block (a single
+  // continuous marker box / accent run) rather than a box per word. As an
+  // unbreakable unit it also wraps whole to the next line if it doesn't fit.
+  const idx = [...hi].sort((a, b) => a - b);
+  const hiStart = idx[0];
+  const hiEnd = idx[idx.length - 1];
+  const children = [];
+  for (let i = 0; i < words.length; i++) {
+    if (i < hiStart || i > hiEnd) {
+      children.push(el("div", { style: { ...base, color: FG } }, words[i]));
+    } else if (i === hiStart) {
+      const phrase = words.slice(hiStart, hiEnd + 1).join(" ");
+      children.push(mode === "accent"
+        ? el("div", { style: { ...base, color: accent } }, phrase)
+        : el("div", { style: { ...base, color: BG, backgroundColor: HIGHLIGHT_MARKER, paddingLeft: padX, paddingRight: padX, borderRadius: Math.round(fontSize * 0.09) } }, phrase));
+    } // words strictly inside (hiStart, hiEnd] are folded into the phrase above
+  }
+  return el("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "flex-start" } }, children);
 }
 
 // "Tuesday · 3 June 2026" eyebrow above the cover headline. Returns null when
@@ -416,53 +543,124 @@ function coverDateRow(story, accent, size) {
   }, text);
 }
 
-// Circular portrait + name + credit, shown above the headline on the cover when
-// the story is about a person and a licensed photo resolved.
-function coverPortraitBlock({ portrait, accent, size }) {
-  const photo = Math.round(size * 0.3);
-  const meta = [];
-  if (portrait.name) {
-    meta.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG } }, portrait.name));
+// A rounded photo (a licensed entity image) with a name + "Photo: …" credit
+// beneath. The cover uses a large hero (heightRatio 0.46); body slides reuse it
+// smaller (≈0.3) to spread real imagery across the carousel without crowding the
+// text. This is the slide's main visual, so non-person stories with an org/place
+// image read as graphic, not bland.
+function imageHero({ image, size, widthRatio = 1, heightRatio = 0.46, marginRatio = 0.038 }) {
+  const fullW = Math.round(size * (1 - 2 * PAD_X_RATIO));
+  const photoW = Math.round(fullW * widthRatio);
+  const photoH = Math.round(size * heightRatio);
+  const caption = [];
+  if (image.name) {
+    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), fontWeight: 700, color: FG } }, image.name));
   }
-  if (portrait.credit) {
-    meta.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: 6 } }, `Photo: ${portrait.credit}`));
+  if (image.credit) {
+    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.018), color: MUTED, marginLeft: "auto" } }, `Photo: ${image.credit}`));
   }
-  return el("div", { style: { display: "flex", alignItems: "center", marginBottom: Math.round(size * 0.05) } }, [
+  const children = [
     el("img", {
-      src: portrait.dataUri, width: photo, height: photo,
-      style: {
-        width: photo, height: photo, borderRadius: 999, objectFit: "cover",
-        marginRight: Math.round(size * 0.045), border: `${Math.round(size * 0.006)}px solid ${accent}`,
-      },
+      src: image.dataUri, width: photoW, height: photoH,
+      // objectPosition biases the crop toward the upper third so headshots keep
+      // the face (a centred crop on a tall portrait decapitates it).
+      style: { width: photoW, height: photoH, objectFit: "cover", objectPosition: "center 25%", borderRadius: Math.round(size * 0.028) },
     }),
-    el("div", { style: { display: "flex", flexDirection: "column" } }, meta),
+  ];
+  if (caption.length) {
+    children.push(el("div", {
+      style: { display: "flex", alignItems: "center", width: photoW, marginTop: Math.round(size * 0.016) },
+    }, caption));
+  }
+  // A sub-full-width image is centred in the slide.
+  const center = widthRatio < 1 ? { marginLeft: "auto", marginRight: "auto" } : {};
+  return el("div", { style: { display: "flex", flexDirection: "column", width: photoW, ...center, marginBottom: Math.round(size * marginRatio) } }, children);
+}
+
+// Shift a #rrggbb hex by `amt` per channel (negative darkens). Used to build the
+// brand-graphic gradient from a category accent.
+function shade(hex, amt) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const ch = (shiftBits) => Math.max(0, Math.min(255, ((n >> shiftBits) & 255) + amt));
+  return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0")}`;
+}
+
+// The guaranteed-imagery FLOOR: a designed brand graphic for slides with no
+// licensed photo, so a card is NEVER bare text. A category-accent diagonal
+// gradient with soft rings and the category label — honest (clearly a Quydly
+// graphic, not a fake news photo) and always available. `seed` (the slide index)
+// rotates the gradient so a photoless story's slides aren't identical blocks.
+function brandGraphic({ category, accent, size, seed = 0, widthRatio = 1, heightRatio = 0.46, marginRatio = 0.038 }) {
+  const fullW = Math.round(size * (1 - 2 * PAD_X_RATIO));
+  const w = Math.round(fullW * widthRatio);
+  const h = Math.round(size * heightRatio);
+  const angle = 110 + (seed % 4) * 35; // vary the gradient per slide
+  const center = widthRatio < 1 ? { marginLeft: "auto", marginRight: "auto" } : {};
+  return el("div", {
+    style: {
+      display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center",
+      width: w, height: h, ...center, marginBottom: Math.round(size * marginRatio),
+      borderRadius: Math.round(size * 0.028),
+      backgroundImage: `linear-gradient(${angle}deg, ${shade(accent, 22)}, ${shade(accent, -78)})`,
+    },
+  }, [
+    el("div", {
+      style: { display: "flex", fontSize: Math.round(size * 0.066), fontWeight: 700, color: "#FFFFFF", letterSpacing: 2, textTransform: "uppercase" },
+    }, oneLine(category || "news")),
+    el("div", {
+      style: { display: "flex", fontSize: Math.round(size * 0.019), fontWeight: 700, color: "#FFFFFF", opacity: 0.72, letterSpacing: 4, textTransform: "uppercase", marginTop: Math.round(size * 0.012) },
+    }, "Quydly"),
   ]);
 }
 
 // Build the inner body for one slide kind. `size` is the square edge length.
 // `portrait` (cover only) is { dataUri, name, credit } or null. `question`
 // (engagement only) is the MCQ { question, options, correctIndex } or null.
-function slideBody({ kind, story, accent, size, portrait, whyItMatters, question }) {
+function slideBody({ kind, story, accent, size, index = 0, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
+  const category = oneLine(story?.category_id || "news");
+
+  // Body slides ("what"/"key points"/"why") get a visual above their text: the
+  // resolved entity image when there is one, else the brand-graphic floor — so a
+  // body slide is never bare text.
+  const withImage = (content) => el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    (slideImage && slideImage.dataUri)
+      ? imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 })
+      : brandGraphic({ category, accent, size, seed: index, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 }),
+    content,
+  ]);
 
   if (kind === "cover") {
-    const dateRow = coverDateRow(story, accent, size);
+    // Prefer the concrete hook generated upstream for the cover; fall back to the
+    // raw headline when none was supplied. The highlight belongs to the HOOK, so
+    // it is dropped on the headline fallback — both so the fallback isn't randomly
+    // emphasised and so its bytes match the shared "nohook" cache/storage variant.
+    const hookText = oneLine(coverHook);
+    const cover = hookText || headline;
     const children = [];
+    // The cover ALWAYS leads with a visual — the licensed photo when resolved,
+    // else the brand-graphic floor — so a post is never imageless.
+    children.push(portrait && portrait.dataUri
+      ? imageHero({ image: portrait, size })
+      : brandGraphic({ category, accent, size, seed: 0 }));
+    const dateRow = coverDateRow(story, accent, size);
     if (dateRow) children.push(dateRow);
-    if (portrait && portrait.dataUri) children.push(coverPortraitBlock({ portrait, accent, size }));
-    children.push(coverHeadline(headline, size));
-    // Single child and no date → keep the original bare-headline node (matches
-    // the pre-feature layout exactly for stories with no publish date).
-    if (children.length === 1) return children[0];
+    children.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
     return el("div", { style: { display: "flex", flexDirection: "column" } }, children);
   }
 
   if (kind === "what") {
-    const summary = firstSentences(story?.summary, 3) || headline;
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    // Density: a single lede sentence (not a paragraph), larger type and line
+    // height. News sentences run long, so cutting the COUNT to one — not two — is
+    // what actually keeps the slide skimmable; the 4:5 slide carries the rest as
+    // whitespace, and the key-points slide picks up the detail.
+    const summary = firstSentences(story?.summary, 1) || headline;
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("What happened", accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.044), color: FG, lineHeight: 1.3 } }, summary),
-    ]);
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4 } }, summary),
+    ]));
   }
 
   if (kind === "keypoints") {
@@ -471,10 +669,10 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     const rows = points.length
       ? points.map((p) => bulletRow(p, accent, size))
       : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Key points", accent, size),
       ...rows,
-    ]);
+    ]));
   }
 
   if (kind === "why") {
@@ -486,10 +684,10 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     const rows = why.length
       ? why.map((p) => bulletRow(p, accent, size))
       : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Why it matters", accent, size),
       ...rows,
-    ]);
+    ]));
   }
 
   if (kind === "engagement") {
@@ -511,37 +709,36 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     ]);
   }
 
-  // cta — lead with the follow ask (the durable value), with the daily-quiz
-  // ritual as the supporting line. The handle sits in the category accent colour.
+  // cta — a pure follow ask. The handle is the hero; the supporting line is a
+  // CONTENT promise, not the quiz (we no longer funnel IG traffic to the quiz).
   return el("div", { style: { display: "flex", flexDirection: "column" } }, [
     el("div", {
-      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.062), lineHeight: 1.15, marginBottom: Math.round(size * 0.014) },
+      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.058), lineHeight: 1.15, marginBottom: Math.round(size * 0.016) },
     }, "Follow for tomorrow's brief"),
     el("div", {
-      style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.05), lineHeight: 1.2, marginBottom: Math.round(size * 0.045) },
+      style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.056), lineHeight: 1.2, marginBottom: Math.round(size * 0.04) },
     }, QUYDLY_IG_HANDLE()),
     el("div", {
-      style: { display: "flex", fontSize: Math.round(size * 0.038), color: MUTED, lineHeight: 1.35 },
-    }, "Daily news quiz · 5 questions · ~3 min · resets daily"),
+      style: { display: "flex", fontSize: Math.round(size * 0.04), color: MUTED, lineHeight: 1.35 },
+    }, "The day's biggest stories, decoded."),
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, portrait, whyItMatters, question }) {
+function slideTree({ kind, story, accent, category, index, total, size, height, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
-  const hint = kind === "cta" ? "quydly.com"
-    : (kind === "cover" ? "Swipe to read →"
-    : (kind === "engagement" ? "Tap to comment →" : ""));
+  const hint = kind === "cover" ? "Swipe to read →"
+    : (kind === "engagement" ? "Tap to comment →" : "");
   return el("div", {
     style: {
-      width: size, height: size, display: "flex", flexDirection: "column",
+      width: size, height, display: "flex", flexDirection: "column",
       justifyContent: "space-between", backgroundColor: BG,
       padding: `${padY}px ${padX}px`, fontFamily: "Lato",
     },
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait, whyItMatters, question }),
+      slideBody({ kind, story, accent, size, index, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -550,12 +747,13 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
 // Render the full Instagram carousel as ordered JPEG slides. Defaults to JPEG
 // because the Instagram Graph API rejects non-JPEG media containers.
 //
-// When `withPortrait` is on and the story is about a person, the cover slide
-// gains a circular portrait inset (licensed photo + credit). Resolving the
-// portrait is best-effort and happens once up front; any failure leaves the
-// cover text-only. `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, fetchImpl } = {}) {
-  const { width: size } = SHAPES.square;
+// When `withPortrait` is on, the cover slide gains a large licensed image of the
+// lead entity (person, else org/place) with a credit. Resolving the image is
+// best-effort and happens once up front; any failure leaves the cover text-only.
+// `fetchImpl` is injectable for tests.
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], fetchImpl } = {}) {
+  const { width, height } = SHAPES.portrait;
+  const size = width; // scaling base for typography/padding; height adds 4:5 room
   const accent = accentFor(story?.category_id);
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
@@ -566,12 +764,40 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   const slideList = slides || carouselSlidesFor(whyItMatters, question);
   const total = slideList.length;
 
+  // Resolve real imagery once, up front, and spread it across the carousel: the
+  // cover gets the lead entity (face-first, with the no-wrong-face guard); the
+  // text body slides ("what"/"key points"/"why" that are present) each get a
+  // DIFFERENT story entity's image, captioned. All best-effort and in parallel —
+  // any miss leaves that slide text-only. Gated by withPortrait.
   let portrait = null;
-  if (withPortrait && slideList.includes("cover")) {
-    const lead = leadPersonPortrait(story);
-    if (lead) {
-      const dataUri = await fetchImageDataUri(lead.url, fetchImpl ? { fetchImpl } : {});
-      if (dataUri) portrait = { dataUri, name: lead.name, credit: lead.credit };
+  const bodyImageByKind = {};
+  if (withPortrait) {
+    // Each text/cover slide gets its OWN visual, resolved independently: the
+    // licensed entity photo when there is one, else the per-slide generated
+    // illustration (Tier 2), else (in slideBody) the brand-graphic floor.
+    const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
+    const coverSpec = slideList.includes("cover") ? leadCoverImage(story) : null;
+    const bodyKinds = contentKinds.filter((k) => k !== "cover");
+    const bodySpecs = entityImages(story).filter((s) => s.name !== coverSpec?.name).slice(0, bodyKinds.length);
+    const specByKind = {};
+    if (slideList.includes("cover")) specByKind.cover = coverSpec;
+    bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
+    const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
+    const illByKind = {};
+    contentKinds.forEach((k, i) => { illByKind[k] = ill[i] || null; });
+
+    const resolved = await Promise.all(contentKinds.map(async (k) => {
+      const photo = await resolveImage(specByKind[k], fetchImpl);
+      if (photo) return [k, photo];
+      if (illByKind[k]) {
+        const dataUri = await fetchImageDataUri(illByKind[k], fetchImpl ? { fetchImpl } : {});
+        if (dataUri) return [k, { dataUri }]; // illustration — no caption (not a photo)
+      }
+      return [k, null];
+    }));
+    for (const [k, img] of resolved) {
+      if (!img) continue;
+      if (k === "cover") portrait = img; else bodyImageByKind[k] = img;
     }
   }
 
@@ -579,11 +805,11 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null }),
-      { width: size, height: size, fonts }
+      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, slideImage: bodyImageByKind[kind] || null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null, coverHighlight: kind === "cover" ? coverHighlight : null, highlightMode }),
+      { width, height, fonts }
     );
-    const { buffer, contentType } = rasterize(svg, { width: size, format });
-    out.push({ buffer, contentType, width: size, height: size, slideType: kind, index });
+    const { buffer, contentType } = rasterize(svg, { width, format });
+    out.push({ buffer, contentType, width, height, slideType: kind, index });
   }
   return out;
 }

@@ -10,7 +10,7 @@
 // No external social API calls happen here — drafts are review-first.
 
 import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
-import { validatePost } from "./social-validation.js";
+import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 
@@ -81,6 +81,50 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
   }
 }
 
+// Generate the carousel COVER HOOK (slide 1) — a 6-12 word concrete, swipe-
+// earning line that leads with the story's specifics, plus the key span to
+// emphasise. Returns { hook, highlight } (both strings; highlight is a verbatim
+// substring of hook or ""), or { hook: "", highlight: "" } on any failure — the
+// renderer then falls back to the raw headline, so a failure here is never worse
+// than the pre-feature cover. Best-effort and additive: must not throw.
+async function generateCoverHook(anthropic, platform, story, logger) {
+  try {
+    const msg = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 160,
+      system: platform.HOOK_SYSTEM,
+      messages: [{ role: "user", content: platform.buildHookPrompt(story) }],
+    });
+
+    let raw = String(msg?.content?.[0]?.text || "").trim();
+    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+
+    const parsed = JSON.parse(raw);
+    const hook = typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
+    const highlight = typeof parsed?.highlight === "string" ? parsed.highlight.trim() : "";
+
+    // The hook is rendered into the cover IMAGE and never sees validatePost, so
+    // guard it deterministically: a banned phrase, fabricated number, or overlong
+    // line falls back to the raw headline (empty hook → no highlight either).
+    const { valid, errors } = validateCoverHook({ hook, story });
+    if (!valid) {
+      logger.warn(JSON.stringify({
+        event: "social_cover_hook_rejected", platform: platform.PLATFORM, story_id: story.id, errors,
+      }));
+      return { hook: "", highlight: "" };
+    }
+    return { hook, highlight };
+  } catch (err) {
+    logger.warn(JSON.stringify({
+      event: "social_cover_hook_failed",
+      platform: platform.PLATFORM,
+      story_id: story.id,
+      error: err.message,
+    }));
+    return { hook: "", highlight: "" };
+  }
+}
+
 // Build one platform draft. Deterministic by default; LLM copy only when it
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
@@ -100,6 +144,30 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       if (anthropic && platform.buildWhyItMattersPrompt) {
         whyItMatters = await generateWhyItMatters(anthropic, platform, story, logger);
       }
+      // Cover hook (slide 1): a concrete, swipe-earning line that replaces the raw
+      // headline on the cover, plus the key span to emphasise. Best-effort: empty
+      // → renderer falls back to the plain headline.
+      let coverHook = "";
+      let coverHighlight = "";
+      if (anthropic && platform.buildHookPrompt) {
+        ({ hook: coverHook, highlight: coverHighlight } = await generateCoverHook(anthropic, platform, story, logger));
+      }
+      // Editorial illustrations (Tier 2): only when the story has NO licensed
+      // photo (otherwise photos win). One DISTINCT illustration per content slide
+      // (cover + what + key points + why-if-present). Best-effort: any null slot
+      // → that slide uses the brand-graphic floor.
+      let illustrationUrls = [];
+      if (anthropic && cardService.getIllustrationUrls) {
+        // Lazy import: hasEntityImage lives in card-renderer (which pulls
+        // satori/resvg), so import it only here — inside the cards-enabled branch,
+        // where the renderer is already loaded — never at module load (that would
+        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js).
+        const { hasEntityImage } = await import("./card-renderer.js");
+        if (!hasEntityImage(story)) {
+          const illCount = 3 + (whyItMatters.length ? 1 : 0);
+          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: illCount });
+        }
+      }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
       // PREVIOUS post's story in the SAME category, inserted second-to-last
       // (before the CTA). Best-
@@ -111,7 +179,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion });
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;
