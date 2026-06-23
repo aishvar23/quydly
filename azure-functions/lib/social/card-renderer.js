@@ -126,6 +126,24 @@ function coverDateLine(story) {
   return `${WEEKDAYS[ist.getUTCDay()]} · ${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]} ${ist.getUTCFullYear()}`;
 }
 
+// A short "via <source>" attribution for the cover, drawn from the highest-
+// authority source document the synthesiser attached (stories.source_documents
+// is persisted authority-first — see platforms/_sources.js). Prefers the human
+// issuer name ("Reuters"); falls back to the bare hostname of the source URL
+// (www. stripped). Returns "" when no usable source exists (cover omits the line
+// rather than inventing one). Mirrors the @vesting cover's source badge.
+function coverSource(story) {
+  const docs = Array.isArray(story?.source_documents) ? story.source_documents : [];
+  for (const d of docs) {
+    const issuer = oneLine(d?.issuer);
+    if (issuer) return issuer.slice(0, 40);
+    const url = typeof d?.url === "string" ? d.url : "";
+    const m = /^https?:\/\/(?:www\.)?([^/]+)/i.exec(url);
+    if (m) return m[1].toLowerCase();
+  }
+  return "";
+}
+
 let _fonts = null;
 async function loadFonts() {
   if (_fonts) return _fonts;
@@ -531,14 +549,17 @@ function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, 
 }
 
 // "Tuesday · 3 June 2026" eyebrow above the cover headline. Returns null when
-// the story has no usable publish date (cover then renders headline-only).
-function coverDateRow(story, accent, size) {
+// the story has no usable publish date (cover then renders headline-only). Light
+// neutral (not the category accent) so it stays legible over ANY cover image —
+// an accent-coloured date washes out against a same-hue photo (e.g. green over
+// grass); the dark scrim makes a near-white eyebrow read everywhere.
+function coverDateRow(story, size) {
   const text = coverDateLine(story);
   if (!text) return null;
   return el("div", {
     style: {
       display: "flex", fontSize: Math.round(size * 0.026), fontWeight: 700,
-      color: accent, letterSpacing: 1, marginBottom: Math.round(size * 0.035),
+      color: "rgba(255,255,255,0.82)", letterSpacing: 1, marginBottom: Math.round(size * 0.035),
     },
   }, text);
 }
@@ -616,9 +637,10 @@ function brandGraphic({ category, accent, size, seed = 0, widthRatio = 1, height
 }
 
 // Build the inner body for one slide kind. `size` is the square edge length.
-// `portrait` (cover only) is { dataUri, name, credit } or null. `question`
-// (engagement only) is the MCQ { question, options, correctIndex } or null.
-function slideBody({ kind, story, accent, size, index = 0, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
+// `question` (engagement only) is the MCQ { question, options, correctIndex } or
+// null. The "cover" slide is NOT built here — it has its own full-bleed layout
+// (coverTree); slideBody covers the padded text body slides only.
+function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatters, question }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
   const category = oneLine(story?.category_id || "news");
 
@@ -631,25 +653,6 @@ function slideBody({ kind, story, accent, size, index = 0, portrait, slideImage,
       : brandGraphic({ category, accent, size, seed: index, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 }),
     content,
   ]);
-
-  if (kind === "cover") {
-    // Prefer the concrete hook generated upstream for the cover; fall back to the
-    // raw headline when none was supplied. The highlight belongs to the HOOK, so
-    // it is dropped on the headline fallback — both so the fallback isn't randomly
-    // emphasised and so its bytes match the shared "nohook" cache/storage variant.
-    const hookText = oneLine(coverHook);
-    const cover = hookText || headline;
-    const children = [];
-    // The cover ALWAYS leads with a visual — the licensed photo when resolved,
-    // else the brand-graphic floor — so a post is never imageless.
-    children.push(portrait && portrait.dataUri
-      ? imageHero({ image: portrait, size })
-      : brandGraphic({ category, accent, size, seed: 0 }));
-    const dateRow = coverDateRow(story, accent, size);
-    if (dateRow) children.push(dateRow);
-    children.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, children);
-  }
 
   if (kind === "what") {
     // Density: a single lede sentence (not a paragraph), larger type and line
@@ -724,11 +727,13 @@ function slideBody({ kind, story, accent, size, index = 0, portrait, slideImage,
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, height, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }) {
+// The padded text body slides (what / key points / why / engagement / cta).
+// The cover is rendered separately by coverTree (full-bleed), so this only ever
+// sees non-cover kinds.
+function slideTree({ kind, story, accent, category, index, total, size, height, slideImage, whyItMatters, question }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
-  const hint = kind === "cover" ? "Swipe to read →"
-    : (kind === "engagement" ? "Tap to comment →" : "");
+  const hint = kind === "engagement" ? "Tap to comment →" : "";
   return el("div", {
     style: {
       width: size, height, display: "flex", flexDirection: "column",
@@ -738,10 +743,83 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, index, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
+      slideBody({ kind, story, accent, size, index, slideImage, whyItMatters, question }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
+}
+
+// The cover slide — its own FULL-BLEED layout (vs slideTree's padded card). The
+// editorial image fills the frame; a bottom-weighted scrim guarantees the hook
+// reads over any image; the bold, keyword-highlighted hook is anchored at the
+// bottom with the brand wordmark/category on top and a source line — matching
+// the craft of top faceless-news carousels (e.g. @vesting). `portrait` is the
+// already-resolved cover image ({ dataUri, ... }) or null (→ category-gradient
+// fallback, so the cover is never bare).
+function coverTree({ story, accent, category, size, height, portrait, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
+  const padX = Math.round(size * PAD_X_RATIO);
+  const padY = Math.round(size * PAD_Y_RATIO);
+  // Prefer the concrete upstream hook; fall back to the raw headline. The
+  // highlight belongs to the HOOK, so it is dropped on the headline fallback.
+  const hookText = oneLine(coverHook);
+  const cover = hookText || oneLine(story?.headline) || "Today's news quiz";
+  const source = coverSource(story);
+
+  // Layer 1 — full-bleed background: the editorial image, else a category-accent
+  // diagonal gradient (the imagery floor) so a post is never bare.
+  const background = portrait && portrait.dataUri
+    ? el("img", {
+        src: portrait.dataUri, width: size, height,
+        // Bias the crop toward the upper third so headshots keep the face.
+        style: { position: "absolute", top: 0, left: 0, width: size, height, objectFit: "cover", objectPosition: "center 28%" },
+      })
+    : el("div", {
+        style: {
+          position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
+          backgroundImage: `linear-gradient(135deg, ${shade(accent, 22)}, ${shade(accent, -82)})`,
+        },
+      }, []);
+
+  // Layer 2 — legibility scrim (transparent at top → near-opaque BG at bottom).
+  const scrim = el("div", {
+    style: {
+      position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
+      backgroundImage: "linear-gradient(180deg, rgba(11,15,26,0) 16%, rgba(11,15,26,0.30) 40%, rgba(11,15,26,0.72) 62%, rgba(11,15,26,0.95) 100%)",
+    },
+  }, []);
+
+  // Layer 3 — top chrome over the image: brand wordmark + category chip.
+  const topChrome = el("div", {
+    style: { position: "absolute", top: padY, left: padX, right: padX, display: "flex", alignItems: "center", justifyContent: "space-between" },
+  }, [
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG, letterSpacing: 1 } }, "QUYDLY"),
+    el("div", {
+      style: {
+        display: "flex", fontSize: Math.round(size * 0.022), fontWeight: 700,
+        color: BG, backgroundColor: accent, padding: "10px 22px", borderRadius: 999,
+        textTransform: "uppercase", letterSpacing: 1,
+      },
+    }, category),
+  ]);
+
+  // Layer 4 — bottom content: date eyebrow, the hook, then a source + swipe row.
+  const bottomChildren = [];
+  const dateRow = coverDateRow(story, size);
+  if (dateRow) bottomChildren.push(dateRow);
+  bottomChildren.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
+  const metaRow = [];
+  if (source) metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: MUTED, letterSpacing: 1 } }, `via ${source}`));
+  metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), color: FG, marginLeft: "auto" } }, "Swipe to read →"));
+  bottomChildren.push(el("div", {
+    style: { display: "flex", alignItems: "center", width: "100%", marginTop: Math.round(size * 0.03) },
+  }, metaRow));
+  const bottom = el("div", {
+    style: { position: "absolute", bottom: padY, left: padX, right: padX, display: "flex", flexDirection: "column" },
+  }, bottomChildren);
+
+  return el("div", {
+    style: { position: "relative", display: "flex", width: size, height, backgroundColor: BG, fontFamily: "Lato" },
+  }, [background, scrim, topChrome, bottom]);
 }
 
 // Render the full Instagram carousel as ordered JPEG slides. Defaults to JPEG
@@ -804,10 +882,12 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   const out = [];
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
-    const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, slideImage: bodyImageByKind[kind] || null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null, coverHighlight: kind === "cover" ? coverHighlight : null, highlightMode }),
-      { width, height, fonts }
-    );
+    // The cover gets its own full-bleed layout; every other slide is a padded
+    // text card via slideTree.
+    const tree = kind === "cover"
+      ? coverTree({ story, accent, category, size, height, portrait, coverHook, coverHighlight, highlightMode })
+      : slideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters, question: kind === "engagement" ? question : null });
+    const svg = await satori(tree, { width, height, fonts });
     const { buffer, contentType } = rasterize(svg, { width, format });
     out.push({ buffer, contentType, width, height, slideType: kind, index });
   }
