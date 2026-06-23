@@ -421,9 +421,12 @@ export async function renderStoryCard(story, { shape = "landscape", format = "pn
 
 // Shared chrome: brand + category chip on top, page indicator on the bottom
 // right, so the four slides read as one set.
-function slideHeader({ category, accent, size }) {
-  return el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, [
-    el("div", { style: { fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG, letterSpacing: 1 } }, "QUYDLY"),
+// The brand wordmark + category chip shown at the top of every slide. Shared by
+// the padded body slides (slideHeader) and the full-bleed cover (coverTree) so
+// the chrome can't drift between the two layouts.
+function brandMarks({ category, accent, size }) {
+  return [
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG, letterSpacing: 1 } }, "QUYDLY"),
     el("div", {
       style: {
         display: "flex", fontSize: Math.round(size * 0.022), fontWeight: 700,
@@ -431,7 +434,11 @@ function slideHeader({ category, accent, size }) {
         textTransform: "uppercase", letterSpacing: 1,
       },
     }, category),
-  ]);
+  ];
+}
+
+function slideHeader({ category, accent, size }) {
+  return el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, brandMarks({ category, accent, size }));
 }
 
 function slideFooter({ accent, size, index, total, hint }) {
@@ -716,6 +723,23 @@ function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatt
     content,
   ]);
 
+  // "Key points" and "Why it matters" share one layout: an eyebrow + up to three
+  // bullets auto-fit to the card (fitBulletSlide shrinks the image + font, and
+  // trims only as a last resort), with a summary fallback when no points exist.
+  const bulletSlide = (label, points) => {
+    if (points.length) {
+      const fit = fitBulletSlide(points, size);
+      return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
+        eyebrow(label, accent, size),
+        ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx)),
+      ]), fit.imageRatio);
+    }
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
+      eyebrow(label, accent, size),
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
+    ]));
+  };
+
   if (kind === "what") {
     // Density: a single lede sentence (not a paragraph), larger type and line
     // height. News sentences run long, so cutting the COUNT to one — not two — is
@@ -729,40 +753,15 @@ function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatt
   }
 
   if (kind === "keypoints") {
-    // Today's key_points (the slide formerly labelled "Why it matters"). Long
-    // bullets are auto-fit (font + image shrink together) so the last point can
-    // never clip off the bottom of the card.
-    const points = keyPoints(story).slice(0, 3);
-    if (points.length) {
-      const fit = fitBulletSlide(points, size);
-      return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-        eyebrow("Key points", accent, size),
-        ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx)),
-      ]), fit.imageRatio);
-    }
-    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow("Key points", accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
-    ]));
+    // Today's key_points (the slide formerly labelled "Why it matters").
+    return bulletSlide("Key points", keyPoints(story).slice(0, 3));
   }
 
   if (kind === "why") {
     // The historical "Why it matters" points (LLM-generated, passed in via
-    // whyItMatters) on their own slide. This slide is only included in the set
-    // when points exist (see carouselSlidesFor); the summary fallback guards the
-    // case where the slide is requested explicitly without points.
-    const why = (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : []).slice(0, 3);
-    if (why.length) {
-      const fit = fitBulletSlide(why, size);
-      return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-        eyebrow("Why it matters", accent, size),
-        ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx)),
-      ]), fit.imageRatio);
-    }
-    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow("Why it matters", accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
-    ]));
+    // whyItMatters). Only included in the set when points exist (see
+    // carouselSlidesFor); the summary fallback guards an explicit request.
+    return bulletSlide("Why it matters", (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : []).slice(0, 3));
   }
 
   if (kind === "engagement") {
@@ -863,24 +862,22 @@ function coverTree({ story, accent, category, size, height, portrait, coverHook,
   // Layer 3 — top chrome over the image: brand wordmark + category chip.
   const topChrome = el("div", {
     style: { position: "absolute", top: padY, left: padX, right: padX, display: "flex", alignItems: "center", justifyContent: "space-between" },
-  }, [
-    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG, letterSpacing: 1 } }, "QUYDLY"),
-    el("div", {
-      style: {
-        display: "flex", fontSize: Math.round(size * 0.022), fontWeight: 700,
-        color: BG, backgroundColor: accent, padding: "10px 22px", borderRadius: 999,
-        textTransform: "uppercase", letterSpacing: 1,
-      },
-    }, category),
-  ]);
+  }, brandMarks({ category, accent, size }));
 
-  // Layer 4 — bottom content: date eyebrow, the hook, then a source + swipe row.
+  // Attribution for the bottom-left slot. A licensed cover PHOTO (Wikipedia /
+  // editorial override) MUST carry its credit — never render one without telling
+  // the viewer where it came from (migration_data_quality_p2_5). An illustration
+  // or the gradient floor has no photo credit, so fall back to the news source.
+  const credit = oneLine(portrait?.credit);
+  const attribution = credit ? `Photo: ${credit}` : (source ? `via ${source}` : "");
+
+  // Layer 4 — bottom content: date eyebrow, the hook, then an attribution + swipe row.
   const bottomChildren = [];
   const dateRow = coverDateRow(story, size);
   if (dateRow) bottomChildren.push(dateRow);
   bottomChildren.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
   const metaRow = [];
-  if (source) metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: MUTED, letterSpacing: 1 } }, `via ${source}`));
+  if (attribution) metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: MUTED, letterSpacing: 1 } }, attribution));
   metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), color: FG, marginLeft: "auto" } }, "Swipe to read →"));
   bottomChildren.push(el("div", {
     style: { display: "flex", alignItems: "center", width: "100%", marginTop: Math.round(size * 0.03) },
