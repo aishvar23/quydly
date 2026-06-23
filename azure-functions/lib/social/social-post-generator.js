@@ -153,12 +153,14 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       if (anthropic && platform.buildHookPrompt) {
         ({ hook: coverHook, highlight: coverHighlight } = await generateCoverHook(anthropic, platform, story, logger));
       }
-      // Editorial illustration (Tier 2): only when the story has NO licensed photo
-      // (otherwise the photo wins) and the cardService + key are configured.
-      // Best-effort: null → renderer uses the brand-graphic floor.
-      let illustrationUrl = null;
-      if (anthropic && cardService.getIllustrationUrl && !hasEntityImage(story)) {
-        illustrationUrl = await cardService.getIllustrationUrl({ story, anthropic });
+      // Editorial illustrations (Tier 2): only when the story has NO licensed
+      // photo (otherwise photos win). One DISTINCT illustration per content slide
+      // (cover + what + key points + why-if-present). Best-effort: any null slot
+      // → that slide uses the brand-graphic floor.
+      let illustrationUrls = [];
+      if (anthropic && cardService.getIllustrationUrls && !hasEntityImage(story)) {
+        const illCount = 3 + (whyItMatters.length ? 1 : 0);
+        illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: illCount });
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
       // PREVIOUS post's story in the SAME category, inserted second-to-last
@@ -171,7 +173,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrl });
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;

@@ -12,7 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { renderStoryCard, renderCarouselSlides } from "./card-renderer.js";
-import { generateIllustration } from "./illustration.js";
+import { generateIllustrations } from "./illustration.js";
 
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
@@ -107,8 +107,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Keying only on story.id let a later render upsert-overwrite an earlier post's
   // slide, so that post could publish the wrong engagement question while its
   // social_post_engagement row still held the original Q&A (wrong 12h answer).
-  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrl = null, variant }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrl }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
@@ -118,25 +118,34 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     return out;
   }
 
-  // Generate (once per story) a stylized editorial illustration and upload it,
-  // returning its public URL — the Tier-2 cover image for stories with no
-  // licensed photo. Best-effort: null when disabled, no client, or generation
-  // fails (the renderer then falls back to the brand-graphic floor). Memoised so
-  // the expensive generation runs at most once per story.
-  async function buildIllustration({ story, anthropic }) {
-    const result = await generateIllustration({ anthropic, openaiKey, story, logger });
-    if (!result) return null;
-    return upload({ path: `cards/${story.id}/illustration.png`, buffer: result.buffer, contentType: result.contentType });
+  // Generate `count` DISTINCT editorial illustrations for a photoless story and
+  // upload each — the Tier-2 per-slide imagery. Returns an array aligned to the
+  // slots (null where a scene/image/upload failed). Best-effort: the renderer
+  // falls back to the brand-graphic floor for any null slot. Memoised so the
+  // expensive generation runs at most once per (story, count).
+  async function buildIllustrations({ story, anthropic, count }) {
+    const results = await generateIllustrations({ anthropic, openaiKey, story, count, logger });
+    return Promise.all(results.map(async (r, i) => {
+      if (!r) return null;
+      try {
+        return await upload({ path: `cards/${story.id}/illustration-${i}.png`, buffer: r.buffer, contentType: r.contentType });
+      } catch (err) {
+        logger.warn(JSON.stringify({ event: "social_illustration_upload_failed", story_id: story.id, index: i, error: err.message }));
+        return null;
+      }
+    }));
   }
 
   return {
-    async getIllustrationUrl({ story, anthropic } = {}) {
-      if (!igIllustration || !anthropic || !story || story.id == null) return null;
-      const key = `${story.id}:illustration`;
+    // Returns an array of up to `count` illustration URLs (null per failed slot),
+    // or [] when disabled / no client / generation fails.
+    async getIllustrationUrls({ story, anthropic, count = 1 } = {}) {
+      if (!igIllustration || !anthropic || !story || story.id == null || count < 1) return [];
+      const key = `${story.id}:illustrations:${count}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildIllustration({ story, anthropic }).catch((err) => {
+      const p = buildIllustrations({ story, anthropic, count }).catch((err) => {
         logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
-        return null;
+        return [];
       });
       cache.set(key, p);
       return p;
@@ -161,15 +170,16 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrl = null }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [] }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
-      // distinct (whyItMatters, question, coverHook+highlight, illustration?) variant
-      // never overwrites another's bytes.
-      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illustrationUrl ? "ill" : "noill"}`;
+      // distinct (whyItMatters, question, coverHook+highlight, #illustrations)
+      // variant never overwrites another's bytes.
+      const illCount = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean).length;
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illCount ? `ill${illCount}` : "noill"}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrl, variant }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

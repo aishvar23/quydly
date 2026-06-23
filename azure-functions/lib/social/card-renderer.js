@@ -745,7 +745,7 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
 // lead entity (person, else org/place) with a credit. Resolving the image is
 // best-effort and happens once up front; any failure leaves the cover text-only.
 // `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrl = null, fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], fetchImpl } = {}) {
   const { width, height } = SHAPES.portrait;
   const size = width; // scaling base for typography/padding; height adds 4:5 room
   const accent = accentFor(story?.category_id);
@@ -766,23 +766,33 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   let portrait = null;
   const bodyImageByKind = {};
   if (withPortrait) {
+    // Each text/cover slide gets its OWN visual, resolved independently: the
+    // licensed entity photo when there is one, else the per-slide generated
+    // illustration (Tier 2), else (in slideBody) the brand-graphic floor.
+    const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
     const coverSpec = slideList.includes("cover") ? leadCoverImage(story) : null;
-    const bodyKinds = ["what", "keypoints", "why"].filter((k) => slideList.includes(k));
-    const bodySpecs = entityImages(story)
-      .filter((s) => s.name !== coverSpec?.name)
-      .slice(0, bodyKinds.length);
-    const [coverImg, ...bodyImgs] = await Promise.all([
-      resolveImage(coverSpec, fetchImpl),
-      ...bodySpecs.map((s) => resolveImage(s, fetchImpl)),
-    ]);
-    portrait = coverImg;
-    // No licensed photo for the cover → use the generated illustration (Tier 2)
-    // before falling to the brand-graphic floor. No caption (it isn't a photo).
-    if (!portrait && illustrationUrl && slideList.includes("cover")) {
-      const dataUri = await fetchImageDataUri(illustrationUrl, fetchImpl ? { fetchImpl } : {});
-      if (dataUri) portrait = { dataUri };
+    const bodyKinds = contentKinds.filter((k) => k !== "cover");
+    const bodySpecs = entityImages(story).filter((s) => s.name !== coverSpec?.name).slice(0, bodyKinds.length);
+    const specByKind = {};
+    if (slideList.includes("cover")) specByKind.cover = coverSpec;
+    bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
+    const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
+    const illByKind = {};
+    contentKinds.forEach((k, i) => { illByKind[k] = ill[i] || null; });
+
+    const resolved = await Promise.all(contentKinds.map(async (k) => {
+      const photo = await resolveImage(specByKind[k], fetchImpl);
+      if (photo) return [k, photo];
+      if (illByKind[k]) {
+        const dataUri = await fetchImageDataUri(illByKind[k], fetchImpl ? { fetchImpl } : {});
+        if (dataUri) return [k, { dataUri }]; // illustration — no caption (not a photo)
+      }
+      return [k, null];
+    }));
+    for (const [k, img] of resolved) {
+      if (!img) continue;
+      if (k === "cover") portrait = img; else bodyImageByKind[k] = img;
     }
-    bodyImgs.forEach((img, i) => { if (img) bodyImageByKind[bodyKinds[i]] = img; });
   }
 
   const out = [];

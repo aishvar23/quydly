@@ -89,3 +89,56 @@ export async function generateIllustration({ anthropic, openaiKey, story, fetchI
   if (!buffer) return null;
   return { buffer, contentType: "image/png", scene };
 }
+
+// One Claude call → `count` DISTINCT scenes (different angles/moments of the same
+// story), so a multi-slide carousel doesn't repeat one illustration.
+export const ILLUSTRATION_SCENES_SYSTEM = `You turn a news story into a set of DISTINCT visual scenes for flat editorial illustrations across an Instagram news carousel — one per slide. Each scene is a DIFFERENT angle, moment, or metaphor of the same story (e.g. the trigger, the people affected, the response, the bigger picture).
+
+RULES (apply to EVERY scene)
+- One sentence each, <= 25 words, a CONCRETE scene of GENERIC anonymous figures or objects — NEVER a real, named, or recognizable person, face, or brand logo.
+- The set must be visibly varied — do not restate the same composition.
+- Convey the situation/emotion through the scene, not text. No words, captions, or logos in any scene.
+- Neutral and symbolic for sensitive subjects (death, violence, disaster) — never gore or identifiable victims.
+
+Respond ONLY with JSON, no markdown: { "scenes": ["...", "..."] }`;
+
+export function buildScenesPrompt(story, count) {
+  const facts = keyPointStrings(story).slice(0, 3).map((k) => `- ${k}`).join("\n") || "(none)";
+  return `Produce exactly ${count} distinct scenes.
+Headline: ${story?.headline}
+Summary: ${story?.summary}
+Key points:
+${facts}
+
+Write the ${count} scenes now.`;
+}
+
+async function writeScenes({ anthropic, story, count, logger }) {
+  try {
+    const msg = await anthropic.messages.create({
+      model: CONCEPT_MODEL, max_tokens: 80 + count * 60,
+      system: ILLUSTRATION_SCENES_SYSTEM,
+      messages: [{ role: "user", content: buildScenesPrompt(story, count) }],
+    });
+    const raw = String(msg?.content?.[0]?.text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const scenes = JSON.parse(raw)?.scenes;
+    return Array.isArray(scenes) ? scenes.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()) : [];
+  } catch (err) {
+    logger?.warn?.(JSON.stringify({ event: "illustration_scenes_failed", story_id: story?.id, error: err.message }));
+    return [];
+  }
+}
+
+// Generate up to `count` distinct illustrations → array aligned to the scenes,
+// each { buffer, contentType, scene } or null (a per-image failure doesn't sink
+// the others). Returns [] when disabled or the scene write fails. Images render
+// in parallel.
+export async function generateIllustrations({ anthropic, openaiKey, story, count = 1, fetchImpl, logger } = {}) {
+  if (!anthropic || !openaiKey || !story || count < 1) return [];
+  const scenes = (await writeScenes({ anthropic, story, count, logger })).slice(0, count);
+  if (!scenes.length) return [];
+  return Promise.all(scenes.map(async (scene) => {
+    const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });
+    return buffer ? { buffer, contentType: "image/png", scene } : null;
+  }));
+}

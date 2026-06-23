@@ -519,10 +519,10 @@ test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ disti
   assert.notEqual(a[0].url, b[0].url);
 });
 
-test("cardService.getIllustrationUrl: null when OPENAI_API_KEY is absent (Tier-2 disabled)", async () => {
+test("cardService.getIllustrationUrls: [] when OPENAI_API_KEY is absent (Tier-2 disabled)", async () => {
   const mock = makeStorageMock();
   const svc = createCardService({ supabase: mock.supabase, env: {} }); // no OPENAI_API_KEY
-  assert.equal(await svc.getIllustrationUrl({ story: STORY, anthropic: {} }), null);
+  assert.deepEqual(await svc.getIllustrationUrls({ story: STORY, anthropic: {}, count: 4 }), []);
   assert.equal(mock.uploads.length, 0); // never generated/uploaded
 });
 

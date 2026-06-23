@@ -3,7 +3,7 @@
 // Usage: node --test test/social-illustration.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { generateIllustration, buildImagePrompt } from "../lib/social/illustration.js";
+import { generateIllustration, generateIllustrations, buildImagePrompt } from "../lib/social/illustration.js";
 
 const STORY = { id: 5, headline: "Exam glitch strands students", summary: "A technical fault disrupted a national entrance exam.", key_points: ["Servers failed", "Students stranded"] };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -38,6 +38,34 @@ test("generateIllustration: empty scene → null, never calls the image API", as
 test("generateIllustration: OpenAI non-200 → null", async () => {
   const fetchImpl = async () => ({ ok: false, status: 429, json: async () => ({}) });
   assert.equal(await generateIllustration({ anthropic: anthropicReturning("a scene"), openaiKey: "sk", story: STORY, fetchImpl }), null);
+});
+
+const anthropicScenes = (scenes) => ({ messages: { create: async () => ({ content: [{ text: JSON.stringify({ scenes }) }] }) } });
+
+test("generateIllustrations: N distinct scenes → N PNG buffers (aligned)", async () => {
+  const out = await generateIllustrations({
+    anthropic: anthropicScenes(["frozen screens", "empty desks", "a ticking clock"]),
+    openaiKey: "sk", story: STORY, count: 3, fetchImpl: openaiOk(),
+  });
+  assert.equal(out.length, 3);
+  assert.ok(out.every((r) => r && Buffer.isBuffer(r.buffer)));
+  assert.deepEqual(out.map((r) => r.scene), ["frozen screens", "empty desks", "a ticking clock"]);
+});
+
+test("generateIllustrations: a single image failure nulls only that slot", async () => {
+  let n = 0;
+  const fetchImpl = async () => { n += 1; return n === 2 ? { ok: false, status: 500, json: async () => ({}) } : { ok: true, json: async () => ({ data: [{ b64_json: PNG_B64 }] }) }; };
+  const out = await generateIllustrations({ anthropic: anthropicScenes(["a", "b", "c"]), openaiKey: "sk", story: STORY, count: 3, fetchImpl });
+  assert.equal(out.length, 3);
+  assert.ok(out[0] && out[2]);
+  assert.equal(out[1], null);
+});
+
+test("generateIllustrations: no scenes → [] (no image calls)", async () => {
+  let called = false;
+  const fetchImpl = async () => { called = true; return { ok: true, json: async () => ({}) }; };
+  assert.deepEqual(await generateIllustrations({ anthropic: anthropicScenes([]), openaiKey: "sk", story: STORY, count: 3, fetchImpl }), []);
+  assert.equal(called, false);
 });
 
 test("buildImagePrompt: locks the house style and bans real faces/text", () => {
