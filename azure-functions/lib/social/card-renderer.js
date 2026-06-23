@@ -454,16 +454,78 @@ function eyebrow(text, accent, size) {
   }, text);
 }
 
-function bulletRow(text, accent, size) {
+function bulletRow(text, accent, size, fontPx = Math.round(size * 0.038)) {
   return el("div", { style: { display: "flex", alignItems: "flex-start", marginBottom: 22 } }, [
     el("div", {
       style: {
         display: "flex", width: 16, height: 16, borderRadius: 999,
-        backgroundColor: accent, marginTop: Math.round(size * 0.018), marginRight: 22, flexShrink: 0,
+        backgroundColor: accent, marginTop: Math.round(fontPx * 0.5), marginRight: 22, flexShrink: 0,
       },
     }, []),
-    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.038), color: FG, lineHeight: 1.25 } }, text),
+    el("div", { style: { display: "flex", fontSize: fontPx, color: FG, lineHeight: BULLET_LINE_H } }, text),
   ]);
+}
+
+// ── Bullet-slide auto-fit (key points / why it matters) ──────────────────────
+//
+// The 4:5 card height is FIXED, and Satori has no overflow handling, so long key
+// points used to spill past the bottom and clip the last bullet (IG showed a
+// cut-off third point). We size deterministically to fit: step the image and
+// bullet font DOWN together through density levels until the estimated bullet
+// stack fits the room the image leaves, trimming the points (word boundary, "…")
+// only if even the smallest level overflows. Heights are estimated from a
+// conservative average glyph advance (Lato ≈ 0.52em) so we err toward NOT
+// clipping; short points keep the default size (no regression).
+const BULLET_LINE_H = 1.25;
+const BULLET_AVG_CHAR_EM = 0.52;
+const BULLET_DENSITY = [
+  { font: 0.038, image: 0.42 }, // default — unchanged look for short points
+  { font: 0.035, image: 0.40 },
+  { font: 0.033, image: 0.36 },
+  { font: 0.031, image: 0.32 },
+  { font: 0.029, image: 0.28 },
+];
+
+// Vertical space (px) for the bullet stack once the slide's padding, header,
+// footer, eyebrow and the image block (at heightRatio `imageR`) are removed.
+// Derived from slideTree geometry (card height = size × 1.25), with a safety
+// margin so the estimate never under-counts the chrome.
+function bulletStackBudget(size, imageR) {
+  const middle = size * 1.25 - 2 * (size * PAD_Y_RATIO) - size * 0.041 - size * 0.049; // − pad − header − footer
+  const eyebrowH = size * 0.054;                                    // label + its marginBottom
+  const imageBlock = imageR > 0 ? size * imageR + size * 0.075 : 0; // photo + caption + marginBottom
+  return middle - eyebrowH - imageBlock - size * 0.02;              // − safety
+}
+
+// Estimated stacked height (px) of `points` rendered as bullets at `fontPx`.
+function bulletStackHeight(points, fontPx, size) {
+  const colW = size * (1 - 2 * PAD_X_RATIO) - (16 + 22); // text column minus the dot + its right margin
+  const cpl = Math.max(8, colW / (fontPx * BULLET_AVG_CHAR_EM));
+  let h = 0;
+  for (const p of points) h += Math.max(1, Math.ceil(p.length / cpl)) * fontPx * BULLET_LINE_H + 22;
+  return h;
+}
+
+// Pick the densest-that-fits layout for a bullet slide. Returns
+// { fontPx, imageRatio, points }; points are trimmed only as a last resort.
+function fitBulletSlide(points, size) {
+  for (const level of BULLET_DENSITY) {
+    const fontPx = Math.round(size * level.font);
+    if (bulletStackHeight(points, fontPx, size) <= bulletStackBudget(size, level.image)) {
+      return { fontPx, imageRatio: level.image, points };
+    }
+  }
+  // Smallest level still overflows → trim each point to its share of the budget,
+  // on a word boundary, with an ellipsis (clean cut, not an IG clip).
+  const last = BULLET_DENSITY[BULLET_DENSITY.length - 1];
+  const fontPx = Math.round(size * last.font);
+  const budget = bulletStackBudget(size, last.image);
+  const colW = size * (1 - 2 * PAD_X_RATIO) - 38;
+  const cpl = Math.max(8, colW / (fontPx * BULLET_AVG_CHAR_EM));
+  const linesEach = Math.max(1, Math.floor((budget / points.length - 22) / (fontPx * BULLET_LINE_H)));
+  const maxChars = Math.max(40, Math.floor(linesEach * cpl));
+  const trimmed = points.map((p) => (p.length <= maxChars ? p : `${p.slice(0, maxChars).replace(/\s+\S*$/, "").trim()}…`));
+  return { fontPx, imageRatio: last.image, points: trimmed };
 }
 
 // One MCQ option row on the engagement slide: a lettered chip (A/B/C/D) + the
@@ -647,10 +709,10 @@ function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatt
   // Body slides ("what"/"key points"/"why") get a visual above their text: the
   // resolved entity image when there is one, else the brand-graphic floor — so a
   // body slide is never bare text.
-  const withImage = (content) => el("div", { style: { display: "flex", flexDirection: "column" } }, [
+  const withImage = (content, heightRatio = 0.42) => el("div", { style: { display: "flex", flexDirection: "column" } }, [
     (slideImage && slideImage.dataUri)
-      ? imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 })
-      : brandGraphic({ category, accent, size, seed: index, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 }),
+      ? imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio, marginRatio: 0.03 })
+      : brandGraphic({ category, accent, size, seed: index, widthRatio: 0.62, heightRatio, marginRatio: 0.03 }),
     content,
   ]);
 
@@ -667,14 +729,20 @@ function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatt
   }
 
   if (kind === "keypoints") {
-    // Today's key_points (the slide formerly labelled "Why it matters").
+    // Today's key_points (the slide formerly labelled "Why it matters"). Long
+    // bullets are auto-fit (font + image shrink together) so the last point can
+    // never clip off the bottom of the card.
     const points = keyPoints(story).slice(0, 3);
-    const rows = points.length
-      ? points.map((p) => bulletRow(p, accent, size))
-      : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
+    if (points.length) {
+      const fit = fitBulletSlide(points, size);
+      return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
+        eyebrow("Key points", accent, size),
+        ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx)),
+      ]), fit.imageRatio);
+    }
     return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Key points", accent, size),
-      ...rows,
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
     ]));
   }
 
@@ -684,12 +752,16 @@ function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatt
     // when points exist (see carouselSlidesFor); the summary fallback guards the
     // case where the slide is requested explicitly without points.
     const why = (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : []).slice(0, 3);
-    const rows = why.length
-      ? why.map((p) => bulletRow(p, accent, size))
-      : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
+    if (why.length) {
+      const fit = fitBulletSlide(why, size);
+      return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
+        eyebrow("Why it matters", accent, size),
+        ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx)),
+      ]), fit.imageRatio);
+    }
     return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Why it matters", accent, size),
-      ...rows,
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
     ]));
   }
 
