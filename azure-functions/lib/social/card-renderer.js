@@ -564,20 +564,60 @@ function imageHero({ image, size, widthRatio = 1, heightRatio = 0.46, marginRati
   return el("div", { style: { display: "flex", flexDirection: "column", width: photoW, ...center, marginBottom: Math.round(size * marginRatio) } }, children);
 }
 
+// Shift a #rrggbb hex by `amt` per channel (negative darkens). Used to build the
+// brand-graphic gradient from a category accent.
+function shade(hex, amt) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const ch = (shiftBits) => Math.max(0, Math.min(255, ((n >> shiftBits) & 255) + amt));
+  return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0")}`;
+}
+
+// The guaranteed-imagery FLOOR: a designed brand graphic for slides with no
+// licensed photo, so a card is NEVER bare text. A category-accent diagonal
+// gradient with soft rings and the category label — honest (clearly a Quydly
+// graphic, not a fake news photo) and always available. `seed` (the slide index)
+// rotates the gradient so a photoless story's slides aren't identical blocks.
+function brandGraphic({ category, accent, size, seed = 0, widthRatio = 1, heightRatio = 0.46, marginRatio = 0.038 }) {
+  const fullW = Math.round(size * (1 - 2 * PAD_X_RATIO));
+  const w = Math.round(fullW * widthRatio);
+  const h = Math.round(size * heightRatio);
+  const angle = 110 + (seed % 4) * 35; // vary the gradient per slide
+  const center = widthRatio < 1 ? { marginLeft: "auto", marginRight: "auto" } : {};
+  return el("div", {
+    style: {
+      display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center",
+      width: w, height: h, ...center, marginBottom: Math.round(size * marginRatio),
+      borderRadius: Math.round(size * 0.028),
+      backgroundImage: `linear-gradient(${angle}deg, ${shade(accent, 22)}, ${shade(accent, -78)})`,
+    },
+  }, [
+    el("div", {
+      style: { display: "flex", fontSize: Math.round(size * 0.066), fontWeight: 700, color: "#FFFFFF", letterSpacing: 2, textTransform: "uppercase" },
+    }, oneLine(category || "news")),
+    el("div", {
+      style: { display: "flex", fontSize: Math.round(size * 0.019), fontWeight: 700, color: "#FFFFFF", opacity: 0.72, letterSpacing: 4, textTransform: "uppercase", marginTop: Math.round(size * 0.012) },
+    }, "Quydly"),
+  ]);
+}
+
 // Build the inner body for one slide kind. `size` is the square edge length.
 // `portrait` (cover only) is { dataUri, name, credit } or null. `question`
 // (engagement only) is the MCQ { question, options, correctIndex } or null.
-function slideBody({ kind, story, accent, size, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
+function slideBody({ kind, story, accent, size, index = 0, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
+  const category = oneLine(story?.category_id || "news");
 
-  // Body slides ("what"/"key points"/"why") prepend a smaller image of a story
-  // entity above their text when one was resolved — real imagery, not bland text.
-  const withImage = (content) => ((slideImage && slideImage.dataUri)
-    ? el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 }),
-      content,
-    ])
-    : content);
+  // Body slides ("what"/"key points"/"why") get a visual above their text: the
+  // resolved entity image when there is one, else the brand-graphic floor — so a
+  // body slide is never bare text.
+  const withImage = (content) => el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    (slideImage && slideImage.dataUri)
+      ? imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 })
+      : brandGraphic({ category, accent, size, seed: index, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 }),
+    content,
+  ]);
 
   if (kind === "cover") {
     // Prefer the concrete hook generated upstream for the cover; fall back to the
@@ -587,13 +627,14 @@ function slideBody({ kind, story, accent, size, portrait, slideImage, whyItMatte
     const hookText = oneLine(coverHook);
     const cover = hookText || headline;
     const children = [];
-    if (portrait && portrait.dataUri) children.push(imageHero({ image: portrait, size }));
+    // The cover ALWAYS leads with a visual — the licensed photo when resolved,
+    // else the brand-graphic floor — so a post is never imageless.
+    children.push(portrait && portrait.dataUri
+      ? imageHero({ image: portrait, size })
+      : brandGraphic({ category, accent, size, seed: 0 }));
     const dateRow = coverDateRow(story, accent, size);
     if (dateRow) children.push(dateRow);
     children.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
-    // Single child and no date → keep the original bare-headline node (matches
-    // the pre-feature layout exactly for stories with no publish date).
-    if (children.length === 1) return children[0];
     return el("div", { style: { display: "flex", flexDirection: "column" } }, children);
   }
 
@@ -684,7 +725,7 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
+      slideBody({ kind, story, accent, size, index, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);

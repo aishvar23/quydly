@@ -237,6 +237,21 @@ test("renderCarouselSlides: lead person has no photo → text-only cover even if
   assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
 });
 
+test("renderCarouselSlides: no entity image → brand-graphic floor, every slide still a valid JPEG", async () => {
+  // A story with no licensed entity image must never render bare text: the cover
+  // and body slides fall back to the designed brand graphic (no fetch needed).
+  const story = { ...STORY, primary_entities_enriched: [{ name: "Some Org", type: "org" }] };
+  let called = false;
+  const fetchImpl = async () => { called = true; return imgResponse(); };
+  const slides = await renderCarouselSlides(story, {
+    slides: ["cover", "what", "keypoints"], withPortrait: true,
+    coverHook: "City exam glitch stranded thousands of students", coverHighlight: "exam glitch", fetchImpl,
+  });
+  assert.equal(called, false); // no image to fetch — floor is procedural
+  assert.equal(slides.length, 3);
+  for (const s of slides) assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEGs
+});
+
 test("renderCarouselSlides: non-HTTPS portrait url is skipped (no fetch)", async () => {
   const story = { ...STORY, primary_entities_enriched: [
     { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "http://insecure/jane.png" },
