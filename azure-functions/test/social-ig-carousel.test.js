@@ -64,7 +64,7 @@ test("renderCarouselSlides: no whyItMatters → 4 slides (cover/what/keypoints/c
   slides.forEach((s, i) => {
     assert.equal(s.index, i);
     assert.equal(s.contentType, "image/jpeg");
-    assert.deepEqual([s.width, s.height], [1080, 1080]);
+    assert.deepEqual([s.width, s.height], [1080, 1350]);
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
   });
@@ -535,8 +535,8 @@ test("waitForContainer: throws when status_code is ERROR", async () => {
 test("generatePlatformPost: IG carousel attaches slides + cover media_url when enabled", async () => {
   const cardService = {
     getCarouselSlideUrls: async ({ story }) => [
-      { url: `https://cdn.test/${story.id}/0.jpg`, index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: `https://cdn.test/${story.id}/1.jpg`, index: 1, slideType: "what", width: 1080, height: 1080 },
+      { url: `https://cdn.test/${story.id}/0.jpg`, index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: `https://cdn.test/${story.id}/1.jpg`, index: 1, slideType: "what", width: 1080, height: 1350 },
     ],
     getCardUrl: async () => "https://cdn.test/should-not-be-used.jpg",
   };
@@ -605,8 +605,8 @@ test("generateSocialPosts: AUTO_APPROVED + carousel media → IG post APPROVED (
   const cardService = {
     getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`,
     getCarouselSlideUrls: async () => [
-      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1080 },
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1350 },
     ],
   };
   await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1" });
@@ -629,10 +629,10 @@ test("generateSocialPosts: carousel slides persist as ordered instagram_carousel
   const cardService = {
     getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`, // X/FB single cards
     getCarouselSlideUrls: async () => [
-      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1080 },
-      { url: "https://cdn.test/2.jpg", index: 2, slideType: "why", width: 1080, height: 1080 },
-      { url: "https://cdn.test/3.jpg", index: 3, slideType: "cta", width: 1080, height: 1080 },
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1350 },
+      { url: "https://cdn.test/2.jpg", index: 2, slideType: "why", width: 1080, height: 1350 },
+      { url: "https://cdn.test/3.jpg", index: 3, slideType: "cta", width: 1080, height: 1350 },
     ],
   };
   await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1" });
@@ -693,8 +693,8 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
   const cardService = {
     getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.jpg`,
     getCarouselSlideUrls: async () => [
-      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1080 },
-      { url: "https://cdn.test/1.jpg", index: 1, slideType: "engagement", width: 1080, height: 1080 },
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350 },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "engagement", width: 1080, height: 1350 },
     ],
   };
   const anthropic = {

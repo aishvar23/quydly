@@ -37,6 +37,9 @@ const MUTED = "#9CA3AF";
 const SHAPES = {
   landscape: { width: 1600, height: 900 },
   square: { width: 1080, height: 1080 },
+  // 4:5 portrait — the carousel slide format. Takes ~25% more vertical feed
+  // space than square; the extra height becomes breathing room for the hook.
+  portrait: { width: 1080, height: 1350 },
 };
 
 // Carousel slide order. "Key points" and "Why it matters" are SEPARATE slides:
@@ -442,15 +445,18 @@ function coverPortraitBlock({ portrait, accent, size }) {
 // Build the inner body for one slide kind. `size` is the square edge length.
 // `portrait` (cover only) is { dataUri, name, credit } or null. `question`
 // (engagement only) is the MCQ { question, options, correctIndex } or null.
-function slideBody({ kind, story, accent, size, portrait, whyItMatters, question }) {
+function slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
 
   if (kind === "cover") {
+    // Prefer the open-loop hook (a 5-8 word curiosity gap generated upstream)
+    // for the cover; fall back to the raw headline when no hook was supplied.
+    const cover = oneLine(coverHook) || headline;
     const dateRow = coverDateRow(story, accent, size);
     const children = [];
     if (dateRow) children.push(dateRow);
     if (portrait && portrait.dataUri) children.push(coverPortraitBlock({ portrait, accent, size }));
-    children.push(coverHeadline(headline, size));
+    children.push(coverHeadline(cover, size));
     // Single child and no date → keep the original bare-headline node (matches
     // the pre-feature layout exactly for stories with no publish date).
     if (children.length === 1) return children[0];
@@ -526,7 +532,7 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, portrait, whyItMatters, question }) {
+function slideTree({ kind, story, accent, category, index, total, size, height, portrait, whyItMatters, question, coverHook }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
   const hint = kind === "cta" ? "quydly.com"
@@ -534,14 +540,14 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
     : (kind === "engagement" ? "Tap to comment →" : ""));
   return el("div", {
     style: {
-      width: size, height: size, display: "flex", flexDirection: "column",
+      width: size, height, display: "flex", flexDirection: "column",
       justifyContent: "space-between", backgroundColor: BG,
       padding: `${padY}px ${padX}px`, fontFamily: "Lato",
     },
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait, whyItMatters, question }),
+      slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -554,8 +560,9 @@ function slideTree({ kind, story, accent, category, index, total, size, portrait
 // gains a circular portrait inset (licensed photo + credit). Resolving the
 // portrait is best-effort and happens once up front; any failure leaves the
 // cover text-only. `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, fetchImpl } = {}) {
-  const { width: size } = SHAPES.square;
+export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, fetchImpl } = {}) {
+  const { width, height } = SHAPES.portrait;
+  const size = width; // scaling base for typography/padding; height adds 4:5 room
   const accent = accentFor(story?.category_id);
   const category = oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
@@ -579,11 +586,11 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null }),
-      { width: size, height: size, fonts }
+      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null }),
+      { width, height, fonts }
     );
-    const { buffer, contentType } = rasterize(svg, { width: size, format });
-    out.push({ buffer, contentType, width: size, height: size, slideType: kind, index });
+    const { buffer, contentType } = rasterize(svg, { width, format });
+    out.push({ buffer, contentType, width, height, slideType: kind, index });
   }
   return out;
 }
