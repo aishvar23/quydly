@@ -192,21 +192,44 @@ function portraitCredit(entity) {
     : credit;
 }
 
-// Surface the portrait of the story's LEAD person only. primary_entities_enriched
-// is ordered by primacy, so the first `type:"person"` entry is the lead subject.
-// We consider ONLY that lead person — we never fall through to a later person, as
-// that would put the wrong face on the cover. Returns null when there is no person
-// entity, or the lead person has no usable licensed HTTPS portrait (text-only cover).
-function leadPersonPortrait(story) {
+// Wikimedia thumbnail URLs carry a "/NNNpx-<file>" size token; bump it so the
+// large cover image isn't upscaled-blurry. Non-Wikimedia or non-thumb URLs are
+// returned unchanged.
+function upscaleWikimedia(url, px) {
+  if (typeof url !== "string") return url;
+  if (!/^https:\/\/upload\.wikimedia\.org\/.+\/thumb\//.test(url)) return url;
+  return url.replace(/\/\d+px-([^/]+)$/, `/${px}px-$1`);
+}
+
+// The image for the cover hero. primary_entities_enriched is ordered by primacy.
+// Prefer the LEAD person (first person entity) — never a later person, which
+// would put the wrong face on the cover — then fall back to the first org/place
+// with a licensed image (a logo or landmark carries no wrong-face risk and gives
+// the many non-person stories a real graphic). Only already-licensed Wikipedia/
+// override sources are used, and always credited. Returns { url, name, credit }
+// or null (text-only cover). The thumbnail is upscaled for the large render.
+function leadCoverImage(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
-  const lead = ents.find((e) => e && e.type === "person");
-  if (!lead) return null;
-  // Cover inset is small (~0.3× the card edge), so prefer the thumbnail over
-  // the full-resolution override image — a large press photo would otherwise
-  // download only to be rejected by PORTRAIT_MAX_BYTES.
-  const url = lead.portrait_thumbnail_url || lead.portrait_image_url || lead.wikipedia_thumbnail_url;
-  if (typeof url !== "string" || !/^https:\/\//i.test(url)) return null;
-  return { url, name: oneLine(lead.name), credit: portraitCredit(lead) };
+  const pick = (e) => {
+    if (!e) return null;
+    const raw = e.portrait_image_url || e.portrait_thumbnail_url || e.wikipedia_thumbnail_url;
+    if (typeof raw !== "string" || !/^https:\/\//i.test(raw)) return null;
+    // Wikimedia 400s on a thumbnail wider than the source image (and supported
+    // sizes vary per file), so don't upscale blindly: offer a couple of larger
+    // renders and fall back to the original URL, which is always valid. The
+    // caller tries them in order and takes the first that fetches.
+    const urls = [...new Set([upscaleWikimedia(raw, 800), upscaleWikimedia(raw, 500), raw])];
+    return { urls, name: oneLine(e.name), credit: portraitCredit(e) };
+  };
+  const leadPerson = pick(ents.find((e) => e && e.type === "person"));
+  if (leadPerson) return leadPerson;
+  for (const e of ents) {
+    if (e && (e.type === "org" || e.type === "place")) {
+      const img = pick(e);
+      if (img) return img;
+    }
+  }
+  return null;
 }
 
 // Read a fetch Response body, aborting once it exceeds maxBytes. Streams via
@@ -468,27 +491,32 @@ function coverDateRow(story, accent, size) {
   }, text);
 }
 
-// Circular portrait + name + credit, shown above the headline on the cover when
-// the story is about a person and a licensed photo resolved.
-function coverPortraitBlock({ portrait, accent, size }) {
-  const photo = Math.round(size * 0.3);
-  const meta = [];
-  if (portrait.name) {
-    meta.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), fontWeight: 700, color: FG } }, portrait.name));
+// Bold cover image hero: a large rounded photo (the lead entity's licensed image)
+// with a thin accent rule and a name + credit caption beneath. Replaces the small
+// circular inset — this is the cover's main visual, so non-person stories with an
+// org/place image read as graphic, not bland.
+function coverImageHero({ image, size }) {
+  const innerW = Math.round(size * (1 - 2 * PAD_X_RATIO));
+  const photoH = Math.round(size * 0.46);
+  const caption = [];
+  if (image.name) {
+    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.03), fontWeight: 700, color: FG } }, image.name));
   }
-  if (portrait.credit) {
-    meta.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: 6 } }, `Photo: ${portrait.credit}`));
+  if (image.credit) {
+    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.019), color: MUTED, marginLeft: "auto" } }, `Photo: ${image.credit}`));
   }
-  return el("div", { style: { display: "flex", alignItems: "center", marginBottom: Math.round(size * 0.05) } }, [
+  const children = [
     el("img", {
-      src: portrait.dataUri, width: photo, height: photo,
-      style: {
-        width: photo, height: photo, borderRadius: 999, objectFit: "cover",
-        marginRight: Math.round(size * 0.045), border: `${Math.round(size * 0.006)}px solid ${accent}`,
-      },
+      src: image.dataUri, width: innerW, height: photoH,
+      style: { width: innerW, height: photoH, objectFit: "cover", borderRadius: Math.round(size * 0.028) },
     }),
-    el("div", { style: { display: "flex", flexDirection: "column" } }, meta),
-  ]);
+  ];
+  if (caption.length) {
+    children.push(el("div", {
+      style: { display: "flex", alignItems: "center", marginTop: Math.round(size * 0.018) },
+    }, caption));
+  }
+  return el("div", { style: { display: "flex", flexDirection: "column", marginBottom: Math.round(size * 0.038) } }, children);
 }
 
 // Build the inner body for one slide kind. `size` is the square edge length.
@@ -504,10 +532,10 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     // emphasised and so its bytes match the shared "nohook" cache/storage variant.
     const hookText = oneLine(coverHook);
     const cover = hookText || headline;
-    const dateRow = coverDateRow(story, accent, size);
     const children = [];
+    if (portrait && portrait.dataUri) children.push(coverImageHero({ image: portrait, size }));
+    const dateRow = coverDateRow(story, accent, size);
     if (dateRow) children.push(dateRow);
-    if (portrait && portrait.dataUri) children.push(coverPortraitBlock({ portrait, accent, size }));
     children.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
     // Single child and no date → keep the original bare-headline node (matches
     // the pre-feature layout exactly for stories with no publish date).
@@ -611,10 +639,10 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
 // Render the full Instagram carousel as ordered JPEG slides. Defaults to JPEG
 // because the Instagram Graph API rejects non-JPEG media containers.
 //
-// When `withPortrait` is on and the story is about a person, the cover slide
-// gains a circular portrait inset (licensed photo + credit). Resolving the
-// portrait is best-effort and happens once up front; any failure leaves the
-// cover text-only. `fetchImpl` is injectable for tests.
+// When `withPortrait` is on, the cover slide gains a large licensed image of the
+// lead entity (person, else org/place) with a credit. Resolving the image is
+// best-effort and happens once up front; any failure leaves the cover text-only.
+// `fetchImpl` is injectable for tests.
 export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, fetchImpl } = {}) {
   const { width, height } = SHAPES.portrait;
   const size = width; // scaling base for typography/padding; height adds 4:5 room
@@ -630,10 +658,12 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
 
   let portrait = null;
   if (withPortrait && slideList.includes("cover")) {
-    const lead = leadPersonPortrait(story);
+    const lead = leadCoverImage(story);
     if (lead) {
-      const dataUri = await fetchImageDataUri(lead.url, fetchImpl ? { fetchImpl } : {});
-      if (dataUri) portrait = { dataUri, name: lead.name, credit: lead.credit };
+      for (const url of lead.urls) {
+        const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
+        if (dataUri) { portrait = { dataUri, name: lead.name, credit: lead.credit }; break; }
+      }
     }
   }
 

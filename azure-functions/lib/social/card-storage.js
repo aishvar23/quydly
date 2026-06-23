@@ -51,7 +51,10 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
   // When on, carousel cover slides for person-led stories carry a licensed
   // portrait inset (card-renderer leadPersonPortrait). Off → text-only covers.
-  const igPortrait = /^(1|true)$/i.test(String(env.SOCIAL_IG_PORTRAIT_ENABLED || ""));
+  // Cover image is core to the redesign, so it is ON by default — disable only
+  // with an explicit SOCIAL_IG_PORTRAIT_ENABLED=false/0. Image fetch is
+  // best-effort (a failure leaves a clean text cover), so default-on is safe.
+  const igPortrait = !/^(0|false)$/i.test(String(env.SOCIAL_IG_PORTRAIT_ENABLED || ""));
   const cache = new Map(); // `${storyId}:${shape}` → Promise<string|null>
   let bucketReady = null;
 

@@ -154,14 +154,29 @@ test("renderCarouselSlides: withPortrait but no person entity → no fetch, text
   assert.equal(slides.length, 4);
 });
 
-test("renderCarouselSlides: non-person entities (org/place) are ignored", async () => {
+test("renderCarouselSlides: an org/place lead image is used on the cover (no lead person)", async () => {
+  // With no person entity, the cover falls back to the first org/place image so
+  // non-person stories aren't bland — the wrong-face risk doesn't apply to logos
+  // or landmarks.
   const story = { ...STORY, primary_entities_enriched: [
     { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
   ] };
-  let called = false;
-  const fetchImpl = async () => { called = true; return imgResponse(); };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  const slides = await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/acme.png"]); // org image fetched
+  assert.equal(slides.length, 4);
+});
+
+test("renderCarouselSlides: a lead person image wins over a later org image", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png" },
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
   await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
-  assert.equal(called, false);
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/jane.png"]); // person preferred
 });
 
 test("renderCarouselSlides: cover hook + highlight renders a valid JPEG in both modes", async () => {
