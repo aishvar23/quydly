@@ -168,15 +168,28 @@ test("renderCarouselSlides: an org/place lead image is used on the cover (no lea
   assert.equal(slides.length, 4);
 });
 
-test("renderCarouselSlides: a lead person image wins over a later org image", async () => {
+test("renderCarouselSlides: a lead person image wins over a later org image (cover)", async () => {
   const story = { ...STORY, primary_entities_enriched: [
     { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png" },
     { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
   ] };
   const calls = [];
   const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
-  await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
-  assert.deepEqual(calls, ["https://upload.wikimedia.org/jane.png"]); // person preferred
+  await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/jane.png"]); // person preferred on cover
+});
+
+test("renderCarouselSlides: body slides get OTHER story entities' images (real imagery, not text)", async () => {
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png" },
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  // cover + what + keypoints → cover uses the person, a body slide uses the org.
+  await renderCarouselSlides(story, { slides: ["cover", "what", "keypoints"], withPortrait: true, fetchImpl });
+  assert.ok(calls.includes("https://upload.wikimedia.org/jane.png")); // cover (person)
+  assert.ok(calls.includes("https://upload.wikimedia.org/acme.png")); // body slide (org)
 });
 
 test("renderCarouselSlides: cover hook + highlight renders a valid JPEG in both modes", async () => {
@@ -215,9 +228,12 @@ test("renderCarouselSlides: lead person has no photo → text-only cover even if
   ] };
   let called = false;
   const fetchImpl = async () => { called = true; return imgResponse(); };
-  const slides = await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
-  assert.equal(called, false); // never fetched the later person's photo
-  assert.equal(slides.length, 4);
+  // Render the cover in isolation: the cover must never fetch a later person's
+  // face (the no-wrong-face guard). Captioned later-entity images may still
+  // appear on BODY slides — that's covered separately.
+  const slides = await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.equal(called, false); // cover never fetched the later person's photo
+  assert.equal(slides.length, 1);
   assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // cover still a valid JPEG
 });
 

@@ -232,6 +232,34 @@ function leadCoverImage(story) {
   return null;
 }
 
+// All entities with a licensed image, in primacy order (de-duped by name) — used
+// to spread real imagery across the body slides. Unlike the cover, body images
+// are captioned with the entity name, so a non-lead entity is fine here.
+function entityImages(story) {
+  const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
+  const out = [];
+  const seen = new Set();
+  for (const e of ents) {
+    if (!e || seen.has(e.name)) continue;
+    const raw = e.portrait_image_url || e.portrait_thumbnail_url || e.wikipedia_thumbnail_url;
+    if (typeof raw !== "string" || !/^https:\/\//i.test(raw)) continue;
+    seen.add(e.name);
+    out.push({ urls: [...new Set([upscaleWikimedia(raw, 800), upscaleWikimedia(raw, 500), raw])], name: oneLine(e.name), credit: portraitCredit(e) });
+  }
+  return out;
+}
+
+// Fetch the first of an image spec's candidate URLs that yields a data URI (or
+// null). Best-effort — used for both the cover and the body-slide images.
+async function resolveImage(spec, fetchImpl) {
+  if (!spec) return null;
+  for (const url of spec.urls) {
+    const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
+    if (dataUri) return { dataUri, name: spec.name, credit: spec.credit };
+  }
+  return null;
+}
+
 // Read a fetch Response body, aborting once it exceeds maxBytes. Streams via
 // res.body when the runtime exposes it (real fetch) so an oversize or lying
 // content-length can't buffer unbounded into Function memory; falls back to
@@ -491,39 +519,54 @@ function coverDateRow(story, accent, size) {
   }, text);
 }
 
-// Bold cover image hero: a large rounded photo (the lead entity's licensed image)
-// with a thin accent rule and a name + credit caption beneath. Replaces the small
-// circular inset — this is the cover's main visual, so non-person stories with an
-// org/place image read as graphic, not bland.
-function coverImageHero({ image, size }) {
-  const innerW = Math.round(size * (1 - 2 * PAD_X_RATIO));
-  const photoH = Math.round(size * 0.46);
+// A rounded photo (a licensed entity image) with a name + "Photo: …" credit
+// beneath. The cover uses a large hero (heightRatio 0.46); body slides reuse it
+// smaller (≈0.3) to spread real imagery across the carousel without crowding the
+// text. This is the slide's main visual, so non-person stories with an org/place
+// image read as graphic, not bland.
+function imageHero({ image, size, widthRatio = 1, heightRatio = 0.46, marginRatio = 0.038 }) {
+  const fullW = Math.round(size * (1 - 2 * PAD_X_RATIO));
+  const photoW = Math.round(fullW * widthRatio);
+  const photoH = Math.round(size * heightRatio);
   const caption = [];
   if (image.name) {
-    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.03), fontWeight: 700, color: FG } }, image.name));
+    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), fontWeight: 700, color: FG } }, image.name));
   }
   if (image.credit) {
-    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.019), color: MUTED, marginLeft: "auto" } }, `Photo: ${image.credit}`));
+    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.018), color: MUTED, marginLeft: "auto" } }, `Photo: ${image.credit}`));
   }
   const children = [
     el("img", {
-      src: image.dataUri, width: innerW, height: photoH,
-      style: { width: innerW, height: photoH, objectFit: "cover", borderRadius: Math.round(size * 0.028) },
+      src: image.dataUri, width: photoW, height: photoH,
+      // objectPosition biases the crop toward the upper third so headshots keep
+      // the face (a centred crop on a tall portrait decapitates it).
+      style: { width: photoW, height: photoH, objectFit: "cover", objectPosition: "center 25%", borderRadius: Math.round(size * 0.028) },
     }),
   ];
   if (caption.length) {
     children.push(el("div", {
-      style: { display: "flex", alignItems: "center", marginTop: Math.round(size * 0.018) },
+      style: { display: "flex", alignItems: "center", width: photoW, marginTop: Math.round(size * 0.016) },
     }, caption));
   }
-  return el("div", { style: { display: "flex", flexDirection: "column", marginBottom: Math.round(size * 0.038) } }, children);
+  // A sub-full-width image is centred in the slide.
+  const center = widthRatio < 1 ? { marginLeft: "auto", marginRight: "auto" } : {};
+  return el("div", { style: { display: "flex", flexDirection: "column", width: photoW, ...center, marginBottom: Math.round(size * marginRatio) } }, children);
 }
 
 // Build the inner body for one slide kind. `size` is the square edge length.
 // `portrait` (cover only) is { dataUri, name, credit } or null. `question`
 // (engagement only) is the MCQ { question, options, correctIndex } or null.
-function slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
+function slideBody({ kind, story, accent, size, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode = HIGHLIGHT_MODE }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
+
+  // Body slides ("what"/"key points"/"why") prepend a smaller image of a story
+  // entity above their text when one was resolved — real imagery, not bland text.
+  const withImage = (content) => ((slideImage && slideImage.dataUri)
+    ? el("div", { style: { display: "flex", flexDirection: "column" } }, [
+      imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio: 0.42, marginRatio: 0.03 }),
+      content,
+    ])
+    : content);
 
   if (kind === "cover") {
     // Prefer the concrete hook generated upstream for the cover; fall back to the
@@ -533,7 +576,7 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     const hookText = oneLine(coverHook);
     const cover = hookText || headline;
     const children = [];
-    if (portrait && portrait.dataUri) children.push(coverImageHero({ image: portrait, size }));
+    if (portrait && portrait.dataUri) children.push(imageHero({ image: portrait, size }));
     const dateRow = coverDateRow(story, accent, size);
     if (dateRow) children.push(dateRow);
     children.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
@@ -549,10 +592,10 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     // what actually keeps the slide skimmable; the 4:5 slide carries the rest as
     // whitespace, and the key-points slide picks up the detail.
     const summary = firstSentences(story?.summary, 1) || headline;
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("What happened", accent, size),
       el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4 } }, summary),
-    ]);
+    ]));
   }
 
   if (kind === "keypoints") {
@@ -561,10 +604,10 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     const rows = points.length
       ? points.map((p) => bulletRow(p, accent, size))
       : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Key points", accent, size),
       ...rows,
-    ]);
+    ]));
   }
 
   if (kind === "why") {
@@ -576,10 +619,10 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     const rows = why.length
       ? why.map((p) => bulletRow(p, accent, size))
       : [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline)];
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
       eyebrow("Why it matters", accent, size),
       ...rows,
-    ]);
+    ]));
   }
 
   if (kind === "engagement") {
@@ -616,7 +659,7 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
   ]);
 }
 
-function slideTree({ kind, story, accent, category, index, total, size, height, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode }) {
+function slideTree({ kind, story, accent, category, index, total, size, height, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
   const hint = kind === "cover" ? "Swipe to read →"
@@ -630,7 +673,7 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
+      slideBody({ kind, story, accent, size, portrait, slideImage, whyItMatters, question, coverHook, coverHighlight, highlightMode }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
@@ -656,22 +699,32 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   const slideList = slides || carouselSlidesFor(whyItMatters, question);
   const total = slideList.length;
 
+  // Resolve real imagery once, up front, and spread it across the carousel: the
+  // cover gets the lead entity (face-first, with the no-wrong-face guard); the
+  // text body slides ("what"/"key points"/"why" that are present) each get a
+  // DIFFERENT story entity's image, captioned. All best-effort and in parallel —
+  // any miss leaves that slide text-only. Gated by withPortrait.
   let portrait = null;
-  if (withPortrait && slideList.includes("cover")) {
-    const lead = leadCoverImage(story);
-    if (lead) {
-      for (const url of lead.urls) {
-        const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
-        if (dataUri) { portrait = { dataUri, name: lead.name, credit: lead.credit }; break; }
-      }
-    }
+  const bodyImageByKind = {};
+  if (withPortrait) {
+    const coverSpec = slideList.includes("cover") ? leadCoverImage(story) : null;
+    const bodyKinds = ["what", "keypoints", "why"].filter((k) => slideList.includes(k));
+    const bodySpecs = entityImages(story)
+      .filter((s) => s.name !== coverSpec?.name)
+      .slice(0, bodyKinds.length);
+    const [coverImg, ...bodyImgs] = await Promise.all([
+      resolveImage(coverSpec, fetchImpl),
+      ...bodySpecs.map((s) => resolveImage(s, fetchImpl)),
+    ]);
+    portrait = coverImg;
+    bodyImgs.forEach((img, i) => { if (img) bodyImageByKind[bodyKinds[i]] = img; });
   }
 
   const out = [];
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
     const svg = await satori(
-      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null, coverHighlight: kind === "cover" ? coverHighlight : null, highlightMode }),
+      slideTree({ kind, story, accent, category, index, total, size, height, portrait: kind === "cover" ? portrait : null, slideImage: bodyImageByKind[kind] || null, whyItMatters, question: kind === "engagement" ? question : null, coverHook: kind === "cover" ? coverHook : null, coverHighlight: kind === "cover" ? coverHighlight : null, highlightMode }),
       { width, height, fonts }
     );
     const { buffer, contentType } = rasterize(svg, { width, format });
