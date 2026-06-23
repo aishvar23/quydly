@@ -207,7 +207,7 @@ WHAT MAKES A GOOD HOOK (use the story's strongest concrete element):
 - A short VERBATIM quote + who said it, when the story hinges on it.
 - Name the stake or consequence directly: who wins, who loses, what changes.
 
-Also pick the HIGHLIGHT: the single most important span WITHIN your hook to emphasise — the number/stat, the named subject, or the core stake (1-3 words). It MUST be an exact, contiguous, verbatim substring of the hook (same words, same order). Prefer a number or proper noun when the hook has one. If nothing clearly deserves emphasis, return "".
+Also pick the HIGHLIGHT: the single most important span WITHIN your hook to emphasise — the number/stat, the named subject, or the core stake. It MUST be 1-3 COMPLETE words copied verbatim from the hook, in order (whole words only — never a partial word or mid-number fragment). Prefer a number or proper noun when the hook has one. If nothing clearly deserves emphasis, return "".
 
 RULES
 - 6-12 words. Active, present tense. Plain language, no jargon.

@@ -42,7 +42,9 @@ function hookFingerprint(coverHook, coverHighlight) {
   const h = typeof coverHook === "string" ? coverHook.trim() : "";
   if (!h) return "nohook";
   const hl = typeof coverHighlight === "string" ? coverHighlight.trim() : "";
-  return createHash("sha1").update(`${h}${hl}`).digest("hex").slice(0, 12);
+  // Length-prefix the hook so (hook, highlight) pairs can't collide by
+  // concatenation (e.g. ("ab","c") vs ("a","bc")).
+  return createHash("sha1").update(`${h.length}:${h}:${hl}`).digest("hex").slice(0, 12);
 }
 
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {

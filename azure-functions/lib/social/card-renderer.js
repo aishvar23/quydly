@@ -414,11 +414,15 @@ function highlightWordIndices(words, highlight) {
   const set = new Set();
   const hi = String(highlight || "").split(/\s+/).map(hlKey).filter(Boolean);
   if (!hi.length) return set;
-  const keys = words.map(hlKey);
-  for (let i = 0; i + hi.length <= keys.length; i++) {
+  // Match over only the words with a non-empty key, keeping their original index,
+  // so a punctuation-only token (e.g. a standalone "—") between two highlighted
+  // words doesn't break the contiguous run.
+  const toks = [];
+  words.forEach((w, idx) => { const k = hlKey(w); if (k) toks.push({ idx, k }); });
+  for (let i = 0; i + hi.length <= toks.length; i++) {
     let match = true;
-    for (let j = 0; j < hi.length; j++) { if (keys[i + j] !== hi[j]) { match = false; break; } }
-    if (match) { for (let j = 0; j < hi.length; j++) set.add(i + j); return set; }
+    for (let j = 0; j < hi.length; j++) { if (toks[i + j].k !== hi[j]) { match = false; break; } }
+    if (match) { for (let j = 0; j < hi.length; j++) set.add(toks[i + j].idx); return set; }
   }
   return set;
 }
@@ -428,7 +432,7 @@ function highlightWordIndices(words, highlight) {
 // in "accent" mode) — rendered as word-level flex items so the line wraps
 // naturally while the highlight hugs only its words. Falls back to a single plain
 // text node when there is nothing to highlight (the pre-highlight layout).
-function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, accent = HIGHLIGHT_MARKER } = {}) {
+function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, accent = FG } = {}) {
   const fontSize = Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072));
   const words = headline.split(/\s+/).filter(Boolean);
   const hi = highlightWordIndices(words, highlight);
