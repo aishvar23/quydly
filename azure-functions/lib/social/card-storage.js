@@ -34,6 +34,15 @@ function questionFingerprint(question) {
   return createHash("sha1").update(seed).digest("hex").slice(0, 12);
 }
 
+// The cover hook is rendered onto the cover slide, so it is part of the slide
+// bytes — the memo key and object path must fingerprint it too, otherwise a
+// hooked render would collide with an earlier hook-less one. "nohook" when empty.
+function hookFingerprint(coverHook) {
+  const h = typeof coverHook === "string" ? coverHook.trim() : "";
+  if (!h) return "nohook";
+  return createHash("sha1").update(h).digest("hex").slice(0, 12);
+}
+
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
   // When on, carousel cover slides for person-led stories carry a licensed
@@ -86,8 +95,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Keying only on story.id let a later render upsert-overwrite an earlier post's
   // slide, so that post could publish the wrong engagement question while its
   // social_post_engagement row still held the original Q&A (wrong 12h answer).
-  async function buildCarousel({ story, whyItMatters = [], question = null, variant }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
@@ -117,14 +126,15 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [], question = null }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
-      // distinct (whyItMatters, question) variant never overwrites another's bytes.
-      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}`;
+      // distinct (whyItMatters, question, coverHook) variant never overwrites
+      // another's bytes.
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook)}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters, question, variant }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, coverHook, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

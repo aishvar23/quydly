@@ -81,6 +81,36 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
   }
 }
 
+// Generate the carousel COVER HOOK (slide 1) — a 6-12 word concrete, swipe-
+// earning line that leads with the story's specifics. Returns the hook string,
+// or "" on any failure — the renderer then falls back to the raw headline, so a
+// failure here is never worse than the pre-feature cover. Best-effort and
+// additive: it must not throw into the platform loop.
+async function generateCoverHook(anthropic, platform, story, logger) {
+  try {
+    const msg = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 128,
+      system: platform.HOOK_SYSTEM,
+      messages: [{ role: "user", content: platform.buildHookPrompt(story) }],
+    });
+
+    let raw = String(msg?.content?.[0]?.text || "").trim();
+    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
+  } catch (err) {
+    logger.warn(JSON.stringify({
+      event: "social_cover_hook_failed",
+      platform: platform.PLATFORM,
+      story_id: story.id,
+      error: err.message,
+    }));
+    return "";
+  }
+}
+
 // Build one platform draft. Deterministic by default; LLM copy only when it
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
@@ -100,6 +130,12 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       if (anthropic && platform.buildWhyItMattersPrompt) {
         whyItMatters = await generateWhyItMatters(anthropic, platform, story, logger);
       }
+      // Cover hook (slide 1): a concrete, swipe-earning line that replaces the raw
+      // headline on the cover. Best-effort: "" → renderer falls back to headline.
+      let coverHook = "";
+      if (anthropic && platform.buildHookPrompt) {
+        coverHook = await generateCoverHook(anthropic, platform, story, logger);
+      }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
       // PREVIOUS post's story in the SAME category, inserted second-to-last
       // (before the CTA). Best-
@@ -111,7 +147,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion });
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;

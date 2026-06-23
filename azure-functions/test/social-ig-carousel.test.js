@@ -391,9 +391,9 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   const slides = await svc.getCarouselSlideUrls({ story: STORY });
   assert.equal(slides.length, 4);
   assert.deepEqual(slides.map((s) => s.index), [0, 1, 2, 3]);
-  // No why / no question → "nowhy-noq" variant segment in the object path.
-  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq/0-cover.jpg");
-  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq/3-cta.jpg");
+  // No why / no question / no hook → "nowhy-noq-nohook" variant segment in the path.
+  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook/0-cover.jpg");
+  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook/3-cta.jpg");
   assert.equal(slides[0].contentType, "image/jpeg");
   assert.equal(mock.uploads.length, 4);
   assert.ok(mock.uploads.every((u) => /\.jpg$/.test(u.path)));
@@ -419,6 +419,21 @@ test("cardService.getCarouselSlideUrls: distinct engagement questions get distin
   const eng2 = s2.find((s) => s.slideType === "engagement").url;
   assert.notEqual(eng1, eng2);
   assert.ok(mock.uploads.every((u) => u.path.includes("/carousel/")));
+});
+
+test("cardService.getCarouselSlideUrls: distinct cover hooks get distinct storage paths (no overwrite)", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+
+  const s1 = await svc.getCarouselSlideUrls({ story: STORY, coverHook: "Markets just hit a three-year inflation low" });
+  const s2 = await svc.getCarouselSlideUrls({ story: STORY, coverHook: "Rate cuts are suddenly back on the table" });
+
+  // Different hooks ⇒ different variant segment ⇒ the cover bytes never collide.
+  assert.notEqual(s1[0].url, s2[0].url);
+  // A hook-less render gets the "nohook" segment, distinct from both hooked ones.
+  const s0 = await svc.getCarouselSlideUrls({ story: STORY });
+  assert.ok(s0[0].url.includes("-nohook/"));
+  assert.ok(!s1[0].url.includes("-nohook/"));
 });
 
 test("cardService.getCarouselSlideUrls: returns null (non-fatal) when an upload fails", async () => {
