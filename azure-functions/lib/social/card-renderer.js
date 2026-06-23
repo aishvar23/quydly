@@ -24,6 +24,7 @@ import { PNG } from "pngjs";
 import jpeg from "jpeg-js";
 import { accentFor } from "./_categories.js";
 import { validateMCQ } from "./mcq.js";
+import { QUYDLY_IG_HANDLE } from "./platforms/_shared.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
@@ -32,10 +33,6 @@ const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "asse
 const BG = "#0B0F1A";
 const FG = "#FFFFFF";
 const MUTED = "#9CA3AF";
-
-// IG @handle shown on the final CTA slide's follow prompt. Env-overridable (kept
-// in sync with platforms/_shared.js QUYDLY_IG_HANDLE) so a rename is config-only.
-const igHandle = () => process.env.QUYDLY_IG_HANDLE || "@quydlyenglish";
 
 const SHAPES = {
   landscape: { width: 1600, height: 900 },
@@ -522,7 +519,7 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     }, "Follow for tomorrow's brief"),
     el("div", {
       style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.05), lineHeight: 1.2, marginBottom: Math.round(size * 0.045) },
-    }, igHandle()),
+    }, QUYDLY_IG_HANDLE()),
     el("div", {
       style: { display: "flex", fontSize: Math.round(size * 0.038), color: MUTED, lineHeight: 1.35 },
     }, "Daily news quiz · 5 questions · ~3 min · resets daily"),

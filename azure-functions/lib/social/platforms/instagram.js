@@ -207,11 +207,14 @@ const ENGAGEMENT_QUESTION_MODEL = "claude-sonnet-4-6";
 // the entity columns used to gate topical relevance (see previousPostedStory).
 const ENGAGEMENT_STORY_COLUMNS = "id, headline, summary, key_points, category_id, primary_entities, primary_entities_enriched";
 
+// Normalise an entity name for case/whitespace-insensitive overlap matching.
+const normEntityKey = (name) => String(name).toLowerCase().replace(/\s+/g, " ").trim();
+
 // Normalised set of a story's entity names, for topical-overlap matching.
 function entityKeySet(story) {
   const set = new Set();
   for (const name of entityNames(story)) {
-    const key = String(name).toLowerCase().replace(/\s+/g, " ").trim();
+    const key = normEntityKey(name);
     if (key) set.add(key);
   }
   return set;
@@ -220,7 +223,7 @@ function entityKeySet(story) {
 // True when `story` shares ≥1 entity with the (pre-normalised) `keySet`.
 function sharesEntity(keySet, story) {
   for (const name of entityNames(story)) {
-    const key = String(name).toLowerCase().replace(/\s+/g, " ").trim();
+    const key = normEntityKey(name);
     if (key && keySet.has(key)) return true;
   }
   return false;
