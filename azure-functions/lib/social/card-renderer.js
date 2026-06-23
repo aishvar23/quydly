@@ -208,18 +208,24 @@ function upscaleWikimedia(url, px) {
 // the many non-person stories a real graphic). Only already-licensed Wikipedia/
 // override sources are used, and always credited. Returns { url, name, credit }
 // or null (text-only cover). The thumbnail is upscaled for the large render.
+// Candidate image URLs for an entity, in fetch-preference order. EVERY licensed
+// source (full override → thumbnail → Wikipedia) contributes a couple of larger
+// Wikimedia renders plus the original. The caller tries them until one fetches,
+// so a too-large full-resolution override (rejected over PORTRAIT_MAX_BYTES)
+// falls through to its smaller thumbnail rather than to the generic floor.
+// (Wikimedia 400s on a thumbnail wider than the source — hence the size ladder.)
+function entityImageUrls(e) {
+  const sources = [e?.portrait_image_url, e?.portrait_thumbnail_url, e?.wikipedia_thumbnail_url]
+    .filter((u) => typeof u === "string" && /^https:\/\//i.test(u));
+  return [...new Set(sources.flatMap((s) => [upscaleWikimedia(s, 800), upscaleWikimedia(s, 500), s]))];
+}
+
 function leadCoverImage(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
   const pick = (e) => {
     if (!e) return null;
-    const raw = e.portrait_image_url || e.portrait_thumbnail_url || e.wikipedia_thumbnail_url;
-    if (typeof raw !== "string" || !/^https:\/\//i.test(raw)) return null;
-    // Wikimedia 400s on a thumbnail wider than the source image (and supported
-    // sizes vary per file), so don't upscale blindly: offer a couple of larger
-    // renders and fall back to the original URL, which is always valid. The
-    // caller tries them in order and takes the first that fetches.
-    const urls = [...new Set([upscaleWikimedia(raw, 800), upscaleWikimedia(raw, 500), raw])];
-    return { urls, name: oneLine(e.name), credit: portraitCredit(e) };
+    const urls = entityImageUrls(e);
+    return urls.length ? { urls, name: oneLine(e.name), credit: portraitCredit(e) } : null;
   };
   const leadPerson = pick(ents.find((e) => e && e.type === "person"));
   if (leadPerson) return leadPerson;
@@ -241,10 +247,10 @@ function entityImages(story) {
   const seen = new Set();
   for (const e of ents) {
     if (!e || seen.has(e.name)) continue;
-    const raw = e.portrait_image_url || e.portrait_thumbnail_url || e.wikipedia_thumbnail_url;
-    if (typeof raw !== "string" || !/^https:\/\//i.test(raw)) continue;
+    const urls = entityImageUrls(e);
+    if (!urls.length) continue;
     seen.add(e.name);
-    out.push({ urls: [...new Set([upscaleWikimedia(raw, 800), upscaleWikimedia(raw, 500), raw])], name: oneLine(e.name), credit: portraitCredit(e) });
+    out.push({ urls, name: oneLine(e.name), credit: portraitCredit(e) });
   }
   return out;
 }

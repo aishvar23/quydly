@@ -252,6 +252,23 @@ test("renderCarouselSlides: no entity image → brand-graphic floor, every slide
   for (const s of slides) assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEGs
 });
 
+test("renderCarouselSlides: oversize full-image override falls back to its thumbnail", async () => {
+  // An override with BOTH a full press photo and a thumbnail: if the full image
+  // fails to fetch (e.g. over PORTRAIT_MAX_BYTES), the thumbnail must still be
+  // tried before giving up to the floor.
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", portrait_image_url: "https://upload.wikimedia.org/full.jpg", portrait_thumbnail_url: "https://upload.wikimedia.org/thumb.jpg" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    return String(url).includes("full.jpg") ? { ok: false, status: 400, headers: { get: () => null } } : imgResponse();
+  };
+  await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.ok(calls.includes("https://upload.wikimedia.org/full.jpg"));  // tried the full image first
+  assert.ok(calls.includes("https://upload.wikimedia.org/thumb.jpg")); // then the thumbnail
+});
+
 test("renderCarouselSlides: non-HTTPS portrait url is skipped (no fetch)", async () => {
   const story = { ...STORY, primary_entities_enriched: [
     { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "http://insecure/jane.png" },

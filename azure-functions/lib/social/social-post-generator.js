@@ -11,7 +11,6 @@
 
 import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
 import { validatePost, validateCoverHook } from "./social-validation.js";
-import { hasEntityImage } from "./card-renderer.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 
@@ -158,9 +157,16 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       // (cover + what + key points + why-if-present). Best-effort: any null slot
       // → that slide uses the brand-graphic floor.
       let illustrationUrls = [];
-      if (anthropic && cardService.getIllustrationUrls && !hasEntityImage(story)) {
-        const illCount = 3 + (whyItMatters.length ? 1 : 0);
-        illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: illCount });
+      if (anthropic && cardService.getIllustrationUrls) {
+        // Lazy import: hasEntityImage lives in card-renderer (which pulls
+        // satori/resvg), so import it only here — inside the cards-enabled branch,
+        // where the renderer is already loaded — never at module load (that would
+        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js).
+        const { hasEntityImage } = await import("./card-renderer.js");
+        if (!hasEntityImage(story)) {
+          const illCount = 3 + (whyItMatters.length ? 1 : 0);
+          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: illCount });
+        }
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
       // PREVIOUS post's story in the SAME category, inserted second-to-last
