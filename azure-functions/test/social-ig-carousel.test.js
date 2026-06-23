@@ -275,6 +275,8 @@ test("renderCarouselSlides: malformed question (3 options) → engagement slide 
 // ── platform: generateEngagementQuestion (sources from previous POSTED IG post) ─
 
 test("instagram.generateEngagementQuestion: pulls prev POSTED IG story, returns MCQ + sourcePostId", async () => {
+  // STORY (today) has no entities → the topical-overlap gate cannot apply, so we
+  // fall back to the most recent same-category post (pre-fix behaviour).
   const PREV_STORY = { id: 7, headline: "Bank cut rates", summary: "The bank cut rates.", key_points: ["Rates fell"], category_id: "finance" };
   const queries = [];
   const supabase = {
@@ -283,12 +285,12 @@ test("instagram.generateEngagementQuestion: pulls prev POSTED IG story, returns 
       q.select = () => q;
       q.eq = (k, v) => { q._eq[k] = v; return q; };
       q.not = () => q; q.neq = (k, v) => { q._eq[`neq_${k}`] = v; return q; };
-      q.order = () => q; q.limit = () => q;
-      q.maybeSingle = async () => {
+      q.order = () => q;
+      q.limit = async () => {
         queries.push({ table, eq: q._eq });
         // Embedded !inner join: the prev story rides on the social_posts row.
-        if (table === "social_posts") return { data: { id: "prev-post-1", published_at: "2026-06-20T00:00:00Z", stories: PREV_STORY }, error: null };
-        return { data: null, error: null };
+        if (table === "social_posts") return { data: [{ id: "prev-post-1", published_at: "2026-06-20T00:00:00Z", stories: PREV_STORY }], error: null };
+        return { data: [], error: null };
       };
       return q;
     },
@@ -314,14 +316,58 @@ test("instagram.generateEngagementQuestion: no previous post → null (no engage
   const supabase = {
     from() {
       const q = {};
-      q.select = () => q; q.eq = () => q; q.not = () => q; q.neq = () => q; q.order = () => q; q.limit = () => q;
-      q.maybeSingle = async () => ({ data: null, error: null });
+      q.select = () => q; q.eq = () => q; q.not = () => q; q.neq = () => q; q.order = () => q;
+      q.limit = async () => ({ data: [], error: null });
       return q;
     },
   };
   const anthropic = { messages: { create: async () => { throw new Error("should not be called"); } } };
   const out = await instagram.generateEngagementQuestion({ anthropic, supabase, story: STORY, audienceGeo: "global" });
   assert.equal(out, null);
+});
+
+// Topical-relevance gate: when today's story HAS entities, the prior post must
+// share ≥1 of them — a same-category-but-unrelated post (the Iran-post-asks-an-
+// IPL-question bug) is rejected and the slide is dropped.
+test("instagram.generateEngagementQuestion: same category but no shared entity → null", async () => {
+  const TODAY = { ...STORY, id: 99, category_id: "world", primary_entities: ["Iran", "Pakistan"] };
+  const CRICKET = { id: 7, headline: "Pant traded to Delhi", summary: "An IPL trade.", key_points: ["Pant moved"], category_id: "world", primary_entities: ["Rishabh Pant", "Delhi Capitals"] };
+  const supabase = {
+    from() {
+      const q = {};
+      q.select = () => q; q.eq = () => q; q.not = () => q; q.neq = () => q; q.order = () => q;
+      q.limit = async () => ({ data: [{ id: "prev-cricket", published_at: "2026-06-20T00:00:00Z", stories: CRICKET }], error: null });
+      return q;
+    },
+  };
+  const anthropic = { messages: { create: async () => { throw new Error("should not be called"); } } };
+  const out = await instagram.generateEngagementQuestion({ anthropic, supabase, story: TODAY, audienceGeo: "global" });
+  assert.equal(out, null);
+});
+
+// When a topically-related prior post exists deeper in the list, it is preferred
+// over a newer-but-unrelated one in the same category.
+test("instagram.generateEngagementQuestion: skips newer unrelated post, picks the related one", async () => {
+  const TODAY = { ...STORY, id: 99, category_id: "world", primary_entities: ["Iran", "Pakistan"] };
+  const CRICKET = { id: 7, headline: "Pant traded", summary: "An IPL trade.", key_points: ["Pant moved"], category_id: "world", primary_entities: ["Rishabh Pant"] };
+  const IRAN = { id: 8, headline: "Iran met Pakistan", summary: "Talks were held.", key_points: ["Talks held"], category_id: "world", primary_entities: ["Iran", "Switzerland"] };
+  const supabase = {
+    from() {
+      const q = {};
+      q.select = () => q; q.eq = () => q; q.not = () => q; q.neq = () => q; q.order = () => q;
+      q.limit = async () => ({ data: [
+        { id: "post-cricket", published_at: "2026-06-21T00:00:00Z", stories: CRICKET }, // newer, unrelated
+        { id: "post-iran", published_at: "2026-06-20T00:00:00Z", stories: IRAN },       // older, shares "Iran"
+      ], error: null });
+      return q;
+    },
+  };
+  const anthropic = {
+    messages: { create: async () => ({ content: [{ text: JSON.stringify({ question: "What did Iran do?", options: ["Met Pakistan", "Left the UN", "Raised rates", "Won a match"], correctIndex: 0 }) }] }) },
+  };
+  const out = await instagram.generateEngagementQuestion({ anthropic, supabase, story: TODAY, audienceGeo: "global" });
+  assert.equal(out.sourcePostId, "post-iran");
+  assert.equal(out.answer, "Met Pakistan");
 });
 
 // ── slide storage ──────────────────────────────────────────────────────────────
@@ -626,7 +672,6 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
         }
         if (table === "social_posts") {
           if (q._op === "update") return { data: null, error: null };
-          if (q._hasNot) return { data: { id: "prev-post-1", published_at: "2026-06-20T00:00:00Z", stories: PREV_STORY }, error: null }; // engagement prev-post lookup (embedded !inner story)
           if (q._op === "upsert") { const row = { id: `post-${++seq}`, ...q._payload }; inserts.push(row); return { data: { id: row.id }, error: null }; }
           return { data: null, error: null }; // existing-check → none
         }
@@ -634,6 +679,12 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
       };
       q.then = (res, rej) => {
         if (table === "social_post_engagement" && q._payload) engagement.push(q._payload);
+        // Engagement prev-post lookup now terminates at an awaited .limit() that
+        // returns an ARRAY (not .maybeSingle()); the embedded !inner story rides
+        // on the social_posts row. `q._hasNot` marks that query (it calls .not()).
+        if (table === "social_posts" && q._hasNot) {
+          return Promise.resolve({ data: [{ id: "prev-post-1", published_at: "2026-06-20T00:00:00Z", stories: PREV_STORY }], error: null }).then(res, rej);
+        }
         return Promise.resolve({ error: null }).then(res, rej);
       };
       return q;

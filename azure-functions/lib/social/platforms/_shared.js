@@ -3,6 +3,10 @@
 
 export const QUYDLY_URL = () => process.env.QUYDLY_URL || "quydly.com";
 
+// The Instagram @handle, used in follow CTAs. Env-overridable like QUYDLY_URL so
+// a rename never needs a code change; defaults to the live account.
+export const QUYDLY_IG_HANDLE = () => process.env.QUYDLY_IG_HANDLE || "@quydlyenglish";
+
 // Collect entity names from a story: typed enriched entities first, then the
 // flat primary_entities array. Untyped enriched entities always pass (legacy
 // rows pre-enrichment have no type); `allowedTypes` (when given) further
