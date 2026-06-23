@@ -38,7 +38,7 @@ export function format(story, audienceGeo) {
   const summary = firstSentences(story.summary, 1);
   const kps = keyPointStrings(story).slice(0, 3);
   const know = kps.length ? `What to know:\n${bullets(kps)}` : "";
-  const cta = `Follow ${QUYDLY_IG_HANDLE()} for your daily news brief + quiz.\nPlay today's quiz → ${url}`;
+  const cta = `Follow ${QUYDLY_IG_HANDLE()} for the day's biggest stories, decoded.`;
 
   const text = truncate(
     assemble([headline, summary, know, cta], CONSTRAINTS.maxLength),
@@ -77,14 +77,12 @@ What to know:
 • {point}
 • {point}
 
-Follow ${QUYDLY_IG_HANDLE()} for your daily news brief + quiz.
-Play today's quiz → ${QUYDLY_URL()}
+Follow ${QUYDLY_IG_HANDLE()} for the day's biggest stories, decoded.
 
 RULES:
 - Max ${CONSTRAINTS.maxLength} characters. Do NOT add source links yourself — a
   "Sources" block is appended automatically.
-- Must end with the "Follow ${QUYDLY_IG_HANDLE()}" CTA followed by the
-  "Play today's quiz → ${QUYDLY_URL()}" line. No invented facts or numbers.
+- Must end with the "Follow ${QUYDLY_IG_HANDLE()}" CTA. No invented facts, numbers, or links.
 - Neutral tone for any sensitive subject. No clickbait.
 - Do NOT add hashtags yourself — a curated hashtag block is appended automatically.
 

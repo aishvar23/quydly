@@ -499,15 +499,16 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
 
   if (kind === "cover") {
     // Prefer the concrete hook generated upstream for the cover; fall back to the
-    // raw headline when none was supplied. The hook's key span (coverHighlight)
-    // is emphasised on the hook only — on the headline fallback it won't match,
-    // so the cover renders plain.
-    const cover = oneLine(coverHook) || headline;
+    // raw headline when none was supplied. The highlight belongs to the HOOK, so
+    // it is dropped on the headline fallback — both so the fallback isn't randomly
+    // emphasised and so its bytes match the shared "nohook" cache/storage variant.
+    const hookText = oneLine(coverHook);
+    const cover = hookText || headline;
     const dateRow = coverDateRow(story, accent, size);
     const children = [];
     if (dateRow) children.push(dateRow);
     if (portrait && portrait.dataUri) children.push(coverPortraitBlock({ portrait, accent, size }));
-    children.push(coverHeadline(cover, size, { highlight: coverHighlight, mode: highlightMode, accent }));
+    children.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
     // Single child and no date → keep the original bare-headline node (matches
     // the pre-feature layout exactly for stories with no publish date).
     if (children.length === 1) return children[0];
@@ -572,27 +573,26 @@ function slideBody({ kind, story, accent, size, portrait, whyItMatters, question
     ]);
   }
 
-  // cta — lead with the follow ask (the durable value), with the daily-quiz
-  // ritual as the supporting line. The handle sits in the category accent colour.
+  // cta — a pure follow ask. The handle is the hero; the supporting line is a
+  // CONTENT promise, not the quiz (we no longer funnel IG traffic to the quiz).
   return el("div", { style: { display: "flex", flexDirection: "column" } }, [
     el("div", {
-      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.062), lineHeight: 1.15, marginBottom: Math.round(size * 0.014) },
+      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.058), lineHeight: 1.15, marginBottom: Math.round(size * 0.016) },
     }, "Follow for tomorrow's brief"),
     el("div", {
-      style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.05), lineHeight: 1.2, marginBottom: Math.round(size * 0.045) },
+      style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.056), lineHeight: 1.2, marginBottom: Math.round(size * 0.04) },
     }, QUYDLY_IG_HANDLE()),
     el("div", {
-      style: { display: "flex", fontSize: Math.round(size * 0.038), color: MUTED, lineHeight: 1.35 },
-    }, "Daily news quiz · 5 questions · ~3 min · resets daily"),
+      style: { display: "flex", fontSize: Math.round(size * 0.04), color: MUTED, lineHeight: 1.35 },
+    }, "The day's biggest stories, decoded."),
   ]);
 }
 
 function slideTree({ kind, story, accent, category, index, total, size, height, portrait, whyItMatters, question, coverHook, coverHighlight, highlightMode }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
-  const hint = kind === "cta" ? "quydly.com"
-    : (kind === "cover" ? "Swipe to read →"
-    : (kind === "engagement" ? "Tap to comment →" : ""));
+  const hint = kind === "cover" ? "Swipe to read →"
+    : (kind === "engagement" ? "Tap to comment →" : "");
   return el("div", {
     style: {
       width: size, height, display: "flex", flexDirection: "column",

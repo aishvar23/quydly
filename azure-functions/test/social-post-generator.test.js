@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import * as x from "../lib/social/platforms/x.js";
 import * as facebook from "../lib/social/platforms/facebook.js";
 import * as instagram from "../lib/social/platforms/instagram.js";
-import { validatePost } from "../lib/social/social-validation.js";
+import { validatePost, validateCoverHook } from "../lib/social/social-validation.js";
 import { generateSocialPosts } from "../lib/social/social-post-generator.js";
 import { weightedLength } from "../lib/social/platforms/x.js";
 
@@ -114,7 +114,22 @@ test("validatePost: allows numbers present in the story facts", () => {
   assert.ok(v.valid, v.errors.join(", "));
 });
 
-// ── Orchestrator ─────────────────────────────────────────────────────────────
+// ── Cover-hook validation (the hook is rendered into the cover IMAGE, so it is
+//    guarded here — it never passes through validatePost) ──────────────────────
+
+test("validateCoverHook: a clean, story-grounded hook passes", () => {
+  const story = { ...STORY, summary: STORY.summary + " The plan adds 12 new routes." };
+  const v = validateCoverHook({ hook: "City just added 12 new bus routes", story });
+  assert.ok(v.valid, v.errors.join(", "));
+});
+
+test("validateCoverHook: rejects clickbait, unsupported number, overlong, and empty", () => {
+  assert.equal(validateCoverHook({ hook: "You won't believe what the city just did", story: STORY }).valid, false);
+  assert.equal(validateCoverHook({ hook: "The mayor finally breaks his silence on buses", story: STORY }).valid, false);
+  assert.equal(validateCoverHook({ hook: "City spent 999 billion on a bus", story: STORY }).valid, false); // 999 not in story
+  assert.equal(validateCoverHook({ hook: Array(16).fill("word").join(" "), story: STORY }).valid, false);   // >14 words
+  assert.equal(validateCoverHook({ hook: "", story: STORY }).valid, false);
+});
 
 function makeSupabaseMock({ candidate, story, existingByPlatform = {} }) {
   const inserted = [];

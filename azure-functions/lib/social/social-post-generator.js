@@ -10,7 +10,7 @@
 // No external social API calls happen here — drafts are review-first.
 
 import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
-import { validatePost } from "./social-validation.js";
+import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 
@@ -102,6 +102,17 @@ async function generateCoverHook(anthropic, platform, story, logger) {
     const parsed = JSON.parse(raw);
     const hook = typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
     const highlight = typeof parsed?.highlight === "string" ? parsed.highlight.trim() : "";
+
+    // The hook is rendered into the cover IMAGE and never sees validatePost, so
+    // guard it deterministically: a banned phrase, fabricated number, or overlong
+    // line falls back to the raw headline (empty hook → no highlight either).
+    const { valid, errors } = validateCoverHook({ hook, story });
+    if (!valid) {
+      logger.warn(JSON.stringify({
+        event: "social_cover_hook_rejected", platform: platform.PLATFORM, story_id: story.id, errors,
+      }));
+      return { hook: "", highlight: "" };
+    }
     return { hook, highlight };
   } catch (err) {
     logger.warn(JSON.stringify({
