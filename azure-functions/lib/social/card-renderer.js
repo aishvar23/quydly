@@ -25,6 +25,7 @@ import jpeg from "jpeg-js";
 import { accentFor } from "./_categories.js";
 import { validateMCQ } from "./mcq.js";
 import { QUYDLY_IG_HANDLE } from "./platforms/_shared.js";
+import { classifySensitivity, SENSITIVITY, SAFE_CATEGORIES } from "./social-safety.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
@@ -238,6 +239,27 @@ function entityImageUrls(e) {
   return [...new Set(sources.flatMap((s) => [upscaleWikimedia(s, 800), upscaleWikimedia(s, 500), s]))];
 }
 
+// HIGH-sensitivity NEWS stories (death / violence / disaster) must NOT lead with
+// a person's posed stock portrait: a smiling PR headshot over a tragedy reads as
+// callous, and the lead "person" is often only tangential (e.g. an official who
+// commented on it, not a subject of it). On those stories we drop PERSON faces
+// from slide imagery — a neutral org/place photo is used instead, else (via the
+// generator's hasEntityImage check) a symbolic illustration, else the brand
+// floor. MEDIUM/LOW (e.g. an election with the candidate) keep faces.
+//
+// The brand-safe categories (culture / science / technology / finance) are
+// EXEMPT even when the keyword classifier returns HIGH: there a violence term is
+// almost always fictional/metaphorical (a TV plot where a character is "killed",
+// a market "crash"), not a real tragedy, and the relevant person photo should
+// stay. Real tragedies land in the news categories (e.g. "world"), which are not
+// exempt. Gated on the shared classifier (social-safety.js) so the rule can't
+// drift from the auto-approval/sensitivity logic.
+function excludePeopleImagery(story) {
+  if (classifySensitivity(story) !== SENSITIVITY.HIGH) return false;
+  const category = story?.category_id || story?.category;
+  return !(category && SAFE_CATEGORIES.has(category));
+}
+
 function leadCoverImage(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
   const pick = (e) => {
@@ -245,8 +267,10 @@ function leadCoverImage(story) {
     const urls = entityImageUrls(e);
     return urls.length ? { urls, name: oneLine(e.name), credit: portraitCredit(e) } : null;
   };
-  const leadPerson = pick(ents.find((e) => e && e.type === "person"));
-  if (leadPerson) return leadPerson;
+  if (!excludePeopleImagery(story)) {
+    const leadPerson = pick(ents.find((e) => e && e.type === "person"));
+    if (leadPerson) return leadPerson;
+  }
   for (const e of ents) {
     if (e && (e.type === "org" || e.type === "place")) {
       const img = pick(e);
@@ -261,10 +285,12 @@ function leadCoverImage(story) {
 // are captioned with the entity name, so a non-lead entity is fine here.
 function entityImages(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
+  const skipPeople = excludePeopleImagery(story);
   const out = [];
   const seen = new Set();
   for (const e of ents) {
     if (!e || seen.has(e.name)) continue;
+    if (skipPeople && e.type === "person") continue; // no faces on tragic stories
     const urls = entityImageUrls(e);
     if (!urls.length) continue;
     seen.add(e.name);
@@ -273,11 +299,23 @@ function entityImages(story) {
   return out;
 }
 
-// Whether the story has ANY licensed entity image — lets the generator decide
-// up front whether to spend an illustration generation (only when there's no
-// photo to use).
+// Whether the story has a USABLE licensed entity image — lets the generator
+// decide up front whether to spend an illustration generation (only when there
+// is no photo to use). "Usable" is sensitivity-aware: on HIGH-sensitivity
+// stories person faces are excluded (excludePeopleImagery), so a tragedy whose
+// only image is a person's portrait reports false here and the generator falls
+// back to a neutral symbolic illustration instead of leading with that face.
 export function hasEntityImage(story) {
   return entityImages(story).length > 0;
+}
+
+// How many DISTINCT usable entity images the story has (sensitivity-aware). The
+// generator sizes illustration generation from this so that EVERY content slide
+// without a photo gets a real illustration instead of the brand-graphic floor:
+// it generates (content-slide count − usable photos) illustrations, which the
+// renderer routes to exactly the photo-less slides.
+export function usableImageCount(story) {
+  return entityImages(story).length;
 }
 
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or
@@ -919,9 +957,9 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   let portrait = null;
   const bodyImageByKind = {};
   if (withPortrait) {
-    // Each text/cover slide gets its OWN visual, resolved independently: the
-    // licensed entity photo when there is one, else the per-slide generated
-    // illustration (Tier 2), else (in slideBody) the brand-graphic floor.
+    // Each cover/text slide gets its OWN visual: a licensed entity photo when one
+    // is available, else a generated illustration (Tier 2) that FILLS the gap,
+    // else (in slideBody / coverTree) the brand-graphic floor.
     const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
     const coverSpec = slideList.includes("cover") ? leadCoverImage(story) : null;
     const bodyKinds = contentKinds.filter((k) => k !== "cover");
@@ -929,20 +967,29 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
     const specByKind = {};
     if (slideList.includes("cover")) specByKind.cover = coverSpec;
     bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
-    const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
-    const illByKind = {};
-    contentKinds.forEach((k, i) => { illByKind[k] = ill[i] || null; });
 
-    const resolved = await Promise.all(contentKinds.map(async (k) => {
+    // Pass 1 — resolve the licensed photo for each slide (best-effort, parallel).
+    const photoByKind = {};
+    await Promise.all(contentKinds.map(async (k) => {
       const photo = await resolveImage(specByKind[k], fetchImpl);
-      if (photo) return [k, photo];
-      if (illByKind[k]) {
-        const dataUri = await fetchImageDataUri(illByKind[k], fetchImpl ? { fetchImpl } : {});
-        if (dataUri) return [k, { dataUri }]; // illustration — no caption (not a photo)
-      }
-      return [k, null];
+      if (photo) photoByKind[k] = photo;
     }));
-    for (const [k, img] of resolved) {
+
+    // Pass 2 — route the supplied illustrations to the slides that ended up
+    // WITHOUT a photo, in slide order. The generator sizes the illustration set
+    // to the photo-less slides (usableImageCount), so each gap gets a distinct
+    // illustration and no content slide falls back to the brand-graphic floor.
+    const ill = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean);
+    const gapKinds = contentKinds.filter((k) => !photoByKind[k]);
+    const illByKind = {};
+    await Promise.all(gapKinds.map(async (k, i) => {
+      if (!ill[i]) return;
+      const dataUri = await fetchImageDataUri(ill[i], fetchImpl ? { fetchImpl } : {});
+      if (dataUri) illByKind[k] = { dataUri }; // illustration — no caption (not a photo)
+    }));
+
+    for (const k of contentKinds) {
+      const img = photoByKind[k] || illByKind[k] || null;
       if (!img) continue;
       if (k === "cover") portrait = img; else bodyImageByKind[k] = img;
     }

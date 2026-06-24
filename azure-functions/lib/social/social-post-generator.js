@@ -152,20 +152,23 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       if (anthropic && platform.buildHookPrompt) {
         ({ hook: coverHook, highlight: coverHighlight } = await generateCoverHook(anthropic, platform, story, logger));
       }
-      // Editorial illustrations (Tier 2): only when the story has NO licensed
-      // photo (otherwise photos win). One DISTINCT illustration per content slide
-      // (cover + what + key points + why-if-present). Best-effort: any null slot
-      // → that slide uses the brand-graphic floor.
+      // Editorial illustrations (Tier 2): one DISTINCT illustration per content
+      // slide that has NO usable photo, so EVERY slide carries real imagery
+      // (photo or illustration) and none falls back to the brand-graphic floor.
+      // Photos still win per slide; illustrations only fill the gaps. Content
+      // slides = cover + what + key points (+ why when present). The renderer
+      // routes these to exactly the photo-less slides (gap-fill).
       let illustrationUrls = [];
       if (anthropic && cardService.getIllustrationUrls) {
-        // Lazy import: hasEntityImage lives in card-renderer (which pulls
+        // Lazy import: usableImageCount lives in card-renderer (which pulls
         // satori/resvg), so import it only here — inside the cards-enabled branch,
         // where the renderer is already loaded — never at module load (that would
         // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js).
-        const { hasEntityImage } = await import("./card-renderer.js");
-        if (!hasEntityImage(story)) {
-          const illCount = 3 + (whyItMatters.length ? 1 : 0);
-          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: illCount });
+        const { usableImageCount } = await import("./card-renderer.js");
+        const slideCount = 3 + (whyItMatters.length ? 1 : 0);
+        const gaps = Math.max(0, slideCount - usableImageCount(story));
+        if (gaps > 0) {
+          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: gaps });
         }
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
