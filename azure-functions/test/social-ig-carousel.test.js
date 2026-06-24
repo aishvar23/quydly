@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 
 import { renderCarouselSlides, CAROUSEL_SLIDES, coverDateLine, plannedIllustrationCount } from "../lib/social/card-renderer.js";
 import { notifyCoverHeldForReview } from "../lib/social/review-notify.js";
+import { createHmac } from "node:crypto";
 import { createCardService } from "../lib/social/card-storage.js";
 import * as ig from "../lib/social/instagram-graph.js";
 import { generatePlatformPost, generateSocialPosts } from "../lib/social/social-post-generator.js";
@@ -566,6 +567,35 @@ test("notifyCoverHeldForReview: with a key → POSTs to Resend with the default 
   assert.match(body.subject, /held for review/i);
   assert.match(body.subject, /story 5/i);
   assert.match(body.text, /Story id: 5/);
+});
+
+test("notifyCoverHeldForReview: with SOCIAL_REVIEW_SECRET + postId → signed Approve/Reject links in html + text", async () => {
+  let body;
+  const fetchImpl = async (url, opts) => { body = JSON.parse(opts.body); return { ok: true }; };
+  await notifyCoverHeldForReview({
+    story: { id: 9, headline: "H", category_id: "world" }, post: { audienceGeo: "global" }, postId: "post-abc",
+    coverImagery: "none",
+    env: { RESEND_API_KEY: "k", SOCIAL_REVIEW_SECRET: "s3cret", SOCIAL_REVIEW_BASE_URL: "https://quydly.com" },
+    fetchImpl,
+  });
+  const sig = (a) => createHmac("sha256", "s3cret").update(`post-abc:${a}`).digest("hex");
+  const approve = `https://quydly.com/api/social-review?post=post-abc&action=approve&token=${sig("approve")}`;
+  const reject = `https://quydly.com/api/social-review?post=post-abc&action=reject&token=${sig("reject")}`;
+  // text fallback carries the raw URLs; html escapes & → &amp; in href (browsers
+  // decode it back, so the link still resolves to the same URL).
+  assert.ok(body.text.includes(approve), "approve link in text fallback");
+  assert.ok(body.text.includes(reject), "reject link in text fallback");
+  assert.ok(body.html.includes(approve.replace(/&/g, "&amp;")), "approve link in html (escaped)");
+  assert.ok(body.html.includes(reject.replace(/&/g, "&amp;")), "reject link in html (escaped)");
+});
+
+test("notifyCoverHeldForReview: no SOCIAL_REVIEW_SECRET → email still sends, but without action links", async () => {
+  let body;
+  const fetchImpl = async (url, opts) => { body = JSON.parse(opts.body); return { ok: true }; };
+  const out = await notifyCoverHeldForReview({ story: STORY, post: {}, postId: "p1", coverImagery: "none", env: { RESEND_API_KEY: "k" }, fetchImpl });
+  assert.equal(out, true);
+  assert.ok(!body.html.includes("/api/social-review"));
+  assert.ok(/review queue/i.test(body.text));
 });
 
 test("notifyCoverHeldForReview: SOCIAL_REVIEW_EMAIL overrides the recipient; HTTP failure → false", async () => {
