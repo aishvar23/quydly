@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderCarouselSlides, CAROUSEL_SLIDES, coverDateLine } from "../lib/social/card-renderer.js";
+import { renderCarouselSlides, CAROUSEL_SLIDES, FOOTBALL_SLIDES, coverDateLine } from "../lib/social/card-renderer.js";
 import { createCardService } from "../lib/social/card-storage.js";
 import * as ig from "../lib/social/instagram-graph.js";
 import { generatePlatformPost, generateSocialPosts } from "../lib/social/social-post-generator.js";
@@ -67,6 +67,40 @@ test("renderCarouselSlides: no whyItMatters → 4 slides (cover/what/keypoints/c
     assert.deepEqual([s.width, s.height], [1080, 1350]);
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
+  });
+});
+
+test("renderCarouselSlides: football context → 6 full-bleed football slides", async () => {
+  const football = {
+    competition: { code: "PL", name: "Premier League", emblemUrl: null },
+    match: {
+      id: 1, status: "FINISHED", utcDate: "2026-06-23T18:00:00Z",
+      home: { id: 64, name: "Liverpool FC", shortName: "Liverpool", tla: "LIV", crest: null },
+      away: { id: 66, name: "Manchester United FC", shortName: "Man United", tla: "MUN", crest: null },
+      score: { home: 2, away: 1 }, winner: "HOME_TEAM",
+      scorers: [{ name: "Salah", minute: 18 }],
+    },
+    standings: {
+      table: [
+        { position: 1, team: { id: 64, name: "Liverpool FC", shortName: "Liverpool", tla: "LIV" }, played: 31, goalDifference: 42, points: 73, form: "W,W,D,W,W", involved: true },
+        { position: 8, team: { id: 66, name: "Manchester United FC", shortName: "Man United", tla: "MUN" }, played: 31, goalDifference: 6, points: 46, form: "L,D,W,L,D", involved: true },
+      ],
+      involved: [
+        { position: 1, points: 73, goalDifference: 42, form: "W,W,D,W,W", teamId: 64 },
+        { position: 8, points: 46, goalDifference: 6, form: "L,D,W,L,D", teamId: 66 },
+      ],
+    },
+    insights: { lines: ["Liverpool sit 1st, Manchester United 8th."] },
+  };
+  const slides = await renderCarouselSlides(STORY, { football });
+  assert.equal(slides.length, 6);
+  assert.deepEqual(slides.map((s) => s.slideType), FOOTBALL_SLIDES);
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "scoreboard", "table", "form", "stat-insights", "cta"]);
+  slides.forEach((s, i) => {
+    assert.equal(s.index, i);
+    assert.equal(s.contentType, "image/jpeg");
+    assert.deepEqual([s.width, s.height], [1080, 1350]);
+    assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEG
   });
 });
 
@@ -480,9 +514,9 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   const slides = await svc.getCarouselSlideUrls({ story: STORY });
   assert.equal(slides.length, 4);
   assert.deepEqual(slides.map((s) => s.index), [0, 1, 2, 3]);
-  // No why / no question / no hook → "nowhy-noq-nohook" variant segment in the path.
-  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/0-cover.jpg");
-  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/3-cta.jpg");
+  // No why / no question / no hook / no football → "nowhy-noq-nohook-noill-nofb" variant.
+  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill-nofb/0-cover.jpg");
+  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill-nofb/3-cta.jpg");
   assert.equal(slides[0].contentType, "image/jpeg");
   assert.equal(mock.uploads.length, 4);
   assert.ok(mock.uploads.every((u) => /\.jpg$/.test(u.path)));
@@ -521,8 +555,8 @@ test("cardService.getCarouselSlideUrls: distinct cover hooks get distinct storag
   assert.notEqual(s1[0].url, s2[0].url);
   // A hook-less render gets the "nohook" segment, distinct from both hooked ones.
   const s0 = await svc.getCarouselSlideUrls({ story: STORY });
-  assert.ok(s0[0].url.includes("-nohook-noill/"));
-  assert.ok(!s1[0].url.includes("-nohook-noill/"));
+  assert.ok(s0[0].url.includes("-nohook-noill-nofb/"));
+  assert.ok(!s1[0].url.includes("-nohook-noill-nofb/"));
 });
 
 test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ distinct storage paths", async () => {

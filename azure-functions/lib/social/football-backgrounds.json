@@ -1,0 +1,398 @@
+{
+  "generatedAt": "2026-06-24T15:23:09.795Z",
+  "note": "Generic full-bleed football backgrounds (Pexels, commercial-use). type=image; clip reserved for Reels. Each entry carries photographer for a light credit.",
+  "moods": {
+    "neutral": [
+      {
+        "url": "https://images.pexels.com/photos/27576504/pexels-photo-27576504.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "27576504",
+        "source": "pexels",
+        "photographer": "Nur Nadiah",
+        "photographerUrl": "https://www.pexels.com/@nur-nadiah-582285194",
+        "pexelsUrl": "https://www.pexels.com/photo/stadium-sultan-ibrahim-27576504/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/10183989/pexels-photo-10183989.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "10183989",
+        "source": "pexels",
+        "photographer": "El gringo photo",
+        "photographerUrl": "https://www.pexels.com/@el-gringo-photo-116752370",
+        "pexelsUrl": "https://www.pexels.com/photo/stadium-on-a-sunny-day-10183989/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/10183990/pexels-photo-10183990.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "10183990",
+        "source": "pexels",
+        "photographer": "El gringo photo",
+        "photographerUrl": "https://www.pexels.com/@el-gringo-photo-116752370",
+        "pexelsUrl": "https://www.pexels.com/photo/goal-on-a-stadium-10183990/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/34649310/pexels-photo-34649310.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "34649310",
+        "source": "pexels",
+        "photographer": "El gringo photo",
+        "photographerUrl": "https://www.pexels.com/@el-gringo-photo-116752370",
+        "pexelsUrl": "https://www.pexels.com/photo/professional-soccer-team-training-at-stadium-34649310/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/18717024/pexels-photo-18717024.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "18717024",
+        "source": "pexels",
+        "photographer": "gina bichsel",
+        "photographerUrl": "https://www.pexels.com/@gina-bichsel-366533903",
+        "pexelsUrl": "https://www.pexels.com/photo/view-of-a-soccer-field-18717024/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/30367164/pexels-photo-30367164.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "30367164",
+        "source": "pexels",
+        "photographer": "Carlos Wathome",
+        "photographerUrl": "https://www.pexels.com/@carlos-wathome-640508753",
+        "pexelsUrl": "https://www.pexels.com/photo/old-trafford-stadium-view-on-a-cloudy-day-30367164/"
+      }
+    ],
+    "win": [
+      {
+        "url": "https://images.pexels.com/photos/26630669/pexels-photo-26630669.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "26630669",
+        "source": "pexels",
+        "photographer": "Omar Ramadan",
+        "photographerUrl": "https://www.pexels.com/@omar-ramadan-1739260",
+        "pexelsUrl": "https://www.pexels.com/photo/view-of-soccer-fans-on-the-street-26630669/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/27989132/pexels-photo-27989132.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "27989132",
+        "source": "pexels",
+        "photographer": "Cristiano Junior",
+        "photographerUrl": "https://www.pexels.com/@cristianojr9",
+        "pexelsUrl": "https://www.pexels.com/photo/a-soccer-fan-in-a-red-and-white-striped-shirt-27989132/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/10183957/pexels-photo-10183957.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "10183957",
+        "source": "pexels",
+        "photographer": "El gringo photo",
+        "photographerUrl": "https://www.pexels.com/@el-gringo-photo-116752370",
+        "pexelsUrl": "https://www.pexels.com/photo/people-in-a-stadium-10183957/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/21974369/pexels-photo-21974369.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "21974369",
+        "source": "pexels",
+        "photographer": "Jonathan Shembere",
+        "photographerUrl": "https://www.pexels.com/@gwejeofafrica",
+        "pexelsUrl": "https://www.pexels.com/photo/group-of-sports-fans-cheering-in-the-stands-21974369/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/16651577/pexels-photo-16651577.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "16651577",
+        "source": "pexels",
+        "photographer": "Franco Monsalvo",
+        "photographerUrl": "https://www.pexels.com/@franco-monsalvo-252430633",
+        "pexelsUrl": "https://www.pexels.com/photo/soccer-fans-watching-the-match-from-the-grandstands-16651577/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/16901597/pexels-photo-16901597.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "16901597",
+        "source": "pexels",
+        "photographer": "Paulo Valdivia",
+        "photographerUrl": "https://www.pexels.com/@paulo-valdivia-571461076",
+        "pexelsUrl": "https://www.pexels.com/photo/football-fans-celebrating-on-city-street-16901597/"
+      }
+    ],
+    "defeat": [
+      {
+        "url": "https://images.pexels.com/photos/15779126/pexels-photo-15779126.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "15779126",
+        "source": "pexels",
+        "photographer": "Ersin Baştürk",
+        "photographerUrl": "https://www.pexels.com/@ersin-basturk-399622110",
+        "pexelsUrl": "https://www.pexels.com/photo/illuminated-stadium-at-night-15779126/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/14963646/pexels-photo-14963646.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "14963646",
+        "source": "pexels",
+        "photographer": "Iryna Varanovich",
+        "photographerUrl": "https://www.pexels.com/@luchik",
+        "pexelsUrl": "https://www.pexels.com/photo/majestic-football-stadium-at-night-14963646/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/37391237/pexels-photo-37391237.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "37391237",
+        "source": "pexels",
+        "photographer": "Franco Monsalvo",
+        "photographerUrl": "https://www.pexels.com/@franco-monsalvo-252430633",
+        "pexelsUrl": "https://www.pexels.com/photo/illuminated-soccer-field-goal-at-night-37391237/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/9561462/pexels-photo-9561462.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "9561462",
+        "source": "pexels",
+        "photographer": "chickenbunny",
+        "photographerUrl": "https://www.pexels.com/@chickenbunny-102941452",
+        "pexelsUrl": "https://www.pexels.com/photo/stadium-during-nighttime-9561462/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/33199047/pexels-photo-33199047.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "33199047",
+        "source": "pexels",
+        "photographer": "Reco.doğada",
+        "photographerUrl": "https://www.pexels.com/@reco-dogada-1030565322",
+        "pexelsUrl": "https://www.pexels.com/photo/vibrant-night-at-vodafone-park-stadium-in-istanbul-33199047/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/9633550/pexels-photo-9633550.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "9633550",
+        "source": "pexels",
+        "photographer": "Bayram Er",
+        "photographerUrl": "https://www.pexels.com/@bayramfuerdieseele",
+        "pexelsUrl": "https://www.pexels.com/photo/an-empty-tennis-court-9633550/"
+      }
+    ],
+    "knockout-night": [
+      {
+        "url": "https://images.pexels.com/photos/37391237/pexels-photo-37391237.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "37391237",
+        "source": "pexels",
+        "photographer": "Franco Monsalvo",
+        "photographerUrl": "https://www.pexels.com/@franco-monsalvo-252430633",
+        "pexelsUrl": "https://www.pexels.com/photo/illuminated-soccer-field-goal-at-night-37391237/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/3131406/pexels-photo-3131406.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "3131406",
+        "source": "pexels",
+        "photographer": "Furknsaglam",
+        "photographerUrl": "https://www.pexels.com/@furknsaglam-1596977",
+        "pexelsUrl": "https://www.pexels.com/photo/soccer-field-3131406/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/3158350/pexels-photo-3158350.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "3158350",
+        "source": "pexels",
+        "photographer": "ehsan ahmadnejad",
+        "photographerUrl": "https://www.pexels.com/@ehsanahmadnejad",
+        "pexelsUrl": "https://www.pexels.com/photo/soccer-players-on-stadium-at-night-3158350/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/16826135/pexels-photo-16826135.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "16826135",
+        "source": "pexels",
+        "photographer": "Abdulvahap Demir",
+        "photographerUrl": "https://www.pexels.com/@vahapdmr",
+        "pexelsUrl": "https://www.pexels.com/photo/light-over-ball-on-football-pitch-16826135/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/37230172/pexels-photo-37230172.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "37230172",
+        "source": "pexels",
+        "photographer": "Muharrem Alper",
+        "photographerUrl": "https://www.pexels.com/@muharrem-alper-428087426",
+        "pexelsUrl": "https://www.pexels.com/photo/high-metal-stadium-floodlight-against-clear-blue-sky-37230172/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/34201720/pexels-photo-34201720.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "34201720",
+        "source": "pexels",
+        "photographer": "Earth Photart",
+        "photographerUrl": "https://www.pexels.com/@earth-photart-2149767641",
+        "pexelsUrl": "https://www.pexels.com/photo/vibrant-soccer-match-in-a-packed-stadium-34201720/"
+      }
+    ],
+    "final": [
+      {
+        "url": "https://images.pexels.com/photos/29037243/pexels-photo-29037243.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "29037243",
+        "source": "pexels",
+        "photographer": "JB pictures",
+        "photographerUrl": "https://www.pexels.com/@jb-pictures-1622398533",
+        "pexelsUrl": "https://www.pexels.com/photo/shiny-soccer-trophies-lined-up-on-bench-outdoors-29037243/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/35018099/pexels-photo-35018099.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "35018099",
+        "source": "pexels",
+        "photographer": "Willians Huerta",
+        "photographerUrl": "https://www.pexels.com/@willians-huerta-2157111846",
+        "pexelsUrl": "https://www.pexels.com/photo/team-celebrates-football-championship-victory-35018099/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7005685/pexels-photo-7005685.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "7005685",
+        "source": "pexels",
+        "photographer": "RDNE Stock project",
+        "photographerUrl": "https://www.pexels.com/@rdne",
+        "pexelsUrl": "https://www.pexels.com/photo/gold-trophy-on-black-book-7005685/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7005490/pexels-photo-7005490.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "7005490",
+        "source": "pexels",
+        "photographer": "RDNE Stock project",
+        "photographerUrl": "https://www.pexels.com/@rdne",
+        "pexelsUrl": "https://www.pexels.com/photo/a-soccer-tournament-champion-trophy-7005490/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7005034/pexels-photo-7005034.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "7005034",
+        "source": "pexels",
+        "photographer": "RDNE Stock project",
+        "photographerUrl": "https://www.pexels.com/@rdne",
+        "pexelsUrl": "https://www.pexels.com/photo/trophies-on-a-flat-surface-7005034/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7005033/pexels-photo-7005033.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "7005033",
+        "source": "pexels",
+        "photographer": "RDNE Stock project",
+        "photographerUrl": "https://www.pexels.com/@rdne",
+        "pexelsUrl": "https://www.pexels.com/photo/gold-and-white-trophy-on-table-top-7005033/"
+      }
+    ],
+    "derby": [
+      {
+        "url": "https://images.pexels.com/photos/12153279/pexels-photo-12153279.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "12153279",
+        "source": "pexels",
+        "photographer": "Beyza Kaplan",
+        "photographerUrl": "https://www.pexels.com/@kaplanart",
+        "pexelsUrl": "https://www.pexels.com/photo/people-in-a-stadium-12153279/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/28571788/pexels-photo-28571788.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "28571788",
+        "source": "pexels",
+        "photographer": "Ruben Sukatendel",
+        "photographerUrl": "https://www.pexels.com/@rubensukatendel",
+        "pexelsUrl": "https://www.pexels.com/photo/vibrant-football-stadium-packed-with-enthusiastic-fans-28571788/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/34649362/pexels-photo-34649362.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "34649362",
+        "source": "pexels",
+        "photographer": "El gringo photo",
+        "photographerUrl": "https://www.pexels.com/@el-gringo-photo-116752370",
+        "pexelsUrl": "https://www.pexels.com/photo/vibrant-crowd-at-football-stadium-34649362/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/13141009/pexels-photo-13141009.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "13141009",
+        "source": "pexels",
+        "photographer": "El gringo photo",
+        "photographerUrl": "https://www.pexels.com/@el-gringo-photo-116752370",
+        "pexelsUrl": "https://www.pexels.com/photo/crowd-in-camp-nou-grandstand-13141009/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/29405615/pexels-photo-29405615.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "29405615",
+        "source": "pexels",
+        "photographer": "Emma Newquist",
+        "photographerUrl": "https://www.pexels.com/@emma-newquist-2136779295",
+        "pexelsUrl": "https://www.pexels.com/photo/ohio-state-football-game-at-packed-stadium-29405615/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/34170137/pexels-photo-34170137.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "34170137",
+        "source": "pexels",
+        "photographer": "Earth Photart",
+        "photographerUrl": "https://www.pexels.com/@earth-photart-2149767641",
+        "pexelsUrl": "https://www.pexels.com/photo/aerial-view-of-a-vibrant-football-stadium-34170137/"
+      }
+    ],
+    "champions-league": [
+      {
+        "url": "https://images.pexels.com/photos/1657324/pexels-photo-1657324.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "1657324",
+        "source": "pexels",
+        "photographer": "Unknown User",
+        "photographerUrl": "https://www.pexels.com/@unknown6user",
+        "pexelsUrl": "https://www.pexels.com/photo/players-on-soccer-field-1657324/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/20557683/pexels-photo-20557683.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "20557683",
+        "source": "pexels",
+        "photographer": "Sami  Abdullah",
+        "photographerUrl": "https://www.pexels.com/@onbab",
+        "pexelsUrl": "https://www.pexels.com/photo/galatasaray-match-at-rams-park-in-istanbul-20557683/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/3158350/pexels-photo-3158350.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "3158350",
+        "source": "pexels",
+        "photographer": "ehsan ahmadnejad",
+        "photographerUrl": "https://www.pexels.com/@ehsanahmadnejad",
+        "pexelsUrl": "https://www.pexels.com/photo/soccer-players-on-stadium-at-night-3158350/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/28866439/pexels-photo-28866439.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "28866439",
+        "source": "pexels",
+        "photographer": "Heitor Vitari",
+        "photographerUrl": "https://www.pexels.com/@heitor-vitari-626359539",
+        "pexelsUrl": "https://www.pexels.com/photo/vibrant-football-match-at-estadio-da-luz-lisbon-28866439/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/20557862/pexels-photo-20557862.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "20557862",
+        "source": "pexels",
+        "photographer": "Sami  Abdullah",
+        "photographerUrl": "https://www.pexels.com/@onbab",
+        "pexelsUrl": "https://www.pexels.com/photo/crowd-at-galatasaray-match-20557862/"
+      },
+      {
+        "url": "https://images.pexels.com/photos/1657322/pexels-photo-1657322.jpeg?auto=compress&w=1080&h=1350&fit=crop",
+        "type": "image",
+        "slug": "1657322",
+        "source": "pexels",
+        "photographer": "Unknown User",
+        "photographerUrl": "https://www.pexels.com/@unknown6user",
+        "pexelsUrl": "https://www.pexels.com/photo/people-watching-soccer-game-1657322/"
+      }
+    ]
+  }
+}

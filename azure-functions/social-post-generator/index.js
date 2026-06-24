@@ -56,6 +56,15 @@ export default async function socialPostGenerator(context, message) {
   // SOCIAL_IG_HASHTAGS_ENABLED=false (or 0) to disable.
   const igHashtags = !/^(0|false)$/i.test(String(process.env.SOCIAL_IG_HASHTAGS_ENABLED ?? "true"));
 
+  // Instagram football carousel: for a story we can confirm is a real football
+  // match, swap the standard body slides for the full-bleed Scoreboard/Table/
+  // Form/Stat-insights set (data from football-data.org). ON by default — disable
+  // with SOCIAL_IG_FOOTBALL_ENABLED=false/0. Safe by default: it is gated on the
+  // carousel being on AND only activates for a story that resolves to a real
+  // match; without FOOTBALL_DATA_API_KEY the resolver returns null → standard
+  // carousel, so default-on never changes a non-football post.
+  const igFootball = !/^(0|false)$/i.test(String(process.env.SOCIAL_IG_FOOTBALL_ENABLED ?? "true"));
+
   const { created, skipped } = await generateSocialPosts({
     supabase,
     anthropic,
@@ -63,6 +72,7 @@ export default async function socialPostGenerator(context, message) {
     igCarousel,
     igEngagement,
     igHashtags,
+    igFootball,
     candidateId,
     logger: context.log,
   });

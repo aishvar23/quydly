@@ -48,6 +48,17 @@ function hookFingerprint(coverHook, coverHighlight) {
   return createHash("sha1").update(`${h.length}:${h}:${hl}`).digest("hex").slice(0, 12);
 }
 
+// A resolved football match drives the whole slide set (score/table/form), so it
+// is part of the slide bytes — fingerprint the match id + score + competition so
+// a corrected score re-renders to a FRESH path (never serves stale slides).
+// "nofb" for a non-football render.
+function footballFingerprint(football) {
+  if (!football || !football.match) return "nofb";
+  const m = football.match;
+  const seed = JSON.stringify([m.id, m.score?.home, m.score?.away, football.competition?.code]);
+  return createHash("sha1").update(seed).digest("hex").slice(0, 12);
+}
+
 export function createCardService({ supabase, env = process.env, logger = noopLogger } = {}) {
   const bucket = env.SOCIAL_CARDS_BUCKET || "social-cards";
   // When on, carousel cover slides for person-led stories carry a licensed
@@ -107,8 +118,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Keying only on story.id let a later render upsert-overwrite an earlier post's
   // slide, so that post could publish the wrong engagement question while its
   // social_post_engagement row still held the original Q&A (wrong 12h answer).
-  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], variant }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], football = null, variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, football }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
@@ -170,16 +181,16 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [] }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], football = null }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
-      // distinct (whyItMatters, question, coverHook+highlight, #illustrations)
-      // variant never overwrites another's bytes.
+      // distinct (whyItMatters, question, coverHook+highlight, #illustrations,
+      // football match) variant never overwrites another's bytes.
       const illCount = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean).length;
-      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illCount ? `ill${illCount}` : "noill"}`;
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illCount ? `ill${illCount}` : "noill"}-${footballFingerprint(football)}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, variant }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, football, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

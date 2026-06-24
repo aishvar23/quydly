@@ -18,7 +18,7 @@ const PLATFORMS = PLATFORM_MODULES;
 const MODEL = "claude-sonnet-4-6";
 
 const STORY_COLUMNS =
-  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents";
+  "id, headline, summary, category_id, story_type, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents, structured_numbers, primary_geos";
 
 // IG captions append at most this many curated hashtags (reach §8.3). Topical
 // (category + entity) tags are selected first, so truncating to 3 preserves the
@@ -129,7 +129,7 @@ async function generateCoverHook(anthropic, platform, story, logger) {
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
 // leaves the draft text-only, exactly as before).
-export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, logger = noopLogger }) {
+export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, igFootball = false, logger = noopLogger }) {
   const draft = platform.format(story, audienceGeo); // deterministic base
 
   if (cardService && platform.CONSTRAINTS) {
@@ -182,7 +182,20 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls });
+      // Football (SOCIAL_IG_FOOTBALL_ENABLED): when the story is a real football
+      // match we can resolve, the renderer swaps the standard body slides for the
+      // full-bleed Scoreboard/Table/Form/Stat-insights set (sourced from
+      // football-data.org). Lazy import — keeps the module out of load when the
+      // flag is off. Best-effort: null → the standard carousel renders.
+      let football = null;
+      if (igFootball && platform.PLATFORM === "instagram") {
+        const { isFootballStory, resolveFootballContext } = await import("./football-data.js");
+        if (isFootballStory(story)) {
+          football = await resolveFootballContext(story, { apiKey: process.env.FOOTBALL_DATA_API_KEY, logger }).catch(() => null);
+          if (football) draft.football = football;
+        }
+      }
+      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, football });
       if (slides && slides.length) {
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;
@@ -248,7 +261,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, igFootball = false, candidateId, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -302,7 +315,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     if (existing) { skipped++; continue; }
 
     const post = await generatePlatformPost({
-      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, logger,
+      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, igFootball, logger,
     });
 
     // Append source attribution + the curated hashtag block to IG captions
@@ -312,6 +325,15 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     // validator). Order: body → Sources block → hashtags (tags sit at the very
     // bottom of the caption by IG convention). IG-only; X/Facebook are untouched.
     if (platform.PLATFORM === "instagram") {
+      // Football: lead the caption with the deterministic full-time score line
+      // (sourced, never LLM-invented). Only when a match resolved on this post.
+      if (post.football?.match) {
+        const m = post.football.match;
+        if (Number.isFinite(m.score?.home) && Number.isFinite(m.score?.away)) {
+          const line = `${m.home.shortName || m.home.name} ${m.score.home}–${m.score.away} ${m.away.shortName || m.away.name} (${post.football.competition?.name || "Football"})`;
+          post.text = `${line}\n\n${post.text}`;
+        }
+      }
       // Source links from stories.source_documents (best-effort: no-op when the
       // story has no usable HTTPS source URLs). Not flag-gated — attribution is
       // always desirable when sources exist.

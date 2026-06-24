@@ -19,3 +19,6 @@ frontend/web-build/
 
 # Local render artifacts
 azure-functions/sample-cards/
+
+# ig-fifa-sme: local render-eyeball output (verify-ig-football-carousel.js)
+azure-functions/.football-slides/
