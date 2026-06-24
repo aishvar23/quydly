@@ -200,6 +200,19 @@ test("renderCarouselSlides: cover falls back to a CONTAINED org image only when 
   assert.deepEqual(calls, ["https://upload.wikimedia.org/acme.png"]); // org fetched as last resort
 });
 
+test("renderCarouselSlides: a place entity's body image renders (contained, not full-bleed cover)", async () => {
+  // A place whose Wikipedia lead image is a flag/map must be CONTAINED on a body
+  // slide (isLogoImage treats place like org), not stretched full-bleed. We can't
+  // assert pixels here, but this exercises the place→contain path without error.
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Jane Doe", type: "person", wikipedia_thumbnail_url: "https://upload.wikimedia.org/jane.png" },
+    { name: "Germany", type: "place", wikipedia_thumbnail_url: "https://upload.wikimedia.org/flag.png" },
+  ] };
+  const slides = await renderCarouselSlides(story, { slides: ["cover", "what"], withPortrait: true, fetchImpl: async () => imgResponse() });
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "what"]); // cover=person, body=place
+  slides.forEach((s) => assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8])); // valid JPEGs
+});
+
 test("renderCarouselSlides: cover slide reports its imagery source (photo/illustration/logo/none)", async () => {
   const img = async () => imgResponse();
   // A lead person photo → "photo".

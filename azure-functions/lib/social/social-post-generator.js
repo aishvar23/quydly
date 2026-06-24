@@ -297,14 +297,20 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   const statusFor = (platform, post) => {
     if (!autoApproved) return "PENDING_REVIEW";
     if (requiresMedia(platform.PLATFORM) && !post.mediaUrl) return "PENDING_REVIEW";
-    // Never auto-post an Instagram carousel whose cover is only a logo/flag or the
-    // bare gradient — hold it for a human (and email the review address below).
-    if (platform.PLATFORM === "instagram" && coverImageryWeak(post)) return "PENDING_REVIEW";
+    // Never auto-post a carousel whose cover is only a logo/flag or the bare
+    // gradient — hold it for a human (and email the review address below). Derived
+    // from CONSTRAINTS.carousel (the platforms that build a cover), not a platform
+    // name, mirroring the requiresMedia derivation above.
+    if (platform.CONSTRAINTS?.carousel && coverImageryWeak(post)) return "PENDING_REVIEW";
     return "APPROVED";
   };
 
   let created = 0;
   let skipped = 0;
+  // Review-alert emails are fired (not awaited) inside the loop so a slow Resend
+  // call can't delay the remaining platforms' inserts; they're awaited together
+  // after the loop so they still complete before the function returns.
+  const pendingNotifies = [];
 
   for (const platform of PLATFORMS) {
     // Idempotency (§12.2): skip if a post already exists for this triple.
@@ -364,17 +370,16 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     if (inserted) {
       created++;
 
-      // An auto-approval candidate whose IG carousel cover is too weak to post
+      // An auto-approval candidate whose carousel cover is too weak to post
       // (logo/flag or gradient) was just held as PENDING_REVIEW by statusFor —
       // email the review address so it doesn't sit unnoticed. Best-effort and
-      // non-fatal: a mail failure must not abort the run (the post is already
-      // safely held). Only fires in the auto-publish path with a built carousel.
-      if (autoApproved && platform.PLATFORM === "instagram" && coverImageryWeak(post) && post.mediaUrl) {
-        try {
-          await notify({ story, post, coverImagery: post.coverImagery, env, logger });
-        } catch (err) {
-          logger.warn(JSON.stringify({ event: "social_review_email_failed", story_id: story.id, error: err.message }));
-        }
+      // non-fatal: fired without awaiting (collected for after the loop) so a slow
+      // mail call can't delay the other platforms; a failure can't abort the run.
+      if (autoApproved && platform.CONSTRAINTS?.carousel && coverImageryWeak(post) && post.mediaUrl) {
+        pendingNotifies.push(
+          Promise.resolve(notify({ story, post, coverImagery: post.coverImagery, env, logger }))
+            .catch((err) => logger.warn(JSON.stringify({ event: "social_review_email_failed", story_id: story.id, error: err.message })))
+        );
       }
 
       // Persist the tweeted question so quydly.com/question/<id> can serve it,
@@ -485,6 +490,10 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
       skipped++;
     }
   }
+
+  // Let any review-alert emails finish before returning (serverless freezes the
+  // process on return). Each already has its own .catch, so this never rejects.
+  if (pendingNotifies.length) await Promise.allSettled(pendingNotifies);
 
   // Advance candidate to POST_GENERATED (§7.2), unless it already moved past it.
   // AUTO_APPROVED is preserved so the selector's per-day auto cap keeps counting

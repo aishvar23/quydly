@@ -308,44 +308,40 @@ function entityImages(story) {
   return out;
 }
 
-// Whether the story has a USABLE licensed entity image — lets the generator
-// decide up front whether to spend an illustration generation (only when there
-// is no photo to use). "Usable" is sensitivity-aware: on HIGH-sensitivity
-// stories person faces are excluded (excludePeopleImagery), so a tragedy whose
-// only image is a person's portrait reports false here and the generator falls
-// back to a neutral symbolic illustration instead of leading with that face.
-export function hasEntityImage(story) {
-  return entityImages(story).length > 0;
-}
-
-// How many DISTINCT usable entity images the story has (sensitivity-aware). The
-// generator sizes illustration generation from this so that EVERY content slide
-// without a photo gets a real illustration instead of the brand-graphic floor:
-// it generates (content-slide count − usable photos) illustrations, which the
-// renderer routes to exactly the photo-less slides.
-export function usableImageCount(story) {
-  return entityImages(story).length;
+// SINGLE SOURCE OF TRUTH for cover/body image sourcing, shared by the renderer's
+// allocation (renderCarouselSlides) and the generator's illustration sizing
+// (plannedIllustrationCount), so the two can't drift. Given the story and the
+// content slide kinds present (cover / what / key points / [why]), it returns:
+//   coverSpec         — the lead PERSON image (the only photo allowed to hero the
+//                       cover), or null;
+//   coverFallbackSpec — the lead org/place image RESERVED as the cover's last
+//                       resort (only when no person cover), or null;
+//   bodyKinds         — the non-cover content kinds present;
+//   bodySpecs         — the entity images for the body slides, with the reserved
+//                       cover entity held back so it never appears on both.
+function planEntityImagery(story, contentKinds) {
+  const hasCover = contentKinds.includes("cover");
+  const coverSpec = hasCover ? leadPersonImage(story) : null;
+  const coverFallbackSpec = (hasCover && !coverSpec) ? leadOrgPlaceImage(story) : null;
+  const reservedName = coverSpec?.name || coverFallbackSpec?.name;
+  const bodyKinds = contentKinds.filter((k) => k !== "cover");
+  const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, bodyKinds.length);
+  return { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs };
 }
 
 // How many editorial illustrations the carousel needs — one for every content
 // slide (cover / what / key points / [why]) that won't be backed by a usable
-// PHOTO under the cover/body sourcing rules. The cover counts as photo-backed
-// ONLY when a lead PERSON image exists; org logos / place flags never pre-empt an
-// illustration on the cover (so the cover never falls back to a "dumb" logo/flag
-// or the gradient when an illustration is possible). Body slides count any
-// distinct non-cover entity image. The generator generates exactly this many, and
-// renderCarouselSlides routes them to precisely those photo-less slides.
+// PHOTO under the sourcing rules in planEntityImagery. The cover is photo-backed
+// ONLY by a lead PERSON image; org logos / place flags never pre-empt an
+// illustration on the cover (so it never falls back to a "dumb" logo/flag or the
+// gradient when an illustration is possible). The generator generates exactly this
+// many, and renderCarouselSlides routes them to precisely those photo-less slides.
 export function plannedIllustrationCount(story, { whyItMatters = [] } = {}) {
   const hasWhy = Array.isArray(whyItMatters) && whyItMatters.filter(Boolean).length > 0;
-  const bodyKinds = 2 + (hasWhy ? 1 : 0); // what, keypoints, (why)
-  const coverPerson = leadPersonImage(story);
-  const coverPhoto = coverPerson ? 1 : 0;
-  // Mirror renderCarouselSlides' reservation: with no person cover, the lead
-  // org/place is held back as the cover fallback (not a body photo), so the cover
-  // counts as a gap needing an illustration.
-  const reservedName = coverPerson ? coverPerson.name : leadOrgPlaceImage(story)?.name;
-  const bodyPhotos = Math.min(bodyKinds, entityImages(story).filter((s) => s.name !== reservedName).length);
-  return Math.max(0, 1 + bodyKinds - coverPhoto - bodyPhotos);
+  const contentKinds = ["cover", "what", "keypoints", ...(hasWhy ? ["why"] : [])];
+  const { coverSpec, bodySpecs } = planEntityImagery(story, contentKinds);
+  const coverPhoto = coverSpec ? 1 : 0;
+  return Math.max(0, contentKinds.length - coverPhoto - bodySpecs.length);
 }
 
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or
@@ -699,11 +695,13 @@ function shade(hex, amt) {
 // ("BROWNSTONE" → "ROWNSTON") and balloons a compact mark to fill the frame (the
 // giant "DB"). Person/place images are photographs, and generated illustrations
 // (no `type`) are full-frame art — both look best edge-to-edge (cover). So only
-// org images are contained; everything else covers. An explicit `contain: true`
-// also forces containment — used for the cover's last-resort org/place hero, so a
-// place flag isn't blown up full-bleed there.
+// org AND place images are contained; only person photos (and illustrations,
+// which carry no `type`) cover. A place entity's Wikipedia lead image is usually a
+// national flag / coat-of-arms / map — logo-like, not a scene photo — so covering
+// it stretches/crops it the same way an org wordmark gets mangled. An explicit
+// `contain: true` also forces containment (the cover's last-resort org/place hero).
 function isLogoImage(image) {
-  return image?.contain === true || image?.type === "org";
+  return image?.contain === true || image?.type === "org" || image?.type === "place";
 }
 
 // The full-bleed background for a slide, as a stack of absolutely-positioned
@@ -825,14 +823,21 @@ const CONTENT_TEXT_ZONE = 0.46;
 
 // The bottom text block for an image-led body slide: the eyebrow + its content
 // (a single lede for "what"; up to three auto-fit bullets for "key points" /
-// "why"), then a "Photo: …" credit when the slide carries a licensed image —
-// attribution is mandatory (never show a licensed photo without crediting it).
-function contentBody({ kind, story, accent, size, height, whyItMatters, credit }) {
+// "why"), then a caption identifying the licensed image — the entity NAME (e.g.
+// "Brownstone Productions") plus a "Photo: …" credit. Attribution is mandatory
+// (never show a licensed photo without crediting it), and the name gives the
+// otherwise-unlabelled logo/photo context.
+function contentBody({ kind, story, accent, size, height, whyItMatters, imageName, credit }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
-  const creditRow = credit
-    ? el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: Math.round(size * 0.022) } }, `Photo: ${credit}`)
-    : null;
-  const wrap = (children) => el("div", { style: { display: "flex", flexDirection: "column" } }, creditRow ? [...children, creditRow] : children);
+  const captionLines = [];
+  if (imageName) {
+    captionLines.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: FG, marginTop: Math.round(size * 0.022) } }, imageName));
+  }
+  if (credit) {
+    captionLines.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: Math.round(size * (imageName ? 0.004 : 0.022)) } }, `Photo: ${credit}`));
+  }
+  const caption = captionLines.length ? el("div", { style: { display: "flex", flexDirection: "column" } }, captionLines) : null;
+  const wrap = (children) => el("div", { style: { display: "flex", flexDirection: "column" } }, caption ? [...children, caption] : children);
 
   if (kind === "what") {
     // A single lede sentence (not a paragraph), large type — skimmable over the
@@ -856,8 +861,8 @@ function contentBody({ kind, story, accent, size, height, whyItMatters, credit }
       el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
     ]);
   }
-  // Fit the bullets to the scrimmed lower zone, minus the eyebrow and the credit.
-  const budget = height * CONTENT_TEXT_ZONE - size * 0.054 - (credit ? size * 0.05 : 0);
+  // Fit the bullets to the scrimmed lower zone, minus the eyebrow and the caption.
+  const budget = height * CONTENT_TEXT_ZONE - size * 0.054 - (caption ? size * 0.06 : 0);
   const fit = fitBulletSlide(points, size, budget);
   return wrap([eyebrow(label, accent, size), ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx))]);
 }
@@ -869,7 +874,9 @@ function contentBody({ kind, story, accent, size, height, whyItMatters, credit }
 function contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage, whyItMatters }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
+  // Illustrations carry no name/credit (not a licensed photo); entity photos do.
   const credit = oneLine(slideImage?.credit);
+  const imageName = oneLine(slideImage?.name);
   const foreground = el("div", {
     style: {
       position: "relative", width: size, height, display: "flex", flexDirection: "column",
@@ -878,7 +885,7 @@ function contentSlideTree({ kind, story, accent, category, index, total, size, h
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "flex-end" } }, [
-      contentBody({ kind, story, accent, size, height, whyItMatters, credit }),
+      contentBody({ kind, story, accent, size, height, whyItMatters, imageName, credit }),
     ]),
     slideFooter({ accent, size, index, total, hint: "" }),
   ]);
@@ -986,18 +993,12 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   let coverImagery;
   if (withPortrait) {
     const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
-    const hasCover = slideList.includes("cover");
-    // The cover PHOTO may only be a lead person — org/place are demoted below the
-    // illustration (Pass 3), never resolved into the cover photo here.
-    const coverSpec = hasCover ? leadPersonImage(story) : null;
-    // When no person heroes the cover, the lead org/place is RESERVED as the
-    // cover's last-resort fallback (Pass 3) and kept OFF the body slides, so the
-    // same logo never appears on both the cover and a body slide. With a person
-    // cover, every entity image stays free for the body slides.
-    const coverFallbackSpec = (hasCover && !coverSpec) ? leadOrgPlaceImage(story) : null;
-    const reservedName = coverSpec?.name || coverFallbackSpec?.name;
-    const bodyKinds = contentKinds.filter((k) => k !== "cover");
-    const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, bodyKinds.length);
+    // planEntityImagery is the single source of truth for cover/body sourcing —
+    // shared with plannedIllustrationCount so the generated illustration count can't
+    // drift from this allocation. The cover photo is a lead PERSON only; the lead
+    // org/place is reserved as the cover's last resort (Pass 3) and kept off the
+    // body slides so the same logo never appears on both.
+    const { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
     const specByKind = {};
     if (hasCover) specByKind.cover = coverSpec;
     bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
