@@ -309,6 +309,15 @@ export function hasEntityImage(story) {
   return entityImages(story).length > 0;
 }
 
+// How many DISTINCT usable entity images the story has (sensitivity-aware). The
+// generator sizes illustration generation from this so that EVERY content slide
+// without a photo gets a real illustration instead of the brand-graphic floor:
+// it generates (content-slide count − usable photos) illustrations, which the
+// renderer routes to exactly the photo-less slides.
+export function usableImageCount(story) {
+  return entityImages(story).length;
+}
+
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or
 // null). Best-effort — used for both the cover and the body-slide images.
 async function resolveImage(spec, fetchImpl) {
@@ -948,9 +957,9 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   let portrait = null;
   const bodyImageByKind = {};
   if (withPortrait) {
-    // Each text/cover slide gets its OWN visual, resolved independently: the
-    // licensed entity photo when there is one, else the per-slide generated
-    // illustration (Tier 2), else (in slideBody) the brand-graphic floor.
+    // Each cover/text slide gets its OWN visual: a licensed entity photo when one
+    // is available, else a generated illustration (Tier 2) that FILLS the gap,
+    // else (in slideBody / coverTree) the brand-graphic floor.
     const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
     const coverSpec = slideList.includes("cover") ? leadCoverImage(story) : null;
     const bodyKinds = contentKinds.filter((k) => k !== "cover");
@@ -958,20 +967,29 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
     const specByKind = {};
     if (slideList.includes("cover")) specByKind.cover = coverSpec;
     bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
-    const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
-    const illByKind = {};
-    contentKinds.forEach((k, i) => { illByKind[k] = ill[i] || null; });
 
-    const resolved = await Promise.all(contentKinds.map(async (k) => {
+    // Pass 1 — resolve the licensed photo for each slide (best-effort, parallel).
+    const photoByKind = {};
+    await Promise.all(contentKinds.map(async (k) => {
       const photo = await resolveImage(specByKind[k], fetchImpl);
-      if (photo) return [k, photo];
-      if (illByKind[k]) {
-        const dataUri = await fetchImageDataUri(illByKind[k], fetchImpl ? { fetchImpl } : {});
-        if (dataUri) return [k, { dataUri }]; // illustration — no caption (not a photo)
-      }
-      return [k, null];
+      if (photo) photoByKind[k] = photo;
     }));
-    for (const [k, img] of resolved) {
+
+    // Pass 2 — route the supplied illustrations to the slides that ended up
+    // WITHOUT a photo, in slide order. The generator sizes the illustration set
+    // to the photo-less slides (usableImageCount), so each gap gets a distinct
+    // illustration and no content slide falls back to the brand-graphic floor.
+    const ill = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean);
+    const gapKinds = contentKinds.filter((k) => !photoByKind[k]);
+    const illByKind = {};
+    await Promise.all(gapKinds.map(async (k, i) => {
+      if (!ill[i]) return;
+      const dataUri = await fetchImageDataUri(ill[i], fetchImpl ? { fetchImpl } : {});
+      if (dataUri) illByKind[k] = { dataUri }; // illustration — no caption (not a photo)
+    }));
+
+    for (const k of contentKinds) {
+      const img = photoByKind[k] || illByKind[k] || null;
       if (!img) continue;
       if (k === "cover") portrait = img; else bodyImageByKind[k] = img;
     }
