@@ -11,7 +11,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderCarouselSlides, CAROUSEL_SLIDES, coverDateLine } from "../lib/social/card-renderer.js";
+import { renderCarouselSlides, CAROUSEL_SLIDES, coverDateLine, plannedIllustrationCount } from "../lib/social/card-renderer.js";
+import { notifyCoverHeldForReview } from "../lib/social/review-notify.js";
 import { createCardService } from "../lib/social/card-storage.js";
 import * as ig from "../lib/social/instagram-graph.js";
 import { generatePlatformPost, generateSocialPosts } from "../lib/social/social-post-generator.js";
@@ -166,6 +167,73 @@ test("renderCarouselSlides: an org/place lead image is used on the cover (no lea
   const slides = await renderCarouselSlides(story, { withPortrait: true, fetchImpl });
   assert.deepEqual(calls, ["https://upload.wikimedia.org/acme.png"]); // org image fetched
   assert.equal(slides.length, 4);
+});
+
+test("renderCarouselSlides: cover prefers an illustration over an org logo/place flag (no person)", async () => {
+  // No person entity, only an org (whose Wikipedia lead image is a logo) and an
+  // illustration is available: the cover must use the ILLUSTRATION, never fetch
+  // the org logo for the cover (a logo/flag must not hero the cover above an
+  // illustration). Rendering the cover in isolation, the org image is never fetched.
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  const slides = await renderCarouselSlides(story, {
+    slides: ["cover"], withPortrait: true, illustrationUrls: ["https://cdn.test/illustration-0.png"], fetchImpl,
+  });
+  assert.equal(slides.length, 1);
+  assert.deepEqual([...slides[0].buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEG
+  assert.ok(calls.includes("https://cdn.test/illustration-0.png")); // cover used the illustration
+  assert.ok(!calls.includes("https://upload.wikimedia.org/acme.png")); // org logo NOT used on the cover
+});
+
+test("renderCarouselSlides: cover falls back to a CONTAINED org image only when no illustration", async () => {
+  // Same org-only story but NO illustration supplied: the org image is the last
+  // resort and IS fetched (better than the gradient), rendered contained.
+  const story = { ...STORY, primary_entities_enriched: [
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  await renderCarouselSlides(story, { slides: ["cover"], withPortrait: true, fetchImpl });
+  assert.deepEqual(calls, ["https://upload.wikimedia.org/acme.png"]); // org fetched as last resort
+});
+
+test("renderCarouselSlides: cover slide reports its imagery source (photo/illustration/logo/none)", async () => {
+  const img = async () => imgResponse();
+  // A lead person photo → "photo".
+  const personSlides = await renderCarouselSlides(STORY_PERSON, { slides: ["cover"], withPortrait: true, fetchImpl: img });
+  assert.equal(personSlides[0].coverImagery, "photo");
+
+  const orgStory = { ...STORY, primary_entities_enriched: [
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  // Org only, no illustration → the contained logo last resort → "logo".
+  const orgSlides = await renderCarouselSlides(orgStory, { slides: ["cover"], withPortrait: true, fetchImpl: img });
+  assert.equal(orgSlides[0].coverImagery, "logo");
+  // Org + an illustration → the illustration heroes the cover → "illustration".
+  const illSlides = await renderCarouselSlides(orgStory, { slides: ["cover"], withPortrait: true, illustrationUrls: ["https://cdn.test/ill-0.png"], fetchImpl: img });
+  assert.equal(illSlides[0].coverImagery, "illustration");
+  // No entity image and no illustration → the gradient floor → "none".
+  const bareSlides = await renderCarouselSlides(STORY, { slides: ["cover"], withPortrait: true, fetchImpl: img });
+  assert.equal(bareSlides[0].coverImagery, "none");
+});
+
+test("plannedIllustrationCount: cover counts as a gap unless a lead PERSON photo exists", async () => {
+  // No images at all → cover + what + keypoints all need illustrations (3).
+  assert.equal(plannedIllustrationCount(STORY), 3);
+  // A lead person photo backs the cover → only the 2 body slides need illustrations.
+  assert.equal(plannedIllustrationCount(STORY_PERSON), 2);
+  // An org-only story: the org is RESERVED as the cover's last-resort fallback
+  // (not a body photo), so all three content slides (cover/what/keypoints) need an
+  // illustration → 3. The org only appears if illustrations are unavailable.
+  const orgStory = { ...STORY, primary_entities_enriched: [
+    { name: "Acme Corp", type: "org", wikipedia_thumbnail_url: "https://upload.wikimedia.org/acme.png" },
+  ] };
+  assert.equal(plannedIllustrationCount(orgStory), 3);
+  // whyItMatters adds a 4th content slide → one more gap when there are no photos.
+  assert.equal(plannedIllustrationCount(STORY, { whyItMatters: ["x"] }), 4);
 });
 
 test("renderCarouselSlides: a lead person image wins over a later org image (cover)", async () => {
@@ -459,6 +527,51 @@ test("instagram.generateEngagementQuestion: skips newer unrelated post, picks th
   assert.equal(out.answer, "Met Pakistan");
 });
 
+// ── review-queue email (weak cover imagery) ──────────────────────────────────
+
+test("notifyCoverHeldForReview: no RESEND_API_KEY → no send (skipped, false)", async () => {
+  let called = false;
+  const fetchImpl = async () => { called = true; return { ok: true }; };
+  const out = await notifyCoverHeldForReview({ story: STORY, post: {}, coverImagery: "none", env: {}, fetchImpl });
+  assert.equal(out, false);
+  assert.equal(called, false); // never hits the network without a key
+});
+
+test("notifyCoverHeldForReview: with a key → POSTs to Resend with the default review recipient", async () => {
+  const calls = [];
+  const fetchImpl = async (url, opts) => { calls.push({ url: String(url), opts }); return { ok: true, status: 200 }; };
+  const out = await notifyCoverHeldForReview({
+    story: { id: 5, headline: "Headline", category_id: "world" }, post: { audienceGeo: "global" },
+    coverImagery: "logo", env: { RESEND_API_KEY: "k" }, fetchImpl,
+  });
+  assert.equal(out, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /api\.resend\.com\/emails/);
+  assert.match(calls[0].opts.headers.Authorization, /Bearer k/);
+  const body = JSON.parse(calls[0].opts.body);
+  assert.equal(body.to, "aishvar.suhane@gmail.com"); // default review recipient
+  assert.match(body.subject, /held for review/i);
+  assert.match(body.subject, /story 5/i);
+  assert.match(body.text, /Story id: 5/);
+});
+
+test("notifyCoverHeldForReview: SOCIAL_REVIEW_EMAIL overrides the recipient; HTTP failure → false", async () => {
+  const ok = async (url, opts) => ({ ok: true, status: 200, _body: JSON.parse(opts.body) });
+  let captured;
+  await notifyCoverHeldForReview({
+    story: STORY, post: {}, coverImagery: "none",
+    env: { RESEND_API_KEY: "k", SOCIAL_REVIEW_EMAIL: "ops@quydly.com" },
+    fetchImpl: async (url, opts) => { captured = JSON.parse(opts.body); return ok(url, opts); },
+  });
+  assert.equal(captured.to, "ops@quydly.com");
+
+  const out = await notifyCoverHeldForReview({
+    story: STORY, post: {}, coverImagery: "none",
+    env: { RESEND_API_KEY: "k" }, fetchImpl: async () => ({ ok: false, status: 422 }),
+  });
+  assert.equal(out, false); // a non-OK Resend response is reported, not thrown
+});
+
 // ── slide storage ──────────────────────────────────────────────────────────────
 
 function makeStorageMock() {
@@ -735,6 +848,41 @@ test("generateSocialPosts: AUTO_APPROVED + carousel media → IG post APPROVED (
   const ig = sb.posts.find((p) => p.platform === "instagram");
   assert.equal(ig.status, "APPROVED");          // has carousel media → eligible to auto-publish
   assert.equal(ig.media_url, "https://cdn.test/0.jpg");
+});
+
+test("generateSocialPosts: AUTO_APPROVED but WEAK cover imagery (none) → IG held PENDING_REVIEW + emails review", async () => {
+  const sb = makeGenSupabase({ candidateStatus: "AUTO_APPROVED" });
+  const cardService = {
+    getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`,
+    getCarouselSlideUrls: async () => [
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350, coverImagery: "none" },
+      { url: "https://cdn.test/1.jpg", index: 1, slideType: "what", width: 1080, height: 1350 },
+    ],
+  };
+  const emails = [];
+  const notify = async (arg) => { emails.push(arg); return true; };
+  await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1", env: { RESEND_API_KEY: "x" }, notify });
+  const ig = sb.posts.find((p) => p.platform === "instagram");
+  assert.equal(ig.status, "PENDING_REVIEW");             // held, not auto-posted
+  assert.equal(ig.media_url, "https://cdn.test/0.jpg");  // media still attached for the reviewer
+  assert.equal(emails.length, 1);                        // review email fired exactly once
+  assert.equal(emails[0].coverImagery, "none");
+  assert.equal(emails[0].story.id, STORY.id);
+});
+
+test("generateSocialPosts: AUTO_APPROVED + a real cover photo → IG APPROVED, no review email", async () => {
+  const sb = makeGenSupabase({ candidateStatus: "AUTO_APPROVED" });
+  const cardService = {
+    getCardUrl: async ({ shape }) => `https://cdn.test/card-${shape}.png`,
+    getCarouselSlideUrls: async () => [
+      { url: "https://cdn.test/0.jpg", index: 0, slideType: "cover", width: 1080, height: 1350, coverImagery: "photo" },
+    ],
+  };
+  let called = false;
+  const notify = async () => { called = true; return true; };
+  await generateSocialPosts({ supabase: sb.client, cardService, igCarousel: true, candidateId: "cand-1", env: { RESEND_API_KEY: "x" }, notify });
+  assert.equal(sb.posts.find((p) => p.platform === "instagram").status, "APPROVED");
+  assert.equal(called, false); // a real photo → no review email
 });
 
 test("generateSocialPosts: AUTO_APPROVED but NO media → IG stays PENDING_REVIEW", async () => {

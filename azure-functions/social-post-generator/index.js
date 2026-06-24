@@ -64,6 +64,7 @@ export default async function socialPostGenerator(context, message) {
     igEngagement,
     igHashtags,
     candidateId,
+    env: process.env,
     logger: context.log,
   });
 

@@ -13,6 +13,14 @@ import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
 import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
+import { notifyCoverHeldForReview } from "./review-notify.js";
+
+// A carousel cover with no real photo and no editorial illustration — only a
+// contained logo/flag ("logo") or the bare gradient ("none") — is too weak to
+// auto-post: it is held for review and the review address is emailed.
+function coverImageryWeak(post) {
+  return post && (post.coverImagery === "logo" || post.coverImagery === "none");
+}
 
 const PLATFORMS = PLATFORM_MODULES;
 const MODEL = "claude-sonnet-4-6";
@@ -160,13 +168,15 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       // routes these to exactly the photo-less slides (gap-fill).
       let illustrationUrls = [];
       if (anthropic && cardService.getIllustrationUrls) {
-        // Lazy import: usableImageCount lives in card-renderer (which pulls
+        // Lazy import: plannedIllustrationCount lives in card-renderer (which pulls
         // satori/resvg), so import it only here — inside the cards-enabled branch,
         // where the renderer is already loaded — never at module load (that would
-        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js).
-        const { usableImageCount } = await import("./card-renderer.js");
-        const slideCount = 3 + (whyItMatters.length ? 1 : 0);
-        const gaps = Math.max(0, slideCount - usableImageCount(story));
+        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js). It counts
+        // the photo-less content slides under the cover/body sourcing rules — the
+        // cover included whenever it has no lead PERSON photo — so an org logo or a
+        // place flag never starves the cover of an illustration.
+        const { plannedIllustrationCount } = await import("./card-renderer.js");
+        const gaps = plannedIllustrationCount(story, { whyItMatters });
         if (gaps > 0) {
           illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: gaps });
         }
@@ -187,6 +197,11 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         draft.carouselSlides = slides;
         draft.mediaUrl = slides[0].url;
         draft.requiresMedia = false;
+        // What the cover ended up showing ("photo"/"illustration"/"logo"/"none") —
+        // surfaced by the renderer. A weak cover (logo/flag or gradient) is held for
+        // review rather than auto-posted (see statusFor in generateSocialPosts).
+        const coverSlide = slides.find((s) => s.slideType === "cover");
+        if (coverSlide && coverSlide.coverImagery) draft.coverImagery = coverSlide.coverImagery;
       }
     } else if (platform.CONSTRAINTS.cardShape) {
       // Single card. The render format is declared by the platform's CONSTRAINTS
@@ -248,7 +263,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, candidateId, env = {}, notify = notifyCoverHeldForReview, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -282,6 +297,9 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   const statusFor = (platform, post) => {
     if (!autoApproved) return "PENDING_REVIEW";
     if (requiresMedia(platform.PLATFORM) && !post.mediaUrl) return "PENDING_REVIEW";
+    // Never auto-post an Instagram carousel whose cover is only a logo/flag or the
+    // bare gradient — hold it for a human (and email the review address below).
+    if (platform.PLATFORM === "instagram" && coverImageryWeak(post)) return "PENDING_REVIEW";
     return "APPROVED";
   };
 
@@ -345,6 +363,19 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
 
     if (inserted) {
       created++;
+
+      // An auto-approval candidate whose IG carousel cover is too weak to post
+      // (logo/flag or gradient) was just held as PENDING_REVIEW by statusFor —
+      // email the review address so it doesn't sit unnoticed. Best-effort and
+      // non-fatal: a mail failure must not abort the run (the post is already
+      // safely held). Only fires in the auto-publish path with a built carousel.
+      if (autoApproved && platform.PLATFORM === "instagram" && coverImageryWeak(post) && post.mediaUrl) {
+        try {
+          await notify({ story, post, coverImagery: post.coverImagery, env, logger });
+        } catch (err) {
+          logger.warn(JSON.stringify({ event: "social_review_email_failed", story_id: story.id, error: err.message }));
+        }
+      }
 
       // Persist the tweeted question so quydly.com/question/<id> can serve it,
       // and link it to the post so the publisher's reply can build the URL.
