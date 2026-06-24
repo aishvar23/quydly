@@ -25,6 +25,7 @@ import jpeg from "jpeg-js";
 import { accentFor } from "./_categories.js";
 import { validateMCQ } from "./mcq.js";
 import { QUYDLY_IG_HANDLE } from "./platforms/_shared.js";
+import { classifySensitivity, SENSITIVITY, SAFE_CATEGORIES } from "./social-safety.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
@@ -238,6 +239,27 @@ function entityImageUrls(e) {
   return [...new Set(sources.flatMap((s) => [upscaleWikimedia(s, 800), upscaleWikimedia(s, 500), s]))];
 }
 
+// HIGH-sensitivity NEWS stories (death / violence / disaster) must NOT lead with
+// a person's posed stock portrait: a smiling PR headshot over a tragedy reads as
+// callous, and the lead "person" is often only tangential (e.g. an official who
+// commented on it, not a subject of it). On those stories we drop PERSON faces
+// from slide imagery — a neutral org/place photo is used instead, else (via the
+// generator's hasEntityImage check) a symbolic illustration, else the brand
+// floor. MEDIUM/LOW (e.g. an election with the candidate) keep faces.
+//
+// The brand-safe categories (culture / science / technology / finance) are
+// EXEMPT even when the keyword classifier returns HIGH: there a violence term is
+// almost always fictional/metaphorical (a TV plot where a character is "killed",
+// a market "crash"), not a real tragedy, and the relevant person photo should
+// stay. Real tragedies land in the news categories (e.g. "world"), which are not
+// exempt. Gated on the shared classifier (social-safety.js) so the rule can't
+// drift from the auto-approval/sensitivity logic.
+function excludePeopleImagery(story) {
+  if (classifySensitivity(story) !== SENSITIVITY.HIGH) return false;
+  const category = story?.category_id || story?.category;
+  return !(category && SAFE_CATEGORIES.has(category));
+}
+
 function leadCoverImage(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
   const pick = (e) => {
@@ -245,8 +267,10 @@ function leadCoverImage(story) {
     const urls = entityImageUrls(e);
     return urls.length ? { urls, name: oneLine(e.name), credit: portraitCredit(e) } : null;
   };
-  const leadPerson = pick(ents.find((e) => e && e.type === "person"));
-  if (leadPerson) return leadPerson;
+  if (!excludePeopleImagery(story)) {
+    const leadPerson = pick(ents.find((e) => e && e.type === "person"));
+    if (leadPerson) return leadPerson;
+  }
   for (const e of ents) {
     if (e && (e.type === "org" || e.type === "place")) {
       const img = pick(e);
@@ -261,10 +285,12 @@ function leadCoverImage(story) {
 // are captioned with the entity name, so a non-lead entity is fine here.
 function entityImages(story) {
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
+  const skipPeople = excludePeopleImagery(story);
   const out = [];
   const seen = new Set();
   for (const e of ents) {
     if (!e || seen.has(e.name)) continue;
+    if (skipPeople && e.type === "person") continue; // no faces on tragic stories
     const urls = entityImageUrls(e);
     if (!urls.length) continue;
     seen.add(e.name);
@@ -273,9 +299,12 @@ function entityImages(story) {
   return out;
 }
 
-// Whether the story has ANY licensed entity image — lets the generator decide
-// up front whether to spend an illustration generation (only when there's no
-// photo to use).
+// Whether the story has a USABLE licensed entity image — lets the generator
+// decide up front whether to spend an illustration generation (only when there
+// is no photo to use). "Usable" is sensitivity-aware: on HIGH-sensitivity
+// stories person faces are excluded (excludePeopleImagery), so a tragedy whose
+// only image is a person's portrait reports false here and the generator falls
+// back to a neutral symbolic illustration instead of leading with that face.
 export function hasEntityImage(story) {
   return entityImages(story).length > 0;
 }
