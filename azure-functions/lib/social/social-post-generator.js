@@ -413,7 +413,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
       // mail call can't delay the other platforms; a failure can't abort the run.
       if (autoApproved && platform.CONSTRAINTS?.carousel && coverImageryWeak(post) && post.mediaUrl) {
         pendingNotifies.push(
-          Promise.resolve(notify({ story, post, coverImagery: post.coverImagery, env, logger }))
+          Promise.resolve(notify({ story, post, postId: inserted.id, coverImagery: post.coverImagery, env, logger }))
             .catch((err) => logger.warn(JSON.stringify({ event: "social_review_email_failed", story_id: story.id, error: err.message })))
         );
       }
