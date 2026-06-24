@@ -127,10 +127,17 @@ let _chain = Promise.resolve();
 let _lastAt = 0;
 let _available = null; // X-Requests-Available-Minute from the last response
 let _resetAt = 0; // when the per-minute counter resets (ms epoch)
-const _cache = new Map(); // path → parsed json (process lifetime, per UTC day)
+let _cacheDay = ""; // UTC day the cache holds; a new day clears it
+const _cache = new Map(); // path → Promise<json> (per UTC day)
 
 async function fdFetch(path, { apiKey, fetchImpl, logger }) {
   const key = path;
+  // Expire the cache once per UTC day so a corrected score / updated standings is
+  // re-fetched on a long-lived worker (the day's freshness window).
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== _cacheDay) { _cache.clear(); _cacheDay = today; }
+  // Cache stores the in-flight PROMISE, so concurrent first-time calls for the
+  // same path dedupe into one request (the free-tier budget is tiny).
   if (_cache.has(key)) return _cache.get(key);
   // Serialize calls so the header-derived budget is read sequentially.
   const run = _chain.then(async () => {
@@ -165,9 +172,7 @@ async function fdFetch(path, { apiKey, fetchImpl, logger }) {
         return null;
       }
       if (!res || !res.ok) return null;
-      const json = await res.json();
-      _cache.set(key, json);
-      return json;
+      return await res.json();
     } catch {
       return null;
     } finally {
@@ -175,6 +180,10 @@ async function fdFetch(path, { apiKey, fetchImpl, logger }) {
     }
   });
   _chain = run.then(() => undefined, () => undefined);
+  _cache.set(key, run);
+  // Evict failures (null/throw) so a transient error isn't cached for the day and
+  // a later call can retry; successful JSON stays cached.
+  run.then((v) => { if (v == null) _cache.delete(key); }, () => _cache.delete(key));
   return run;
 }
 
@@ -201,20 +210,27 @@ function matchTeams(story, teams) {
   for (const t of teams) {
     const candidates = [t.name, t.shortName, t.tla].filter(Boolean).map(normalizeTeamKey);
     let best = 0;
-    for (const ent of entKeys) {
+    let bestEnt = -1; // which story entity produced this team's best score
+    for (let ei = 0; ei < entKeys.length; ei++) {
+      const ent = entKeys[ei];
       for (const c of candidates) {
         const s = c === ent ? 1 : (c.includes(ent) || ent.includes(c)) && Math.min(c.length, ent.length) >= 4 ? 0.85 : similarity(c, ent);
-        if (s > best) best = s;
+        if (s > best) { best = s; bestEnt = ei; }
       }
     }
-    if (best >= SIMILARITY_THRESHOLD) scored.push({ team: t, score: best });
+    if (best >= SIMILARITY_THRESHOLD) scored.push({ team: t, score: best, entIdx: bestEnt });
   }
   scored.sort((a, b) => b.score - a.score);
-  // De-dup by team id, keep the two distinct strongest.
+  // Keep the two strongest DISTINCT teams that matched DIFFERENT story entities.
+  // Requiring different entities is the guardrail: a single ambiguous entity
+  // (e.g. "Manchester" from "Manchester derby") matches BOTH Manchester clubs at
+  // 0.85, and pairing them off one entity would post a wrong match. Both teams
+  // must each be independently named in the story.
   const seen = new Set();
   const top = [];
   for (const s of scored) {
     if (seen.has(s.team.id)) continue;
+    if (top.length && top[0].entIdx === s.entIdx) continue; // same entity → not independent
     seen.add(s.team.id);
     top.push(s);
     if (top.length === 2) break;
@@ -317,6 +333,11 @@ function buildContext({ comp, match, table }) {
       away: { id: away.id, name: away.name, shortName: away.shortName, tla: away.tla, crest: away.crest },
       score: { home: fullTime.home ?? null, away: fullTime.away ?? null },
       winner: match.score?.winner || null,
+      // Scorers when the match payload carries them (best-effort; the list
+      // endpoint may omit `goals`, in which case the scoreboard simply shows none).
+      scorers: (Array.isArray(match.goals) ? match.goals : [])
+        .map((g) => ({ name: g.scorer?.name || g.scorer?.shortName, minute: g.minute, team: g.team?.id }))
+        .filter((s) => s.name),
     },
     standings: {
       table: table.map((r) => ({
@@ -352,6 +373,7 @@ function ordinal(n) {
 // Test seam: reset module-level caches between unit tests.
 export function _resetFootballDataCache() {
   _cache.clear();
+  _cacheDay = "";
   _chain = Promise.resolve();
   _lastAt = 0;
   _available = null;

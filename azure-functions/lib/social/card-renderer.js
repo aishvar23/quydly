@@ -974,7 +974,16 @@ function footballSlidesFor(football) {
   const involved = football.standings?.involved || [];
   const hasForm = rows.some((r) => r.involved && r.form && String(r.form).trim())
     || involved.some((r) => r.form && String(r.form).trim());
-  return hasForm ? FOOTBALL_SLIDES : FOOTBALL_SLIDES.filter((k) => k !== "form");
+  // A cup/knockout/friendly match returns no league table → drop the Table slide
+  // (it would render a header-only "STANDINGS" card). Same for an empty insights
+  // set (the climax slide would be a bare fallback line).
+  const hasTable = rows.length >= 2;
+  const hasInsights = (football.insights?.lines || []).length > 0;
+  let list = FOOTBALL_SLIDES;
+  if (!hasForm) list = list.filter((k) => k !== "form");
+  if (!hasTable) list = list.filter((k) => k !== "table");
+  if (!hasInsights) list = list.filter((k) => k !== "stat-insights");
+  return list;
 }
 
 // Only raster data URIs (png/jpeg/webp) render reliably in Satori; crest URLs are
@@ -1163,7 +1172,7 @@ function footballTable(fb, { size }) {
     }, [
       el("div", { style: { display: "flex", width: Math.round(size * 0.06), fontFamily: "Anton", fontSize: Math.round(size * 0.028), color: r.involved ? FG : MUTED } }, String(r.position)),
       el("div", { style: { display: "flex", flexGrow: 1, fontSize: Math.round(size * 0.03), fontWeight: r.involved ? 700 : 400, color: FG } }, oneLine(r.team?.shortName || r.team?.name)),
-      num(r.played, numW), num(r.goalDifference > 0 ? `+${r.goalDifference}` : r.goalDifference, numW),
+      num(r.played, numW), num(Number.isFinite(r.goalDifference) ? (r.goalDifference > 0 ? `+${r.goalDifference}` : r.goalDifference) : "", numW),
       el("div", { style: { display: "flex", width: ptsW, justifyContent: "flex-end", fontFamily: "Anton", fontSize: Math.round(size * 0.034), color: FG } }, String(r.points ?? "")),
     ]));
   });
