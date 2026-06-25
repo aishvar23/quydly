@@ -186,13 +186,51 @@ function keyPoints(story) {
     .filter(Boolean);
 }
 
-// First N sentences of a blob, whitespace-normalised.
+// Abbreviations whose trailing period is NOT a sentence boundary. Without this
+// the body truncated mid-sentence on IG ("…died at St.", "Warner Bros.") because
+// the abbreviation's period was read as the end of the first sentence.
+const SENTENCE_ABBREV = new Set([
+  "mr", "mrs", "ms", "dr", "prof", "rev", "sr", "jr", "st", "mt", "ft",
+  "bros", "inc", "ltd", "co", "corp", "plc", "llc", "gov", "dept", "univ",
+  "vs", "etc", "al", "no", "sen", "rep", "gen", "lt", "col", "sgt", "capt",
+  "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+  "u.s", "u.k", "u.n", "e.g", "i.e", "a.m", "p.m",
+]);
+
+// First N sentences of a blob, whitespace-normalised. Abbreviation-aware: a
+// period inside a known abbreviation ("St.", "Warner Bros.", "Dr."), after a
+// single capital initial ("J. R. R."), or inside a decimal ("$1.5") is NOT a
+// sentence end, so the body never truncates mid-sentence.
 function firstSentences(text, n = 2) {
   const clean = oneLine(text);
   if (!clean) return "";
-  const parts = clean.match(/[^.!?]+[.!?]+/g);
-  if (!parts) return clean;
-  return parts.slice(0, n).join(" ").trim();
+  const sentences = [];
+  let start = 0;
+  for (let i = 0; i < clean.length && sentences.length < n; i++) {
+    if (!".!?".includes(clean[i])) continue;
+    // Absorb a run of terminators ("?!", "…", "...") so the whole run stays together.
+    let end = i;
+    while (end + 1 < clean.length && ".!?".includes(clean[end + 1])) end++;
+    const next = clean[end + 1];
+    // A boundary requires end-of-string or whitespace after the terminator(s);
+    // a period glued to the next char is a decimal/URL/etc., not a break.
+    if (next !== undefined && !/\s/.test(next)) { i = end; continue; }
+    // Reject abbreviations and single-letter initials by inspecting the word the
+    // period attaches to (only matters for "."; "!"/"?" never abbreviate).
+    if (clean[i] === ".") {
+      const before = clean.slice(start, i);
+      const tok = (before.match(/(\S+)$/) || ["", ""])[1].toLowerCase().replace(/[^a-z0-9.]/g, "").replace(/\.+$/, "");
+      if (SENTENCE_ABBREV.has(tok) || /^[a-z]$/.test(tok)) { i = end; continue; }
+    }
+    sentences.push(clean.slice(start, end + 1).trim());
+    start = end + 1;
+    i = end;
+  }
+  if (sentences.length < n && start < clean.length) {
+    const tail = clean.slice(start).trim();
+    if (tail) sentences.push(tail);
+  }
+  return sentences.slice(0, n).join(" ").trim();
 }
 
 // ── Lead-person portrait (cover-slide inset) ─────────────────────────────────
@@ -1435,4 +1473,4 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
   return out;
 }
 
-export { SHAPES, CAROUSEL_SLIDES, FOOTBALL_SLIDES, footballSlidesFor, coverDateLine };
+export { SHAPES, CAROUSEL_SLIDES, FOOTBALL_SLIDES, footballSlidesFor, coverDateLine, firstSentences };
