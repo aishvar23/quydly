@@ -1296,17 +1296,31 @@ function footballTeaser(nextKind) {
 // Build one football slide tree (cover stays on coverTree; the rest are full-bleed).
 // `nextKind` is the ACTUAL following slide in the (possibly form-dropped) list, so
 // the open-loop teaser stays correct.
+// "Luka Modrić · Photo: Wikipedia" — identifies the player + credits the photo.
+function playerCredit(p) {
+  if (!p) return null;
+  return `${p.name ? oneLine(p.name) + " · " : ""}Photo: ${p.credit || "Wikipedia"}`;
+}
+
 function footballSlideTree({ kind, football, accent, category, index, total, size, height, img, nextKind }) {
   const teaser = footballTeaser(nextKind);
-  const background = footballBackground({ size, height, heroBg: img?.heroBg, emblem: img?.emblem, accent: teamAccent(football.match.home.name) });
+  const players = img?.players || [];
+  // Hero slides (scoreboard, stat-insights) lead with a real player FACE — the
+  // emotional driver. Data-dense table/form stay on the cleaner generic stock so
+  // the rows read. Fall back to stock, then emblem/gradient, when no face exists.
+  let bgUri = null;
+  let credit = null;
+  if (kind === "scoreboard" && players[0]) { bgUri = players[0].dataUri; credit = playerCredit(players[0]); }
+  else if (kind === "stat-insights" && (players[1] || players[0])) { const p = players[1] || players[0]; bgUri = p.dataUri; credit = playerCredit(p); }
+  if (!bgUri && isRasterDataUri(img?.stockBg)) { bgUri = img.stockBg; credit = img?.stockCredit; }
+  const background = footballBackground({ size, height, heroBg: bgUri, emblem: img?.emblem, accent: teamAccent(football.match.home.name) });
   let body;
   if (kind === "scoreboard") body = footballScoreboard(football, { size, img });
   else if (kind === "table") body = footballTable(football, { size });
   else if (kind === "form") body = footballForm(football, { size });
   else if (kind === "stat-insights") body = footballInsights(football, { size });
   else body = footballCtaBody(size); // cta
-  const credit = isRasterDataUri(img?.heroBg) ? img?.heroCredit : null;
-  return fullBleedSlideTree({ size, height, accent, category, background, body, teaser, credit, index, total });
+  return fullBleedSlideTree({ size, height, accent, category, background, body, teaser, credit: isRasterDataUri(bgUri) ? credit : null, index, total });
 }
 
 // Render the full Instagram carousel as ordered JPEG slides. Defaults to JPEG
@@ -1337,15 +1351,25 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
   if (football) {
     const opt = fetchImpl ? { fetchImpl } : {};
     const bg = await pickBackground({ mood: moodForMatch(football, "scoreboard"), competition: football.competition?.code, seed: football.match?.id || 0 }).catch(() => null);
-    const [homeCrest, awayCrest, emblem, heroBg] = await Promise.all([
-      football.match.home.crest ? fetchImageDataUri(football.match.home.crest, opt) : null,
-      football.match.away.crest ? fetchImageDataUri(football.match.away.crest, opt) : null,
-      football.competition?.emblemUrl ? fetchImageDataUri(football.competition.emblemUrl, opt) : null,
-      bg?.url ? fetchImageDataUri(bg.url, opt) : null,
+    // Real player FACES from the story's LICENSED entity enrichment (Wikipedia /
+    // editor overrides) — the emotional drive. Hero slides lead with a player
+    // face; generic stock is only the fallback when no licensed face exists.
+    const playerSpecs = entityImages(story);
+    const [crestsAndBg, players] = await Promise.all([
+      Promise.all([
+        football.match.home.crest ? fetchImageDataUri(football.match.home.crest, opt) : null,
+        football.match.away.crest ? fetchImageDataUri(football.match.away.crest, opt) : null,
+        football.competition?.emblemUrl ? fetchImageDataUri(football.competition.emblemUrl, opt) : null,
+        bg?.url ? fetchImageDataUri(bg.url, opt) : null,
+      ]),
+      Promise.all(playerSpecs.slice(0, 4).map((s) => resolveImage(s, fetchImpl))),
     ]);
-    // Credit only matters when the photo actually rendered (raster heroBg).
-    const heroCredit = heroBg ? backgroundCredit(bg) : null;
-    fbImg = { homeCrest, awayCrest, emblem, heroBg, heroCredit };
+    const [homeCrest, awayCrest, emblem, stockBg] = crestsAndBg;
+    fbImg = {
+      homeCrest, awayCrest, emblem,
+      stockBg, stockCredit: stockBg ? backgroundCredit(bg) : null,
+      players: players.filter(Boolean), // [{ dataUri, name, credit }]
+    };
   }
 
   // Resolve real imagery once, up front, and spread it across the carousel: the

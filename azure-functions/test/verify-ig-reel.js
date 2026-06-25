@@ -75,7 +75,40 @@ async function resolveFootball() {
   if (!isFootballStory(story)) throw new Error("not detected as football");
   const football = await resolveFootballContext(story, { apiKey: process.env.FOOTBALL_DATA_API_KEY, logger: console });
   if (!football) throw new Error("no match resolved");
+  // DEMO ONLY: a real Quydly story already enriches the players named in the
+  // article (primary_entities_enriched, licensed Wikipedia photos). The synthetic
+  // --match story has none, so resolve a couple of each team's stars from
+  // Wikipedia to demonstrate real player FACES on the slides. (The free
+  // football-data tier returns no scorers/lineups, so production relies on the
+  // story's entity enrichment.)
+  story.primary_entities_enriched = await enrichStarPlayers(home.trim(), away.trim());
   return { story, football, hook: `${home} vs ${away}: the World Cup numbers` };
+}
+
+// Small demo map of star players per (test) national team — winner's first.
+const STAR_PLAYERS = {
+  croatia: ["Luka Modrić", "Ivan Perišić"], panama: ["Aníbal Godoy"],
+  england: ["Jude Bellingham", "Harry Kane"], ghana: ["Mohammed Kudus"],
+  colombia: ["Luis Díaz", "James Rodríguez"], "congo dr": ["Cédric Bakambu"],
+  argentina: ["Lionel Messi"], brazil: ["Vinícius Júnior"], france: ["Kylian Mbappé"],
+  spain: ["Lamine Yamal"], portugal: ["Cristiano Ronaldo"], netherlands: ["Virgil van Dijk"],
+};
+async function wikiThumb(name) {
+  try {
+    const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(name.replace(/ /g, "_"))}`, { headers: { "User-Agent": "quydly-reel-demo/1.0" } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j?.thumbnail?.source || j?.originalimage?.source || null;
+  } catch { return null; }
+}
+async function enrichStarPlayers(home, away) {
+  const names = [...(STAR_PLAYERS[away.toLowerCase()] || []), ...(STAR_PLAYERS[home.toLowerCase()] || [])]; // winner(away in our test) first
+  const out = [];
+  for (const name of names) {
+    const url = await wikiThumb(name);
+    if (url) out.push({ name, type: "person", wikipedia_thumbnail_url: url });
+  }
+  return out;
 }
 
 async function main() {

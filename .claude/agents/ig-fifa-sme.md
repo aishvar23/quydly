@@ -284,6 +284,13 @@ slides, the resolver, the Graph flow.
   card centred on a **blurred, gently-zooming extension of the same frame** (readability first — no
   Ken Burns crop/pan on data slides), xfade crossfades, one music bed (looped, fade in/out). **Lazy
   import** behind the flag (native binary — must not break the generator).
+- **Player FACES drive the emotion** (not generic stock): the hero slides (cover, scoreboard,
+  stat-insights) use the real player photo from the story's LICENSED entity enrichment
+  (`entityImages`/`leadCoverImage` → `primary_entities_enriched`, Wikipedia/editor-override, credited
+  "Photo: …"); data-dense table/form stay on cleaner generic stock for readability. The free
+  football-data tier returns NO scorers/lineups, so players come from the **story's enriched
+  entities** (the players the article names) — not the match API. Real match-action/celebration
+  photos (Getty/AP/Imago) are paid + copyrighted; we deliberately use only free licensed faces.
 - **`lib/social/reel-music.js`** + `assets/audio/*.mp3` — royalty-free **Mixkit** beds (Free License:
   commercial, no attribution; see `assets/audio/README.md`). `pickMusicBed(seed)` rotates per story.
 - **MUSIC CONSTRAINT (do not relitigate):** the Graph API CANNOT attach Instagram's native/trending
