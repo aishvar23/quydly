@@ -11,12 +11,13 @@
 // unset. Any failure is logged and swallowed — a missed alert must never block or
 // fail post generation (the post is already safely held for review).
 
-import { createHmac } from "node:crypto";
+import { reviewTokenSig } from "./review-token.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
 const DEFAULT_REVIEW_EMAIL = "aishvar.suhane@gmail.com";
 const DEFAULT_FROM = "Quydly <noreply@quydly.com>";
 const DEFAULT_BASE_URL = "https://quydly.com";
+const DEFAULT_TTL_DAYS = 14; // how long an Approve/Reject link stays valid
 
 // Human-readable reason for the chosen weak-imagery state.
 function reasonFor(coverImagery) {
@@ -25,21 +26,18 @@ function reasonFor(coverImagery) {
     : "no imagery at all — the bare gradient fallback";
 }
 
-// HMAC-SHA256 over "<postId>:<action>" with SOCIAL_REVIEW_SECRET — the same token
-// api/social-review.js recomputes to authorise the action. MUST stay in sync with
-// that endpoint's `expectedToken`.
-function signAction(postId, action, secret) {
-  return createHmac("sha256", secret).update(`${postId}:${action}`).digest("hex");
-}
-
 // The signed Approve / Reject action links, or null when we can't build them
-// (no secret or no post id → the email still sends, just without buttons).
+// (no secret or no post id → the email still sends, just without buttons). The
+// token + expiry are produced by review-token.js, shared with the verifying
+// endpoint so the two can't drift.
 function actionLinks({ postId, env }) {
   const secret = env.SOCIAL_REVIEW_SECRET;
   if (!secret || !postId) return null;
   const base = String(env.SOCIAL_REVIEW_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const ttlDays = Number(env.SOCIAL_REVIEW_TOKEN_TTL_DAYS) || DEFAULT_TTL_DAYS;
+  const exp = Date.now() + ttlDays * 86400000;
   const link = (action) =>
-    `${base}/api/social-review?post=${encodeURIComponent(postId)}&action=${action}&token=${signAction(postId, action, secret)}`;
+    `${base}/api/social-review?post=${encodeURIComponent(postId)}&action=${action}&exp=${exp}&token=${reviewTokenSig(postId, action, exp, secret)}`;
   return { approve: link("approve"), reject: link("reject") };
 }
 
