@@ -32,6 +32,9 @@ export const CAROUSEL_MAX = 10;
 // Container processing poll settings (carousel/video are async).
 const POLL_ATTEMPTS = 10;
 const POLL_INTERVAL_MS = 2000;
+// Reels are encoded server-side and take noticeably longer than image carousels,
+// so the REELS container is polled far longer before giving up (~2 min).
+const REELS_POLL_ATTEMPTS = 60;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -52,9 +55,10 @@ export function credsFromEnv(env = process.env) {
 
 // Create a media container. Returns its id. `extra` carries is_carousel_item /
 // media_type / children / caption depending on the call.
-export async function createContainer({ creds, imageUrl, caption, extra = {}, fetchImpl = fetch }) {
+export async function createContainer({ creds, imageUrl, videoUrl, caption, extra = {}, fetchImpl = fetch }) {
   const params = { access_token: creds.accessToken, ...extra };
   if (imageUrl) params.image_url = imageUrl;
+  if (videoUrl) params.video_url = videoUrl;
   if (caption != null) params.caption = caption;
   const raw = await graphPost(graphUrl(creds, `${creds.igUserId}/media`), params, fetchImpl);
   if (!raw.id) throw new Error(`Instagram Graph: no container id in response: ${JSON.stringify(raw).slice(0, 200)}`);
@@ -97,9 +101,25 @@ export async function publishContainer({ creds, creationId, fetchImpl = fetch })
 //            synthetic id, prefixed DRYRUN-, so the publisher can be exercised
 //            end-to-end without credentials or a live post).
 // Returns { platformPostId, rawResponse }.
-export async function publish(post, { creds, slides = null, fetchImpl = fetch, sleepImpl = sleep, logger = noopLogger, dryRun = false } = {}) {
+export async function publish(post, { creds, slides = null, reelUrl = null, fetchImpl = fetch, sleepImpl = sleep, logger = noopLogger, dryRun = false } = {}) {
   if (!creds) throw new Error("Instagram publish: missing Graph creds");
   const caption = String(post.post_text || post.text || "");
+
+  // Reel wins precedence: a video Reel publishes as a single REELS container
+  // (no image carousel). The async container is polled longer than images.
+  const reel = reelUrl || post.reel_url || post.reelUrl || null;
+  if (reel) {
+    if (!/^https:\/\//i.test(reel)) throw new Error(`Instagram publish: reel url must be public HTTPS: ${reel}`);
+    if (dryRun) {
+      logger(JSON.stringify({ event: "ig_publish_dry_run", mode: "reel", caption_len: caption.length, ig_user_id: creds.igUserId, graph_version: creds.graphVersion, reel_url: reel }));
+      return { platformPostId: "DRYRUN-reel", rawResponse: { dryRun: true, reelUrl: reel } };
+    }
+    const creationId = await createContainer({ creds, videoUrl: reel, caption, extra: { media_type: "REELS", share_to_feed: "true" }, fetchImpl });
+    await waitForContainer({ creds, containerId: creationId, fetchImpl, sleepImpl, attempts: REELS_POLL_ATTEMPTS });
+    const mediaId = await publishContainer({ creds, creationId, fetchImpl });
+    logger(JSON.stringify({ event: "ig_published", mode: "reel", media_id: mediaId }));
+    return { platformPostId: mediaId, rawResponse: { creation_id: creationId, media_id: mediaId, mode: "reel" } };
+  }
 
   // Build the ordered list of public image URLs.
   const slideUrls = (slides || [])

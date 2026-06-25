@@ -129,7 +129,7 @@ async function generateCoverHook(anthropic, platform, story, logger) {
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
 // leaves the draft text-only, exactly as before).
-export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, igFootball = false, logger = noopLogger }) {
+export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, igFootball = false, igReels = false, logger = noopLogger }) {
   const draft = platform.format(story, audienceGeo); // deterministic base
 
   if (cardService && platform.CONSTRAINTS) {
@@ -195,11 +195,25 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
           if (football) draft.football = football;
         }
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, football });
-      if (slides && slides.length) {
-        draft.carouselSlides = slides;
-        draft.mediaUrl = slides[0].url;
-        draft.requiresMedia = false;
+      // Reel (SOCIAL_IG_REELS_ENABLED): for a resolved football match, render a
+      // 9:16 Reel MP4 (the football slides + a royalty-free music bed) and publish
+      // it as a Reel instead of the carousel. Reel WINS precedence; best-effort —
+      // a render/upload failure falls back to the carousel below.
+      if (igReels && football && cardService.getReelVideoUrl) {
+        const reel = await cardService.getReelVideoUrl({ story, football });
+        if (reel?.reelUrl) {
+          draft.reelUrl = reel.reelUrl;
+          draft.mediaUrl = reel.coverUrl; // cover JPEG: admin preview + media gate + thumbnail
+          draft.requiresMedia = false;
+        }
+      }
+      if (!draft.reelUrl) {
+        const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, football });
+        if (slides && slides.length) {
+          draft.carouselSlides = slides;
+          draft.mediaUrl = slides[0].url;
+          draft.requiresMedia = false;
+        }
       }
     } else if (platform.CONSTRAINTS.cardShape) {
       // Single card. The render format is declared by the platform's CONSTRAINTS
@@ -261,7 +275,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, igFootball = false, candidateId, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, igFootball = false, igReels = false, candidateId, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -315,7 +329,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     if (existing) { skipped++; continue; }
 
     const post = await generatePlatformPost({
-      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, igFootball, logger,
+      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, igFootball, igReels, logger,
     });
 
     // Append source attribution + the curated hashtag block to IG captions
@@ -424,6 +438,25 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
           .from("social_media_assets")
           .upsert(assetRows, { onConflict: "social_post_id,position", ignoreDuplicates: true });
         if (assetErr) throw new Error(`[social-post-generator] insert carousel assets: ${assetErr.message}`);
+      }
+
+      // Persist the Reel MP4 URL as a single social_media_assets row (position 0,
+      // asset_type instagram_reel_video) so the publisher can publish it as a Reel.
+      if (post.reelUrl) {
+        const { error: reelErr } = await supabase
+          .from("social_media_assets")
+          .upsert([{
+            story_id: story.id,
+            social_post_id: inserted.id,
+            asset_type: "instagram_reel_video",
+            asset_url: post.reelUrl,
+            position: 0,
+            width: 1080,
+            height: 1920,
+            format: "mp4",
+            status: "READY",
+          }], { onConflict: "social_post_id,position", ignoreDuplicates: true });
+        if (reelErr) throw new Error(`[social-post-generator] insert reel asset: ${reelErr.message}`);
       }
 
       // Persist the engagement MCQ (the question rendered on this post's

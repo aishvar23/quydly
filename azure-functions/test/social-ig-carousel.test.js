@@ -870,7 +870,7 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
 
 // ── publisher: IG ordered-slide fetch + creds-skip ──────────────────────────────
 
-function makePubSupabase({ duePosts, slidesByPost = {}, counts = {} }) {
+function makePubSupabase({ duePosts, slidesByPost = {}, reelByPost = {}, counts = {} }) {
   const byId = new Map(duePosts.map((p) => [p.id, { ...p }]));
   function from(table) {
     const q = { table, filters: {}, payload: null, count: false, single: false };
@@ -886,7 +886,8 @@ function makePubSupabase({ duePosts, slidesByPost = {}, counts = {} }) {
   }
   async function resolve(q) {
     if (q.table === "social_media_assets") {
-      return { data: slidesByPost[q.filters.social_post_id] || [], error: null };
+      const byType = q.filters.asset_type === "instagram_reel_video" ? reelByPost : slidesByPost;
+      return { data: byType[q.filters.social_post_id] || [], error: null };
     }
     if (q.op === "update") {
       const post = byId.get(q.filters.id);
@@ -929,6 +930,27 @@ test("publishApprovedPosts: IG post publishes with its ordered slides", async ()
   assert.ok(received.every((s) => s.url));
   assert.equal(sb.byId.get("ig1").status, "POSTED");
   assert.equal(sb.byId.get("ig1").platform_post_id, "IGM1");
+});
+
+test("publishApprovedPosts: IG post with a reel asset publishes as a Reel (reel wins over slides)", async () => {
+  const sb = makePubSupabase({
+    duePosts: [igPost("ig1")],
+    slidesByPost: { ig1: [{ asset_url: "https://cdn.test/0.jpg", position: 0 }] },
+    reelByPost: { ig1: [{ asset_url: "https://cdn.test/reel.mp4" }] },
+  });
+  let received;
+  const publishers = { instagram: async (post, { slides, reelUrl }) => { received = { slides, reelUrl }; return { platformPostId: "IGR1", rawResponse: {} }; } };
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getIgCreds: () => IG_CREDS, env: {} });
+  assert.equal(res.published, 1);
+  assert.equal(received.reelUrl, "https://cdn.test/reel.mp4");
+  assert.equal(received.slides, null); // reel wins → carousel slides not fetched
+  assert.equal(sb.byId.get("ig1").platform_post_id, "IGR1");
+});
+
+test("ig.publish: reelUrl → REELS dry-run (no carousel)", async () => {
+  const r = await ig.publish({ post_text: "cap" }, { creds: IG_CREDS, reelUrl: "https://cdn.test/reel.mp4", dryRun: true });
+  assert.equal(r.platformPostId, "DRYRUN-reel");
+  assert.equal(r.rawResponse.reelUrl, "https://cdn.test/reel.mp4");
 });
 
 test("publishApprovedPosts: missing IG creds → release claim + skip (does not throw)", async () => {

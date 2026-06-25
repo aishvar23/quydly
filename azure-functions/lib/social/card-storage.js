@@ -129,6 +129,22 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     return out;
   }
 
+  // Render the football slides (4:5) → a 9:16 Reel MP4 with a royalty-free music
+  // bed, upload it + a cover JPEG, and return their public URLs. The video tools
+  // (ffmpeg, native binary) are imported LAZILY so a bad-arch binary can never
+  // break the generator — same discipline as the renderer/resvg path.
+  async function buildReel({ story, football = null, variant }) {
+    const { renderReelVideo } = await import("./video-renderer.js");
+    const { pickMusicBed } = await import("./reel-music.js");
+    const slides = await renderCarouselSlides(story, { shape: "portrait", football }); // 4:5 frames
+    if (!Array.isArray(slides) || !slides.length) return null;
+    const musicPath = pickMusicBed(football?.match?.id || story.id || 0);
+    const reel = await renderReelVideo(story, { frames: slides, musicPath });
+    const reelUrl = await upload({ path: `cards/${story.id}/reel/${variant}.mp4`, buffer: reel.buffer, contentType: reel.contentType });
+    const coverUrl = await upload({ path: `cards/${story.id}/reel/${variant}-cover.jpg`, buffer: slides[0].buffer, contentType: slides[0].contentType });
+    return { reelUrl, coverUrl, durationSec: reel.durationSec, width: reel.width, height: reel.height, hasMusic: !!musicPath };
+  }
+
   // Generate `count` DISTINCT editorial illustrations for a photoless story and
   // upload each — the Tier-2 per-slide imagery. Returns an array aligned to the
   // slots (null where a scene/image/upload failed). Best-effort: the renderer
@@ -194,6 +210,21 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));
+        return null;
+      });
+      cache.set(key, p);
+      return p;
+    },
+
+    // Returns { reelUrl, coverUrl, durationSec, ... } for a football Reel, or null
+    // on any failure (caller falls back to the carousel). Memoised per story+match.
+    async getReelVideoUrl({ story, football = null }) {
+      if (!story || story.id == null) return null;
+      const variant = footballFingerprint(football);
+      const key = `${story.id}:reel:${variant}`;
+      if (cache.has(key)) return cache.get(key);
+      const p = buildReel({ story, football, variant }).catch((err) => {
+        logger.warn(JSON.stringify({ event: "social_reel_failed", story_id: story.id, error: err.message }));
         return null;
       });
       cache.set(key, p);

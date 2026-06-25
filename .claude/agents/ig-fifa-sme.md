@@ -274,13 +274,33 @@ The carousel is engineered as a **story arc with open loops**, not six disconnec
 - **Iteration loop:** tweak a builder → `node test/verify-ig-football-carousel.js <storyId>` →
   eyeball `./.football-slides/` → adjust. The visual system + reference posts above are the bar.
 
-## Reels (future — same brain, new render/publish surface)
-The same `football-data.js` resolver, `football-knowledge.js`, the asset manifest (`type: clip`
-already reserved), the visual system, and the AIDA narrative arc are the inputs to a later video
-path. **Only the render/encode + IG Reels publish surface is new** (a video composition + the Reels
-publish endpoint). Governing constraint for the video hook (@michaelaiacademy): **hook in the first
-2 seconds, designed to stop scroll + drive action.** This agent — not the carousel code — is the
-durable context home to extend.
+## Reels (BUILT — flag `SOCIAL_IG_REELS_ENABLED`, default OFF)
+For a resolved football match, render the SAME 4:5 football slides into a 9:16 Reel MP4 + a
+royalty-free music bed, and publish it as a Reel (reel WINS over carousel). Reuses the carousel
+slides, the resolver, the Graph flow.
+- **`lib/social/video-renderer.js`** — `renderReelVideo(story, { frames, musicPath, slideSec })` →
+  `{ buffer, contentType:"video/mp4", width:1080, height:1920, durationSec }`. ffmpeg (bundled
+  `ffmpeg-static`, lifted from `poc-video-story-288`). Each 4:5 slide is composed into 9:16: a sharp
+  card centred on a **blurred, gently-zooming extension of the same frame** (readability first — no
+  Ken Burns crop/pan on data slides), xfade crossfades, one music bed (looped, fade in/out). **Lazy
+  import** behind the flag (native binary — must not break the generator).
+- **`lib/social/reel-music.js`** + `assets/audio/*.mp3` — royalty-free **Mixkit** beds (Free License:
+  commercial, no attribution; see `assets/audio/README.md`). `pickMusicBed(seed)` rotates per story.
+- **MUSIC CONSTRAINT (do not relitigate):** the Graph API CANNOT attach Instagram's native/trending
+  audio to an API-published Reel (app-only), and embedding a real chart song = copyright strike
+  (Content-ID mute; Meta's license excludes branded/API content). So we embed a royalty-free bed.
+  Native trending audio would require a human finishing each Reel in the IG app (not automatable).
+- **Seams:** `card-renderer.js` `SHAPES.portrait916` + `shape` param on `renderCarouselSlides`;
+  `card-storage.js` `getReelVideoUrl({story,football})` (renders 4:5 frames → MP4 + cover, uploads,
+  memoised); `instagram-graph.js` `createContainer` `videoUrl` + `publish()` REELS branch (`media_type
+  =REELS`, `share_to_feed`, `REELS_POLL_ATTEMPTS`≈2min); generator persists a `social_media_assets`
+  row `asset_type:"instagram_reel_video"`; publisher `reelFor(postId)` → passes `reelUrl` (reel wins).
+- **Deploy gotcha:** `ffmpeg-static` is a native binary — bundle `node_modules` on `func publish`
+  (Windows, no remote build), same as resvg.
+- **Verify:** `node test/verify-ig-reel.js --fixture` (or `--match "H|A|date"`) renders the MP4, prints
+  the ffprobe spec (H.264 1080×1920 / AAC / faststart), extracts frames, dry-runs the REELS request.
+  **Operator MUST watch the MP4.** Video hook constraint (@michaelaiacademy): stop scroll in the
+  first 2 seconds.
 
 ## Working rules
 - Follow `CLAUDE.md`: config-only, ask before architectural decisions not covered by CLAUDE.md/SPEC.md,

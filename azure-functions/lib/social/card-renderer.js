@@ -49,6 +49,10 @@ const SHAPES = {
   // 4:5 portrait — the carousel slide format. Takes ~25% more vertical feed
   // space than square; the extra height becomes breathing room for the hook.
   portrait: { width: 1080, height: 1350 },
+  // 9:16 — the Reels frame format. Same 1080 width (so all type/padding ratios
+  // carry over) with a taller canvas; football slides render natively at this
+  // size as video frames.
+  portrait916: { width: 1080, height: 1920 },
 };
 
 // Carousel slide order. "Key points" and "Why it matters" are SEPARATE slides:
@@ -1312,9 +1316,9 @@ function footballSlideTree({ kind, football, accent, category, index, total, siz
 // lead entity (person, else org/place) with a credit. Resolving the image is
 // best-effort and happens once up front; any failure leaves the cover text-only.
 // `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], football = null, fetchImpl } = {}) {
-  const { width, height } = SHAPES.portrait;
-  const size = width; // scaling base for typography/padding; height adds 4:5 room
+export async function renderCarouselSlides(story, { format = "jpeg", shape = "portrait", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], football = null, fetchImpl } = {}) {
+  const { width, height } = SHAPES[shape] || SHAPES.portrait;
+  const size = width; // scaling base for typography/padding; height adds 4:5 (or 9:16) room
   // For a resolved football match the chrome accent is the home team's color and
   // the category chip is the competition name; otherwise the category accent/id.
   const accent = football ? teamAccent(football.match.home.name) : accentFor(story?.category_id);

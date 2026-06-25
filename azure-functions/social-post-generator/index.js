@@ -65,6 +65,13 @@ export default async function socialPostGenerator(context, message) {
   // carousel, so default-on never changes a non-football post.
   const igFootball = !/^(0|false)$/i.test(String(process.env.SOCIAL_IG_FOOTBALL_ENABLED ?? "true"));
 
+  // Instagram Reels: for a resolved football match, render a 9:16 Reel MP4 (the
+  // football slides + a royalty-free music bed) and publish it as a Reel instead
+  // of the carousel. Opt-in (default OFF) — ffmpeg encode is heavier, so enable
+  // deliberately. Effective only with the carousel + football paths on; without a
+  // resolved match it never fires (falls back to the carousel).
+  const igReels = /^(1|true)$/i.test(String(process.env.SOCIAL_IG_REELS_ENABLED || ""));
+
   const { created, skipped } = await generateSocialPosts({
     supabase,
     anthropic,
@@ -73,6 +80,7 @@ export default async function socialPostGenerator(context, message) {
     igEngagement,
     igHashtags,
     igFootball,
+    igReels,
     candidateId,
     logger: context.log,
   });
