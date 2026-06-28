@@ -124,7 +124,7 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
       const url = await upload({ path, buffer: s.buffer, contentType: s.contentType });
-      out.push({ url, index: s.index, slideType: s.slideType, width: s.width, height: s.height, contentType: s.contentType });
+      out.push({ url, index: s.index, slideType: s.slideType, width: s.width, height: s.height, contentType: s.contentType, ...(s.slideType === "cover" ? { coverImagery: s.coverImagery } : {}) });
     }
     return out;
   }

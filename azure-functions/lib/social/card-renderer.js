@@ -311,21 +311,30 @@ function excludePeopleImagery(story) {
   return !(category && SAFE_CATEGORIES.has(category));
 }
 
-function leadCoverImage(story) {
+// The lead PERSON's licensed image spec (the first person entity with a usable
+// image), or null. This is the ONLY photo allowed to HERO the cover: an org logo
+// or a place flag must never pre-empt an editorial illustration there — they are
+// demoted to a last resort (see renderCarouselSlides). HIGH-sensitivity stories
+// drop the posed face entirely (excludePeopleImagery), so the cover gets an
+// illustration instead of a smiling headshot over a tragedy.
+function leadPersonImage(story) {
+  if (excludePeopleImagery(story)) return null;
   const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
-  const pick = (e) => {
-    if (!e) return null;
-    const urls = entityImageUrls(e);
-    return urls.length ? { urls, name: oneLine(e.name), credit: portraitCredit(e) } : null;
-  };
-  if (!excludePeopleImagery(story)) {
-    const leadPerson = pick(ents.find((e) => e && e.type === "person"));
-    if (leadPerson) return leadPerson;
-  }
+  const lead = ents.find((e) => e && e.type === "person");
+  if (!lead) return null;
+  const urls = entityImageUrls(lead);
+  return urls.length ? { urls, name: oneLine(lead.name), credit: portraitCredit(lead), type: lead.type } : null;
+}
+
+// The first org/place entity with a licensed image (a logo or a landmark/flag),
+// or null. Used as the cover's LAST-RESORT hero — only when there is neither a
+// person photo NOR an illustration — and as a body-slide imagery source.
+function leadOrgPlaceImage(story) {
+  const ents = Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [];
   for (const e of ents) {
     if (e && (e.type === "org" || e.type === "place")) {
-      const img = pick(e);
-      if (img) return img;
+      const urls = entityImageUrls(e);
+      if (urls.length) return { urls, name: oneLine(e.name), credit: portraitCredit(e), type: e.type };
     }
   }
   return null;
@@ -345,28 +354,45 @@ function entityImages(story) {
     const urls = entityImageUrls(e);
     if (!urls.length) continue;
     seen.add(e.name);
-    out.push({ urls, name: oneLine(e.name), credit: portraitCredit(e) });
+    out.push({ urls, name: oneLine(e.name), credit: portraitCredit(e), type: e.type });
   }
   return out;
 }
 
-// Whether the story has a USABLE licensed entity image — lets the generator
-// decide up front whether to spend an illustration generation (only when there
-// is no photo to use). "Usable" is sensitivity-aware: on HIGH-sensitivity
-// stories person faces are excluded (excludePeopleImagery), so a tragedy whose
-// only image is a person's portrait reports false here and the generator falls
-// back to a neutral symbolic illustration instead of leading with that face.
-export function hasEntityImage(story) {
-  return entityImages(story).length > 0;
+// SINGLE SOURCE OF TRUTH for cover/body image sourcing, shared by the renderer's
+// allocation (renderCarouselSlides) and the generator's illustration sizing
+// (plannedIllustrationCount), so the two can't drift. Given the story and the
+// content slide kinds present (cover / what / key points / [why]), it returns:
+//   coverSpec         — the lead PERSON image (the only photo allowed to hero the
+//                       cover), or null;
+//   coverFallbackSpec — the lead org/place image RESERVED as the cover's last
+//                       resort (only when no person cover), or null;
+//   bodyKinds         — the non-cover content kinds present;
+//   bodySpecs         — the entity images for the body slides, with the reserved
+//                       cover entity held back so it never appears on both.
+function planEntityImagery(story, contentKinds) {
+  const hasCover = contentKinds.includes("cover");
+  const coverSpec = hasCover ? leadPersonImage(story) : null;
+  const coverFallbackSpec = (hasCover && !coverSpec) ? leadOrgPlaceImage(story) : null;
+  const reservedName = coverSpec?.name || coverFallbackSpec?.name;
+  const bodyKinds = contentKinds.filter((k) => k !== "cover");
+  const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, bodyKinds.length);
+  return { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs };
 }
 
-// How many DISTINCT usable entity images the story has (sensitivity-aware). The
-// generator sizes illustration generation from this so that EVERY content slide
-// without a photo gets a real illustration instead of the brand-graphic floor:
-// it generates (content-slide count − usable photos) illustrations, which the
-// renderer routes to exactly the photo-less slides.
-export function usableImageCount(story) {
-  return entityImages(story).length;
+// How many editorial illustrations the carousel needs — one for every content
+// slide (cover / what / key points / [why]) that won't be backed by a usable
+// PHOTO under the sourcing rules in planEntityImagery. The cover is photo-backed
+// ONLY by a lead PERSON image; org logos / place flags never pre-empt an
+// illustration on the cover (so it never falls back to a "dumb" logo/flag or the
+// gradient when an illustration is possible). The generator generates exactly this
+// many, and renderCarouselSlides routes them to precisely those photo-less slides.
+export function plannedIllustrationCount(story, { whyItMatters = [] } = {}) {
+  const hasWhy = Array.isArray(whyItMatters) && whyItMatters.filter(Boolean).length > 0;
+  const contentKinds = ["cover", "what", "keypoints", ...(hasWhy ? ["why"] : [])];
+  const { coverSpec, bodySpecs } = planEntityImagery(story, contentKinds);
+  const coverPhoto = coverSpec ? 1 : 0;
+  return Math.max(0, contentKinds.length - coverPhoto - bodySpecs.length);
 }
 
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or
@@ -375,7 +401,7 @@ async function resolveImage(spec, fetchImpl) {
   if (!spec) return null;
   for (const url of spec.urls) {
     const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
-    if (dataUri) return { dataUri, name: spec.name, credit: spec.credit };
+    if (dataUri) return { dataUri, name: spec.name, credit: spec.credit, type: spec.type };
   }
   return null;
 }
@@ -566,32 +592,16 @@ function bulletRow(text, accent, size, fontPx = Math.round(size * 0.038)) {
 //
 // The 4:5 card height is FIXED, and Satori has no overflow handling, so long key
 // points used to spill past the bottom and clip the last bullet (IG showed a
-// cut-off third point). We size deterministically to fit: step the image and
-// bullet font DOWN together through density levels until the estimated bullet
-// stack fits the room the image leaves, trimming the points (word boundary, "…")
-// only if even the smallest level overflows. Heights are estimated from a
-// conservative average glyph advance (Lato ≈ 0.52em) so we err toward NOT
-// clipping; short points keep the default size (no regression).
+// cut-off third point). The bullets now sit in the scrimmed lower zone of a
+// full-bleed image slide, so we size deterministically to fit a caller-supplied
+// pixel budget: step the bullet font DOWN through the levels until the estimated
+// stack fits, trimming the points (word boundary, "…") only if even the smallest
+// level overflows. Heights are estimated from a conservative average glyph advance
+// (Lato ≈ 0.52em) so we err toward NOT clipping; short points keep the default
+// size (no regression).
 const BULLET_LINE_H = 1.25;
 const BULLET_AVG_CHAR_EM = 0.52;
-const BULLET_DENSITY = [
-  { font: 0.038, image: 0.42 }, // default — unchanged look for short points
-  { font: 0.035, image: 0.40 },
-  { font: 0.033, image: 0.36 },
-  { font: 0.031, image: 0.32 },
-  { font: 0.029, image: 0.28 },
-];
-
-// Vertical space (px) for the bullet stack once the slide's padding, header,
-// footer, eyebrow and the image block (at heightRatio `imageR`) are removed.
-// Derived from slideTree geometry (card height = size × 1.25), with a safety
-// margin so the estimate never under-counts the chrome.
-function bulletStackBudget(size, imageR) {
-  const middle = size * 1.25 - 2 * (size * PAD_Y_RATIO) - size * 0.041 - size * 0.049; // − pad − header − footer
-  const eyebrowH = size * 0.054;                                    // label + its marginBottom
-  const imageBlock = imageR > 0 ? size * imageR + size * 0.075 : 0; // photo + caption + marginBottom
-  return middle - eyebrowH - imageBlock - size * 0.02;              // − safety
-}
+const BULLET_FONT_LEVELS = [0.038, 0.035, 0.033, 0.031, 0.029]; // densest → smallest
 
 // Estimated stacked height (px) of `points` rendered as bullets at `fontPx`.
 function bulletStackHeight(points, fontPx, size) {
@@ -602,26 +612,24 @@ function bulletStackHeight(points, fontPx, size) {
   return h;
 }
 
-// Pick the densest-that-fits layout for a bullet slide. Returns
-// { fontPx, imageRatio, points }; points are trimmed only as a last resort.
-function fitBulletSlide(points, size) {
-  for (const level of BULLET_DENSITY) {
-    const fontPx = Math.round(size * level.font);
-    if (bulletStackHeight(points, fontPx, size) <= bulletStackBudget(size, level.image)) {
-      return { fontPx, imageRatio: level.image, points };
+// Pick the densest font that fits `points` into `budgetPx` of vertical space.
+// Returns { fontPx, points }; points are trimmed only as a last resort.
+function fitBulletSlide(points, size, budgetPx) {
+  for (const level of BULLET_FONT_LEVELS) {
+    const fontPx = Math.round(size * level);
+    if (bulletStackHeight(points, fontPx, size) <= budgetPx) {
+      return { fontPx, points };
     }
   }
   // Smallest level still overflows → trim each point to its share of the budget,
   // on a word boundary, with an ellipsis (clean cut, not an IG clip).
-  const last = BULLET_DENSITY[BULLET_DENSITY.length - 1];
-  const fontPx = Math.round(size * last.font);
-  const budget = bulletStackBudget(size, last.image);
+  const fontPx = Math.round(size * BULLET_FONT_LEVELS[BULLET_FONT_LEVELS.length - 1]);
   const colW = size * (1 - 2 * PAD_X_RATIO) - 38;
   const cpl = Math.max(8, colW / (fontPx * BULLET_AVG_CHAR_EM));
-  const linesEach = Math.max(1, Math.floor((budget / points.length - 22) / (fontPx * BULLET_LINE_H)));
+  const linesEach = Math.max(1, Math.floor((budgetPx / points.length - 22) / (fontPx * BULLET_LINE_H)));
   const maxChars = Math.max(40, Math.floor(linesEach * cpl));
   const trimmed = points.map((p) => (p.length <= maxChars ? p : `${p.slice(0, maxChars).replace(/\s+\S*$/, "").trim()}…`));
-  return { fontPx, imageRatio: last.image, points: trimmed };
+  return { fontPx, points: trimmed };
 }
 
 // One MCQ option row on the engagement slide: a lettered chip (A/B/C/D) + the
@@ -722,40 +730,6 @@ function coverDateRow(story, size) {
   }, text);
 }
 
-// A rounded photo (a licensed entity image) with a name + "Photo: …" credit
-// beneath. The cover uses a large hero (heightRatio 0.46); body slides reuse it
-// smaller (≈0.3) to spread real imagery across the carousel without crowding the
-// text. This is the slide's main visual, so non-person stories with an org/place
-// image read as graphic, not bland.
-function imageHero({ image, size, widthRatio = 1, heightRatio = 0.46, marginRatio = 0.038 }) {
-  const fullW = Math.round(size * (1 - 2 * PAD_X_RATIO));
-  const photoW = Math.round(fullW * widthRatio);
-  const photoH = Math.round(size * heightRatio);
-  const caption = [];
-  if (image.name) {
-    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), fontWeight: 700, color: FG } }, image.name));
-  }
-  if (image.credit) {
-    caption.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.018), color: MUTED, marginLeft: "auto" } }, `Photo: ${image.credit}`));
-  }
-  const children = [
-    el("img", {
-      src: image.dataUri, width: photoW, height: photoH,
-      // objectPosition biases the crop toward the upper third so headshots keep
-      // the face (a centred crop on a tall portrait decapitates it).
-      style: { width: photoW, height: photoH, objectFit: "cover", objectPosition: "center 25%", borderRadius: Math.round(size * 0.028) },
-    }),
-  ];
-  if (caption.length) {
-    children.push(el("div", {
-      style: { display: "flex", alignItems: "center", width: photoW, marginTop: Math.round(size * 0.016) },
-    }, caption));
-  }
-  // A sub-full-width image is centred in the slide.
-  const center = widthRatio < 1 ? { marginLeft: "auto", marginRight: "auto" } : {};
-  return el("div", { style: { display: "flex", flexDirection: "column", width: photoW, ...center, marginBottom: Math.round(size * marginRatio) } }, children);
-}
-
 // Shift a #rrggbb hex by `amt` per channel (negative darkens). Used to build the
 // brand-graphic gradient from a category accent.
 function shade(hex, amt) {
@@ -766,93 +740,76 @@ function shade(hex, amt) {
   return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0")}`;
 }
 
-// The guaranteed-imagery FLOOR: a designed brand graphic for slides with no
-// licensed photo, so a card is NEVER bare text. A category-accent diagonal
-// gradient with soft rings and the category label — honest (clearly a Quydly
-// graphic, not a fake news photo) and always available. `seed` (the slide index)
-// rotates the gradient so a photoless story's slides aren't identical blocks.
-function brandGraphic({ category, accent, size, seed = 0, widthRatio = 1, heightRatio = 0.46, marginRatio = 0.038 }) {
-  const fullW = Math.round(size * (1 - 2 * PAD_X_RATIO));
-  const w = Math.round(fullW * widthRatio);
-  const h = Math.round(size * heightRatio);
-  const angle = 110 + (seed % 4) * 35; // vary the gradient per slide
-  const center = widthRatio < 1 ? { marginLeft: "auto", marginRight: "auto" } : {};
-  return el("div", {
-    style: {
-      display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center",
-      width: w, height: h, ...center, marginBottom: Math.round(size * marginRatio),
-      borderRadius: Math.round(size * 0.028),
-      backgroundImage: `linear-gradient(${angle}deg, ${shade(accent, 22)}, ${shade(accent, -78)})`,
-    },
-  }, [
-    el("div", {
-      style: { display: "flex", fontSize: Math.round(size * 0.066), fontWeight: 700, color: "#FFFFFF", letterSpacing: 2, textTransform: "uppercase" },
-    }, oneLine(category || "news")),
-    el("div", {
-      style: { display: "flex", fontSize: Math.round(size * 0.019), fontWeight: 700, color: "#FFFFFF", opacity: 0.72, letterSpacing: 4, textTransform: "uppercase", marginTop: Math.round(size * 0.012) },
-    }, "Quydly"),
-  ]);
+// Whether an entity image must be shown WHOLE rather than cropped to fill. An ORG
+// entity's licensed lead image is almost always a LOGO / wordmark, and "cover"
+// (scale-to-fill + crop) mangles those: it slices the edges of a wordmark
+// ("BROWNSTONE" → "ROWNSTON") and balloons a compact mark to fill the frame (the
+// giant "DB"). Person/place images are photographs, and generated illustrations
+// (no `type`) are full-frame art — both look best edge-to-edge (cover). So only
+// org AND place images are contained; only person photos (and illustrations,
+// which carry no `type`) cover. A place entity's Wikipedia lead image is usually a
+// national flag / coat-of-arms / map — logo-like, not a scene photo — so covering
+// it stretches/crops it the same way an org wordmark gets mangled. An explicit
+// `contain: true` also forces containment (the cover's last-resort org/place hero).
+function isLogoImage(image) {
+  return image?.contain === true || image?.type === "org" || image?.type === "place";
 }
 
-// Build the inner body for one slide kind. `size` is the square edge length.
-// `question` (engagement only) is the MCQ { question, options, correctIndex } or
-// null. The "cover" slide is NOT built here — it has its own full-bleed layout
-// (coverTree); slideBody covers the padded text body slides only.
-function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatters, question }) {
-  const headline = oneLine(story?.headline) || "Today's news quiz";
-  const category = oneLine(story?.category_id || "news");
-
-  // Body slides ("what"/"key points"/"why") get a visual above their text: the
-  // resolved entity image when there is one, else the brand-graphic floor — so a
-  // body slide is never bare text.
-  const withImage = (content, heightRatio = 0.42) => el("div", { style: { display: "flex", flexDirection: "column" } }, [
-    (slideImage && slideImage.dataUri)
-      ? imageHero({ image: slideImage, size, widthRatio: 0.62, heightRatio, marginRatio: 0.03 })
-      : brandGraphic({ category, accent, size, seed: index, widthRatio: 0.62, heightRatio, marginRatio: 0.03 }),
-    content,
-  ]);
-
-  // "Key points" and "Why it matters" share one layout: an eyebrow + up to three
-  // bullets auto-fit to the card (fitBulletSlide shrinks the image + font, and
-  // trims only as a last resort), with a summary fallback when no points exist.
-  const bulletSlide = (label, points) => {
-    if (points.length) {
-      const fit = fitBulletSlide(points, size);
-      return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-        eyebrow(label, accent, size),
-        ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx)),
-      ]), fit.imageRatio);
-    }
-    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow(label, accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
-    ]));
-  };
-
-  if (kind === "what") {
-    // Density: a single lede sentence (not a paragraph), larger type and line
-    // height. News sentences run long, so cutting the COUNT to one — not two — is
-    // what actually keeps the slide skimmable; the 4:5 slide carries the rest as
-    // whitespace, and the key-points slide picks up the detail.
-    const summary = firstSentences(story?.summary, 1) || headline;
-    return withImage(el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow("What happened", accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4 } }, summary),
-    ]));
+// The full-bleed background for a slide, as a stack of absolutely-positioned
+// layers (so callers can drop a scrim + content on top). Three cases:
+//   • photo / illustration → a single <img> that COVERS the whole frame (the
+//     editorial look — image bleeds to every edge), biased toward the upper third
+//     so a face/subject survives the bottom scrim;
+//   • logo (org)           → the category-accent gradient floor with the logo
+//     CONTAINED (whole, uncropped) in the upper ~60%, so a wordmark reads cleanly;
+//   • no image             → the gradient floor alone, so a slide is never bare.
+function slideBackground({ image, accent, size, height, photoPosition = "center 28%" }) {
+  const gradient = el("div", {
+    style: {
+      position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
+      backgroundImage: `linear-gradient(135deg, ${shade(accent, 22)}, ${shade(accent, -82)})`,
+    },
+  }, []);
+  if (!image || !image.dataUri) return [gradient];
+  if (isLogoImage(image)) {
+    const logoW = Math.round(size * 0.62);
+    const logoH = Math.round(height * 0.40);
+    const logoLayer = el("div", {
+      style: {
+        position: "absolute", top: 0, left: 0, width: size, height: Math.round(height * 0.62),
+        display: "flex", alignItems: "center", justifyContent: "center",
+      },
+    }, [
+      el("img", { src: image.dataUri, width: logoW, height: logoH, style: { width: logoW, height: logoH, objectFit: "contain" } }),
+    ]);
+    return [gradient, logoLayer];
   }
+  return [
+    el("img", {
+      src: image.dataUri, width: size, height,
+      style: { position: "absolute", top: 0, left: 0, width: size, height, objectFit: "cover", objectPosition: photoPosition },
+    }),
+  ];
+}
 
-  if (kind === "keypoints") {
-    // Today's key_points (the slide formerly labelled "Why it matters").
-    return bulletSlide("Key points", keyPoints(story).slice(0, 3));
-  }
+// Legibility scrim for the text-heavy body slides (what / key points / why):
+// near-transparent at the top so the image reads, ramping to almost-opaque BG in
+// the bottom half where the eyebrow + bullets sit. Heavier than the cover scrim
+// because body slides carry more text over the image.
+function contentScrim(size, height) {
+  return el("div", {
+    style: {
+      position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
+      backgroundImage: "linear-gradient(180deg, rgba(11,15,26,0.10) 0%, rgba(11,15,26,0.28) 34%, rgba(11,15,26,0.80) 58%, rgba(11,15,26,0.96) 100%)",
+    },
+  }, []);
+}
 
-  if (kind === "why") {
-    // The historical "Why it matters" points (LLM-generated, passed in via
-    // whyItMatters). Only included in the set when points exist (see
-    // carouselSlidesFor); the summary fallback guards an explicit request.
-    return bulletSlide("Why it matters", (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : []).slice(0, 3));
-  }
-
+// Build the inner body for the TEXT-ONLY utility slides (engagement / cta). The
+// image-led slides (cover / what / key points / why) have their own full-bleed
+// layout (coverTree / contentSlideTree), so this only ever sees engagement & cta.
+// `question` (engagement only) is the MCQ { question, options, correctIndex }.
+function slideBody({ kind, accent, size, question }) {
   if (kind === "engagement") {
     // The MCQ drawn from the PREVIOUS post's story. Poses the question + 4
     // lettered options and invites a reply with the reader's pick. The correct
@@ -887,10 +844,10 @@ function slideBody({ kind, story, accent, size, index = 0, slideImage, whyItMatt
   ]);
 }
 
-// The padded text body slides (what / key points / why / engagement / cta).
-// The cover is rendered separately by coverTree (full-bleed), so this only ever
-// sees non-cover kinds.
-function slideTree({ kind, story, accent, category, index, total, size, height, slideImage, whyItMatters, question }) {
+// The padded text body slides (engagement / cta) — solid-BG cards with no image.
+// The image-led slides have their own full-bleed layout, so this only ever sees
+// the text-only utility kinds.
+function slideTree({ kind, accent, category, index, total, size, height, question }) {
   const padX = Math.round(size * PAD_X_RATIO);
   const padY = Math.round(size * PAD_Y_RATIO);
   const hint = kind === "engagement" ? "Tap to comment →" : "";
@@ -903,10 +860,89 @@ function slideTree({ kind, story, accent, category, index, total, size, height, 
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, story, accent, size, index, slideImage, whyItMatters, question }),
+      slideBody({ kind, accent, size, question }),
     ]),
     slideFooter({ accent, size, index, total, hint }),
   ]);
+}
+
+// ── Image-led body slides (what / key points / why) ──────────────────────────
+
+// Fraction of the slide height reserved for the text block at the bottom — the
+// heavily-scrimmed zone where the eyebrow + bullets stay legible over the image.
+const CONTENT_TEXT_ZONE = 0.46;
+
+// The bottom text block for an image-led body slide: the eyebrow + its content
+// (a single lede for "what"; up to three auto-fit bullets for "key points" /
+// "why"), then a caption identifying the licensed image — the entity NAME (e.g.
+// "Brownstone Productions") plus a "Photo: …" credit. Attribution is mandatory
+// (never show a licensed photo without crediting it), and the name gives the
+// otherwise-unlabelled logo/photo context.
+function contentBody({ kind, story, accent, size, height, whyItMatters, imageName, credit }) {
+  const headline = oneLine(story?.headline) || "Today's news quiz";
+  const captionLines = [];
+  if (imageName) {
+    captionLines.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: FG, marginTop: Math.round(size * 0.022) } }, imageName));
+  }
+  if (credit) {
+    captionLines.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: Math.round(size * (imageName ? 0.004 : 0.022)) } }, `Photo: ${credit}`));
+  }
+  const caption = captionLines.length ? el("div", { style: { display: "flex", flexDirection: "column" } }, captionLines) : null;
+  const wrap = (children) => el("div", { style: { display: "flex", flexDirection: "column" } }, caption ? [...children, caption] : children);
+
+  if (kind === "what") {
+    // A single lede sentence (not a paragraph), large type — skimmable over the
+    // image; the key-points slide carries the detail.
+    const summary = firstSentences(story?.summary, 1) || headline;
+    return wrap([
+      eyebrow("What happened", accent, size),
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4 } }, summary),
+    ]);
+  }
+
+  // "Key points" (today's key_points) and "Why it matters" (historical points
+  // passed in via whyItMatters) share one bullet layout, with a summary fallback.
+  const label = kind === "why" ? "Why it matters" : "Key points";
+  const points = (kind === "why"
+    ? (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : [])
+    : keyPoints(story)).slice(0, 3);
+  if (!points.length) {
+    return wrap([
+      eyebrow(label, accent, size),
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.04), color: FG, lineHeight: 1.3 } }, firstSentences(story?.summary, 2) || headline),
+    ]);
+  }
+  // Fit the bullets to the scrimmed lower zone, minus the eyebrow and the caption.
+  const budget = height * CONTENT_TEXT_ZONE - size * 0.054 - (caption ? size * 0.06 : 0);
+  const fit = fitBulletSlide(points, size, budget);
+  return wrap([eyebrow(label, accent, size), ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx))]);
+}
+
+// An image-led body slide: the same FULL-BLEED treatment as the cover — a photo
+// covers the frame (logo contained on the gradient floor, gradient alone when
+// there's no image) under a legibility scrim, with the brand chrome on top, the
+// text anchored low in the scrimmed zone, and the page indicator in the footer.
+function contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage, whyItMatters }) {
+  const padX = Math.round(size * PAD_X_RATIO);
+  const padY = Math.round(size * PAD_Y_RATIO);
+  // Illustrations carry no name/credit (not a licensed photo); entity photos do.
+  const credit = oneLine(slideImage?.credit);
+  const imageName = oneLine(slideImage?.name);
+  const foreground = el("div", {
+    style: {
+      position: "relative", width: size, height, display: "flex", flexDirection: "column",
+      justifyContent: "space-between", padding: `${padY}px ${padX}px`, fontFamily: "Lato",
+    },
+  }, [
+    slideHeader({ category, accent, size }),
+    el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "flex-end" } }, [
+      contentBody({ kind, story, accent, size, height, whyItMatters, imageName, credit }),
+    ]),
+    slideFooter({ accent, size, index, total, hint: "" }),
+  ]);
+  return el("div", {
+    style: { position: "relative", display: "flex", width: size, height, backgroundColor: BG, fontFamily: "Lato" },
+  }, [...slideBackground({ image: slideImage, accent, size, height }), contentScrim(size, height), foreground]);
 }
 
 // The cover slide — its own FULL-BLEED layout (vs slideTree's padded card). The
@@ -925,20 +961,11 @@ function coverTree({ story, accent, category, size, height, portrait, coverHook,
   const cover = hookText || oneLine(story?.headline) || "Today's news quiz";
   const source = coverSource(story);
 
-  // Layer 1 — full-bleed background: the editorial image, else a category-accent
-  // diagonal gradient (the imagery floor) so a post is never bare.
-  const background = portrait && portrait.dataUri
-    ? el("img", {
-        src: portrait.dataUri, width: size, height,
-        // Bias the crop toward the upper third so headshots keep the face.
-        style: { position: "absolute", top: 0, left: 0, width: size, height, objectFit: "cover", objectPosition: "center 28%" },
-      })
-    : el("div", {
-        style: {
-          position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
-          backgroundImage: `linear-gradient(135deg, ${shade(accent, 22)}, ${shade(accent, -82)})`,
-        },
-      }, []);
+  // Layer 1 — full-bleed background: the editorial image (a photo COVERS the
+  // frame, biased to the upper third so a face survives the scrim; an org logo is
+  // CONTAINED on the gradient so a wordmark isn't cropped/zoomed), else the
+  // category-accent gradient floor so a post is never bare.
+  const background = slideBackground({ image: portrait, accent, size, height, photoPosition: "center 28%" });
 
   // Layer 2 — legibility scrim (transparent at top → near-opaque BG at bottom).
   const scrim = el("div", {
@@ -977,7 +1004,7 @@ function coverTree({ story, accent, category, size, height, portrait, coverHook,
 
   return el("div", {
     style: { position: "relative", display: "flex", width: size, height, backgroundColor: BG, fontFamily: "Lato" },
-  }, [background, scrim, topChrome, bottom]);
+  }, [...background, scrim, topChrome, bottom]);
 }
 
 // ── Football carousel (FIFA/soccer variant) ──────────────────────────────────
@@ -1410,23 +1437,31 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
     };
   }
 
-  // Resolve real imagery once, up front, and spread it across the carousel: the
-  // cover gets the lead entity (face-first, with the no-wrong-face guard); the
-  // text body slides ("what"/"key points"/"why" that are present) each get a
-  // DIFFERENT story entity's image, captioned. All best-effort and in parallel —
-  // any miss leaves that slide text-only. Gated by withPortrait.
+  // Resolve real imagery once, up front, and spread it across the carousel. Each
+  // content slide gets its OWN visual, best-effort and in parallel. The COVER is
+  // sourced strictly: a lead PERSON photo, else an editorial illustration, else
+  // (last resort) a CONTAINED org logo / place image, else the gradient floor — so
+  // a logo or country flag never heroes the cover above an illustration, and never
+  // bleeds full-frame. Body slides take any other entity image, captioned. Runs for
+  // withPortrait OR football (football covers still resolve a lead player-face).
   let portrait = null;
   const bodyImageByKind = {};
+  // What the COVER ended up showing: "photo" (licensed person photo), "illustration"
+  // (Tier-2 generated), "logo" (a contained org/place last resort), or "none" (the
+  // gradient floor). Surfaced on the cover slide so the generator can HOLD a weak
+  // cover (logo/none) for review instead of auto-posting it. Left undefined when
+  // imagery is disabled (withPortrait off) — then the generator never gates on it.
+  let coverImagery;
   if (withPortrait || football) {
-    // Each cover/text slide gets its OWN visual: a licensed entity photo when one
-    // is available, else a generated illustration (Tier 2) that FILLS the gap,
-    // else (in slideBody / coverTree) the brand-graphic floor.
     const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
-    const coverSpec = slideList.includes("cover") ? leadCoverImage(story) : null;
-    const bodyKinds = contentKinds.filter((k) => k !== "cover");
-    const bodySpecs = entityImages(story).filter((s) => s.name !== coverSpec?.name).slice(0, bodyKinds.length);
+    // planEntityImagery is the single source of truth for cover/body sourcing —
+    // shared with plannedIllustrationCount so the generated illustration count can't
+    // drift from this allocation. The cover photo is a lead PERSON only; the lead
+    // org/place is reserved as the cover's last resort (Pass 3) and kept off the
+    // body slides so the same logo never appears on both.
+    const { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
     const specByKind = {};
-    if (slideList.includes("cover")) specByKind.cover = coverSpec;
+    if (hasCover) specByKind.cover = coverSpec;
     bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
 
     // Pass 1 — resolve the licensed photo for each slide (best-effort, parallel).
@@ -1436,10 +1471,10 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
       if (photo) photoByKind[k] = photo;
     }));
 
-    // Pass 2 — route the supplied illustrations to the slides that ended up
-    // WITHOUT a photo, in slide order. The generator sizes the illustration set
-    // to the photo-less slides (usableImageCount), so each gap gets a distinct
-    // illustration and no content slide falls back to the brand-graphic floor.
+    // Pass 2 — route the supplied illustrations to the photo-less slides, in slide
+    // order. The cover is first, so it claims an illustration BEFORE any org/place
+    // fallback. The generator sizes the set (plannedIllustrationCount) so every
+    // gap — the cover included when it has no person photo — gets a distinct one.
     const ill = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean);
     const gapKinds = contentKinds.filter((k) => !photoByKind[k]);
     const illByKind = {};
@@ -1449,10 +1484,26 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
       if (dataUri) illByKind[k] = { dataUri }; // illustration — no caption (not a photo)
     }));
 
+    // Pass 3 — LAST resort for the COVER only: still no photo and no illustration →
+    // the first org/place entity image, CONTAINED (so a logo/flag isn't blown up
+    // full-bleed). Body slides without imagery keep the gradient floor.
+    let coverFallback = null;
+    if (hasCover && !photoByKind.cover && !illByKind.cover && coverFallbackSpec) {
+      const resolved = await resolveImage(coverFallbackSpec, fetchImpl);
+      if (resolved) coverFallback = { ...resolved, contain: true };
+    }
+
     for (const k of contentKinds) {
-      const img = photoByKind[k] || illByKind[k] || null;
+      const img = photoByKind[k] || illByKind[k] || (k === "cover" ? coverFallback : null);
       if (!img) continue;
       if (k === "cover") portrait = img; else bodyImageByKind[k] = img;
+    }
+
+    if (hasCover) {
+      coverImagery = photoByKind.cover ? "photo"
+        : illByKind.cover ? "illustration"
+        : coverFallback ? "logo"
+        : "none";
     }
   }
 
@@ -1465,10 +1516,12 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
       ? coverTree({ story, accent, category, size, height, portrait, coverHook, coverHighlight, highlightMode })
       : football
         ? footballSlideTree({ kind, football, accent, category, index, total, size, height, img: fbImg, nextKind: slideList[index + 1] })
-        : slideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters, question: kind === "engagement" ? question : null });
+        : (kind === "what" || kind === "keypoints" || kind === "why")
+          ? contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters })
+          : slideTree({ kind, accent, category, index, total, size, height, question: kind === "engagement" ? question : null });
     const svg = await satori(tree, { width, height, fonts });
     const { buffer, contentType } = rasterize(svg, { width, format });
-    out.push({ buffer, contentType, width, height, slideType: kind, index });
+    out.push({ buffer, contentType, width, height, slideType: kind, index, ...(kind === "cover" ? { coverImagery } : {}) });
   }
   return out;
 }

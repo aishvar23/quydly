@@ -82,6 +82,7 @@ export default async function socialPostGenerator(context, message) {
     igFootball,
     igReels,
     candidateId,
+    env: process.env,
     logger: context.log,
   });
 
