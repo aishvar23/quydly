@@ -26,6 +26,9 @@ import { accentFor } from "./_categories.js";
 import { validateMCQ } from "./mcq.js";
 import { QUYDLY_IG_HANDLE } from "./platforms/_shared.js";
 import { classifySensitivity, SENSITIVITY, SAFE_CATEGORIES } from "./social-safety.js";
+import { teamAccent } from "./club-colors.js";
+import { formPoints } from "./football-data.js";
+import { pickBackground, moodForMatch, backgroundCredit } from "./football-backgrounds.js";
 
 const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "fonts");
 
@@ -46,6 +49,10 @@ const SHAPES = {
   // 4:5 portrait — the carousel slide format. Takes ~25% more vertical feed
   // space than square; the extra height becomes breathing room for the hook.
   portrait: { width: 1080, height: 1350 },
+  // 9:16 — the Reels frame format. Same 1080 width (so all type/padding ratios
+  // carry over) with a taller canvas; football slides render natively at this
+  // size as video frames.
+  portrait916: { width: 1080, height: 1920 },
 };
 
 // Carousel slide order. "Key points" and "Why it matters" are SEPARATE slides:
@@ -148,14 +155,20 @@ function coverSource(story) {
 let _fonts = null;
 async function loadFonts() {
   if (_fonts) return _fonts;
-  const [regular, bold] = await Promise.all([
+  // Anton is the condensed, heavy display face (SIL OFL) used by the football
+  // carousel for hero numerals (scores, stats) and uppercase headers — the
+  // "sports-broadcast grotesque" look. Best-effort: if it is missing, the
+  // football builders fall back to Lato Bold (Satori substitutes the family).
+  const [regular, bold, anton] = await Promise.all([
     readFile(join(FONT_DIR, "Lato-Regular.ttf")),
     readFile(join(FONT_DIR, "Lato-Bold.ttf")),
+    readFile(join(FONT_DIR, "Anton-Regular.ttf")).catch(() => null),
   ]);
   _fonts = [
     { name: "Lato", data: regular, weight: 400, style: "normal" },
     { name: "Lato", data: bold, weight: 700, style: "normal" },
   ];
+  if (anton) _fonts.push({ name: "Anton", data: anton, weight: 400, style: "normal" });
   return _fonts;
 }
 
@@ -173,13 +186,51 @@ function keyPoints(story) {
     .filter(Boolean);
 }
 
-// First N sentences of a blob, whitespace-normalised.
+// Abbreviations whose trailing period is NOT a sentence boundary. Without this
+// the body truncated mid-sentence on IG ("…died at St.", "Warner Bros.") because
+// the abbreviation's period was read as the end of the first sentence.
+const SENTENCE_ABBREV = new Set([
+  "mr", "mrs", "ms", "dr", "prof", "rev", "sr", "jr", "st", "mt", "ft",
+  "bros", "inc", "ltd", "co", "corp", "plc", "llc", "gov", "dept", "univ",
+  "vs", "etc", "al", "no", "sen", "rep", "gen", "lt", "col", "sgt", "capt",
+  "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+  "u.s", "u.k", "u.n", "e.g", "i.e", "a.m", "p.m",
+]);
+
+// First N sentences of a blob, whitespace-normalised. Abbreviation-aware: a
+// period inside a known abbreviation ("St.", "Warner Bros.", "Dr."), after a
+// single capital initial ("J. R. R."), or inside a decimal ("$1.5") is NOT a
+// sentence end, so the body never truncates mid-sentence.
 function firstSentences(text, n = 2) {
   const clean = oneLine(text);
   if (!clean) return "";
-  const parts = clean.match(/[^.!?]+[.!?]+/g);
-  if (!parts) return clean;
-  return parts.slice(0, n).join(" ").trim();
+  const sentences = [];
+  let start = 0;
+  for (let i = 0; i < clean.length && sentences.length < n; i++) {
+    if (!".!?".includes(clean[i])) continue;
+    // Absorb a run of terminators ("?!", "…", "...") so the whole run stays together.
+    let end = i;
+    while (end + 1 < clean.length && ".!?".includes(clean[end + 1])) end++;
+    const next = clean[end + 1];
+    // A boundary requires end-of-string or whitespace after the terminator(s);
+    // a period glued to the next char is a decimal/URL/etc., not a break.
+    if (next !== undefined && !/\s/.test(next)) { i = end; continue; }
+    // Reject abbreviations and single-letter initials by inspecting the word the
+    // period attaches to (only matters for "."; "!"/"?" never abbreviate).
+    if (clean[i] === ".") {
+      const before = clean.slice(start, i);
+      const tok = (before.match(/(\S+)$/) || ["", ""])[1].toLowerCase().replace(/[^a-z0-9.]/g, "").replace(/\.+$/, "");
+      if (SENTENCE_ABBREV.has(tok) || /^[a-z]$/.test(tok)) { i = end; continue; }
+    }
+    sentences.push(clean.slice(start, end + 1).trim());
+    start = end + 1;
+    i = end;
+  }
+  if (sentences.length < n && start < clean.length) {
+    const tail = clean.slice(start).trim();
+    if (tail) sentences.push(tail);
+  }
+  return sentences.slice(0, n).join(" ").trim();
 }
 
 // ── Lead-person portrait (cover-slide inset) ─────────────────────────────────
@@ -956,6 +1007,387 @@ function coverTree({ story, accent, category, size, height, portrait, coverHook,
   }, [...background, scrim, topChrome, bottom]);
 }
 
+// ── Football carousel (FIFA/soccer variant) ──────────────────────────────────
+//
+// A football-only, full-bleed, data-true carousel that replaces the standard
+// body slides for resolved matches. Driven by a `football` context object from
+// lib/social/football-data.js (sourced from football-data.org — we render ONLY
+// sourced numbers; never a fabricated score/table/probability). All four slides
+// share fullBleedSlideTree so the set reads as one cinematic template with a
+// single changing team accent. See .claude/agents/ig-fifa-sme.md for the system.
+
+// Result-pill semantics — a fixed industry convention (BBC/FotMob/Sofascore):
+// Win = green, Draw = grey, Loss = red. Do not repurpose for decoration.
+const FB_WIN = "#22C55E";
+const FB_DRAW = "#9CA3AF";
+const FB_LOSS = "#EF4444";
+// League-zone left-edge bars: Champions League green, Europa blue, relegation red.
+const FB_ZONE_CL = "#22C55E";
+const FB_ZONE_EL = "#3B82F6";
+const FB_ZONE_REL = "#EF4444";
+// A FIXED bright accent for football TEXT emphasis (eyebrows, the follow handle).
+// Team-accent text on a same-hue gradient background washes out, so per the §2
+// rule the accent stays on slivers (bars/badges/rows) and bright text emphasis
+// uses this yellow, which reads on any team-color gradient.
+const FB_BRIGHT = HIGHLIGHT_MARKER;
+
+const FOOTBALL_SLIDES = ["cover", "scoreboard", "table", "form", "stat-insights", "cta"];
+
+// The football slide list when a match resolved; otherwise the standard set. The
+// Form slide is DROPPED when neither involved team has a usable last-5 `form`
+// string (e.g. early World Cup group stage), since an empty form slide reads as
+// broken — a wrong-looking real post is worse than one fewer slide.
+function footballSlidesFor(football) {
+  if (!football) return null;
+  const rows = football.standings?.table || [];
+  const involved = football.standings?.involved || [];
+  const hasForm = rows.some((r) => r.involved && r.form && String(r.form).trim())
+    || involved.some((r) => r.form && String(r.form).trim());
+  // A cup/knockout/friendly match returns no league table → drop the Table slide
+  // (it would render a header-only "STANDINGS" card). Same for an empty insights
+  // set (the climax slide would be a bare fallback line).
+  const hasTable = rows.length >= 2;
+  const hasInsights = (football.insights?.lines || []).length > 0;
+  let list = FOOTBALL_SLIDES;
+  if (!hasForm) list = list.filter((k) => k !== "form");
+  if (!hasTable) list = list.filter((k) => k !== "table");
+  if (!hasInsights) list = list.filter((k) => k !== "stat-insights");
+  return list;
+}
+
+// Only raster data URIs (png/jpeg/webp) render reliably in Satori; crest URLs are
+// often SVG, which we skip in favour of a clean monogram badge fallback.
+function isRasterDataUri(s) {
+  return typeof s === "string" && /^data:image\/(png|jpe?g|webp)/i.test(s);
+}
+
+// A team badge: the licensed crest when it is a raster image, else a monogram
+// disc in the team accent (the TLA/short name) — so a badge always renders.
+function teamBadge({ team, accent, crest, diameter }) {
+  const d = diameter;
+  if (isRasterDataUri(crest)) {
+    return el("img", { src: crest, width: d, height: d, style: { width: d, height: d, objectFit: "contain" } });
+  }
+  const label = oneLine(team?.tla || team?.shortName || team?.name || "").slice(0, 3).toUpperCase();
+  return el("div", {
+    style: {
+      display: "flex", width: d, height: d, borderRadius: 999, alignItems: "center", justifyContent: "center",
+      backgroundColor: accent, color: pickTextOn(accent), fontFamily: "Anton",
+      fontSize: Math.round(d * 0.42), letterSpacing: 1,
+    },
+  }, label);
+}
+
+// Choose black/white text for legibility on a given accent (rough luminance).
+function pickTextOn(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+  if (!m) return "#FFFFFF";
+  const n = parseInt(m[1], 16);
+  const lum = 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
+  return lum > 150 ? "#0B0F1A" : "#FFFFFF";
+}
+
+// The shared full-bleed scaffold for the four football slides: a full-frame
+// background, a two-way legibility scrim, top chrome (brand + category chip), the
+// centred body, and a footer carrying the open-loop teaser + page counter.
+function fullBleedSlideTree({ size, height, accent, category, background, body, teaser, credit, index, total }) {
+  const padX = Math.round(size * PAD_X_RATIO);
+  const padY = Math.round(size * PAD_Y_RATIO);
+  const scrim = el("div", {
+    style: {
+      position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
+      backgroundImage: "linear-gradient(180deg, rgba(11,15,26,0.55) 0%, rgba(11,15,26,0.30) 26%, rgba(11,15,26,0.55) 60%, rgba(11,15,26,0.92) 100%)",
+    },
+  }, []);
+  const topChrome = el("div", {
+    style: { position: "absolute", top: padY, left: padX, right: padX, display: "flex", alignItems: "center", justifyContent: "space-between" },
+  }, brandMarks({ category, accent, size }));
+  const main = el("div", {
+    style: {
+      position: "absolute", left: padX, right: padX, top: Math.round(size * 0.18), bottom: Math.round(size * 0.13),
+      display: "flex", flexDirection: "column", justifyContent: "center",
+    },
+  }, body);
+  // Left footer stack: the open-loop teaser, plus a small photo credit when the
+  // background is a licensed stock photo (Pexels API guideline).
+  const leftStack = [el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), color: "rgba(255,255,255,0.78)", fontWeight: 700 } }, teaser || "")];
+  if (credit) {
+    leftStack.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.016), color: "rgba(255,255,255,0.55)", marginTop: Math.round(size * 0.008) } }, credit));
+  }
+  const footer = el("div", {
+    style: { position: "absolute", bottom: padY, left: padX, right: padX, display: "flex", alignItems: "flex-end", justifyContent: "space-between" },
+  }, [
+    el("div", { style: { display: "flex", flexDirection: "column" } }, leftStack),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), color: MUTED } }, `${index + 1} / ${total}`),
+  ]);
+  return el("div", {
+    style: { position: "relative", display: "flex", width: size, height, backgroundColor: BG, fontFamily: "Lato" },
+  }, [background, scrim, topChrome, main, footer]);
+}
+
+// The full-frame background element: a resolved photo (heroBg), else the
+// competition emblem floated over a team-accent gradient, else the gradient.
+function footballBackground({ size, height, heroBg, emblem, accent }) {
+  if (isRasterDataUri(heroBg)) {
+    return el("img", {
+      src: heroBg, width: size, height,
+      style: { position: "absolute", top: 0, left: 0, width: size, height, objectFit: "cover", objectPosition: "center 30%" },
+    });
+  }
+  const gradient = el("div", {
+    style: {
+      position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
+      backgroundImage: `linear-gradient(150deg, ${shade(accent, 18)}, ${shade(accent, -86)})`,
+    },
+  }, []);
+  if (!isRasterDataUri(emblem)) return gradient;
+  // Emblem watermark, large and low-opacity, centred — keeps the slide imagery-rich.
+  return el("div", { style: { position: "absolute", top: 0, left: 0, display: "flex", width: size, height } }, [
+    gradient,
+    el("div", {
+      style: { position: "absolute", top: 0, left: 0, width: size, height, display: "flex", alignItems: "center", justifyContent: "center" },
+    }, [
+      el("img", { src: emblem, width: Math.round(size * 0.62), height: Math.round(size * 0.62), style: { width: Math.round(size * 0.62), height: Math.round(size * 0.62), objectFit: "contain", opacity: 0.16 } }),
+    ]),
+  ]);
+}
+
+// Slide 2 — SCOREBOARD: [badge] H – A [badge], FT pill, scorers (mirrored).
+function footballScoreboard(fb, { size, img }) {
+  const m = fb.match;
+  const hAcc = teamAccent(m.home.name);
+  const aAcc = teamAccent(m.away.name);
+  const d = Math.round(size * 0.2);
+  const scoreH = Number.isFinite(m.score.home) ? String(m.score.home) : "–";
+  const scoreA = Number.isFinite(m.score.away) ? String(m.score.away) : "–";
+  const scoreStyle = { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.26), color: FG, lineHeight: 1 };
+  const nameStyle = { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.05), color: FG, marginTop: Math.round(size * 0.018), letterSpacing: 1 };
+  const teamCol = (team, acc, crest) => el("div", {
+    style: { display: "flex", flexDirection: "column", alignItems: "center", width: Math.round(size * 0.28) },
+  }, [
+    teamBadge({ team, accent: acc, crest, diameter: d }),
+    el("div", { style: nameStyle }, oneLine(team.shortName || team.name).toUpperCase()),
+  ]);
+  const ftPill = el("div", {
+    style: {
+      display: "flex", alignSelf: "center", backgroundColor: "rgba(255,255,255,0.14)", color: FG,
+      fontWeight: 700, fontSize: Math.round(size * 0.028), letterSpacing: 2, padding: "8px 22px", borderRadius: 999,
+      marginBottom: Math.round(size * 0.03),
+    },
+  }, m.status === "FINISHED" ? "FULL TIME" : oneLine(m.status));
+  const scorers = (Array.isArray(m.scorers) ? m.scorers : []);
+  // The competition is already shown in the top category chip on every football
+  // slide, so the scoreboard body leads straight with the FT pill (no duplicate).
+  const body = [
+    ftPill,
+    el("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, [
+      teamCol(m.home, hAcc, img?.homeCrest),
+      el("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", margin: `0 ${Math.round(size * 0.02)}px` } }, [
+        el("div", { style: { display: "flex", alignItems: "center" } }, [
+          el("div", { style: scoreStyle }, scoreH),
+          el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.16), color: MUTED, margin: `0 ${Math.round(size * 0.02)}px` } }, "–"),
+          el("div", { style: scoreStyle }, scoreA),
+        ]),
+      ]),
+      teamCol(m.away, aAcc, img?.awayCrest),
+    ]),
+  ];
+  if (scorers.length) {
+    body.push(el("div", {
+      style: { display: "flex", justifyContent: "center", fontSize: Math.round(size * 0.026), color: "rgba(255,255,255,0.85)", marginTop: Math.round(size * 0.035), flexWrap: "wrap" },
+    }, oneLine(scorers.map((s) => `${s.name}${s.minute ? ` ${s.minute}'` : ""}`).join("   ·   "))));
+  }
+  return body;
+}
+
+// Slide 3 — LEAGUE TABLE: Pos · Team · P · GD · Pts. Involved rows highlighted in
+// the team accent; zone left-edge bars; tabular figures. No per-row crests (kept
+// clean + avoids 20 crest fetches / SVG-in-Satori issues).
+function footballTable(fb, { size }) {
+  const rows = (fb.standings?.table || []).slice(0, 8);
+  const num = (v, w) => el("div", { style: { display: "flex", width: w, justifyContent: "flex-end", fontFamily: "Anton", fontSize: Math.round(size * 0.03), color: FG } }, String(v ?? ""));
+  const headerCell = (t, w, align = "flex-end") => el("div", { style: { display: "flex", width: w, justifyContent: align, fontSize: Math.round(size * 0.02), color: MUTED, letterSpacing: 1 } }, t);
+  const zoneColor = (pos, comp) => {
+    if (comp === "PL" || comp === "PD" || comp === "SA" || comp === "BL1" || comp === "FL1") {
+      if (pos <= 4) return FB_ZONE_CL;
+      if (pos === 5 || pos === 6) return FB_ZONE_EL;
+    }
+    if (pos >= 18) return FB_ZONE_REL;
+    return "transparent";
+  };
+  const numW = Math.round(size * 0.085);
+  const ptsW = Math.round(size * 0.1);
+  const header = el("div", {
+    style: { display: "flex", alignItems: "center", padding: `0 0 ${Math.round(size * 0.014)}px 0`, marginBottom: Math.round(size * 0.01) },
+  }, [
+    el("div", { style: { display: "flex", width: Math.round(size * 0.07) } }, headerCell("#", Math.round(size * 0.07), "flex-start")),
+    el("div", { style: { display: "flex", flexGrow: 1 } }, []),
+    headerCell("P", numW), headerCell("GD", numW), headerCell("PTS", ptsW),
+  ]);
+  const body = [
+    el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.05), color: FG, letterSpacing: 1, marginBottom: Math.round(size * 0.02) } }, "STANDINGS"),
+    header,
+  ];
+  rows.forEach((r, i) => {
+    const acc = teamAccent(r.team?.name);
+    const zone = zoneColor(r.position, fb.competition?.code);
+    body.push(el("div", {
+      style: {
+        display: "flex", alignItems: "center", height: Math.round(size * 0.062),
+        backgroundColor: r.involved ? hexA(acc, 0.16) : (i % 2 ? "rgba(255,255,255,0.03)" : "transparent"),
+        borderLeft: `${Math.round(size * 0.006)}px solid ${r.involved ? acc : zone}`,
+        paddingLeft: Math.round(size * 0.018), paddingRight: Math.round(size * 0.006),
+      },
+    }, [
+      el("div", { style: { display: "flex", width: Math.round(size * 0.06), fontFamily: "Anton", fontSize: Math.round(size * 0.028), color: r.involved ? FG : MUTED } }, String(r.position)),
+      el("div", { style: { display: "flex", flexGrow: 1, fontSize: Math.round(size * 0.03), fontWeight: r.involved ? 700 : 400, color: FG } }, oneLine(r.team?.shortName || r.team?.name)),
+      num(r.played, numW), num(Number.isFinite(r.goalDifference) ? (r.goalDifference > 0 ? `+${r.goalDifference}` : r.goalDifference) : "", numW),
+      el("div", { style: { display: "flex", width: ptsW, justifyContent: "flex-end", fontFamily: "Anton", fontSize: Math.round(size * 0.034), color: FG } }, String(r.points ?? "")),
+    ]));
+  });
+  return body;
+}
+
+// rgba() from a #rrggbb hex + alpha.
+function hexA(hex, a) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+  if (!m) return `rgba(255,255,255,${a})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// W/D/L pill row (oldest→newest, rightmost = latest). Real `form` string only.
+function formPills(form, size) {
+  const results = String(form || "").split(/[ ,]+/).filter(Boolean).slice(-5);
+  const d = Math.round(size * 0.058);
+  return el("div", { style: { display: "flex" } }, results.map((r) => el("div", {
+    style: {
+      display: "flex", width: d, height: d, borderRadius: Math.round(d * 0.26), alignItems: "center", justifyContent: "center",
+      backgroundColor: r === "W" ? FB_WIN : r === "D" ? FB_DRAW : FB_LOSS, color: "#FFFFFF",
+      fontFamily: "Anton", fontSize: Math.round(d * 0.5), marginRight: Math.round(size * 0.014),
+    },
+  }, r)));
+}
+
+// Slide 4 — FORM & MOMENTUM: two W/D/L strips + a 2-segment form-points bar
+// (W=3/D=1/L=0, home-left/away-right). NO "%", NO probability/odds, NO draw
+// segment — every number is the real last-5 form.
+function footballForm(fb, { size }) {
+  const m = fb.match;
+  const involved = fb.standings?.involved || [];
+  const findRow = (teamId) => (fb.standings?.table || []).find((r) => r.team?.id === teamId) || involved.find((r) => r.teamId === teamId) || {};
+  const hRow = findRow(m.home.id);
+  const aRow = findRow(m.away.id);
+  const hPts = formPoints(hRow.form);
+  const aPts = formPoints(aRow.form);
+  const total = hPts + aPts || 1;
+  const hAcc = teamAccent(m.home.name);
+  const aAcc = teamAccent(m.away.name);
+  const teamForm = (team, acc, row) => el("div", { style: { display: "flex", flexDirection: "column", marginBottom: Math.round(size * 0.04) } }, [
+    el("div", { style: { display: "flex", alignItems: "center", marginBottom: Math.round(size * 0.016) } }, [
+      el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.04), color: FG, letterSpacing: 1, marginRight: "auto" } }, oneLine(team.shortName || team.name).toUpperCase()),
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), color: MUTED } }, Number.isFinite(row.position) ? `${ord(row.position)} · ${formPoints(row.form)} pts` : `${formPoints(row.form)} pts`),
+    ]),
+    formPills(row.form, size),
+  ]);
+  const barH = Math.round(size * 0.05);
+  // A white divider keeps the split legible when the two team accents are close
+  // (e.g. two reds). Home-left / away-right, widths ∝ real form points.
+  const bar = el("div", { style: { display: "flex", width: "100%", height: barH, borderRadius: Math.round(barH * 0.3), overflow: "hidden", marginTop: Math.round(size * 0.01) } }, [
+    el("div", { style: { display: "flex", width: `${Math.round((hPts / total) * 100)}%`, height: barH, backgroundColor: hAcc, borderRight: "3px solid rgba(255,255,255,0.92)" } }, []),
+    el("div", { style: { display: "flex", width: `${Math.round((aPts / total) * 100)}%`, height: barH, backgroundColor: aAcc } }, []),
+  ]);
+  return [
+    el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.05), color: FG, letterSpacing: 1, marginBottom: Math.round(size * 0.04) } }, "FORM GUIDE"),
+    teamForm(m.home, hAcc, hRow),
+    teamForm(m.away, aAcc, aRow),
+    bar,
+    el("div", { style: { display: "flex", justifyContent: "space-between", marginTop: Math.round(size * 0.014) } }, [
+      el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.03), color: FG } }, `${hPts} PTS`),
+      el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.03), color: FG } }, `${aPts} PTS`),
+    ]),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: Math.round(size * 0.02) } }, "Based on last-5 results & league position"),
+  ];
+}
+
+// Slide 5 — STAT-INSIGHTS / climax reveal: a hero line + grounded bullets, all
+// from real numbers in the resolved context.
+function footballInsights(fb, { size }) {
+  const lines = (fb.insights?.lines || []).slice(0, 3);
+  const body = [
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.03), fontWeight: 700, color: FB_BRIGHT, letterSpacing: 2, textTransform: "uppercase", marginBottom: Math.round(size * 0.03) } }, "By the numbers"),
+  ];
+  if (lines.length) {
+    // The climax/aha reveal: the first insight is the hero line (large, condensed);
+    // any remaining insights follow as bullets.
+    body.push(el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.058), color: FG, lineHeight: 1.08, marginBottom: Math.round(size * 0.035) } }, oneLine(lines[0])));
+    lines.slice(1).forEach((l) => body.push(bulletRow(oneLine(l), FB_BRIGHT, size, Math.round(size * 0.036))));
+  } else {
+    body.push(el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.058), color: FG, lineHeight: 1.08 } }, "The numbers behind the result."));
+  }
+  body.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: "auto", paddingTop: Math.round(size * 0.04) } }, "Data: football-data.org"));
+  return body;
+}
+
+// CTA tuned for the football carousel — Save first (the retention signal), then
+// the follow handle.
+function footballCtaBody(size) {
+  return [
+    el("div", { style: { display: "flex", fontFamily: "Anton", fontSize: Math.round(size * 0.062), color: FG, letterSpacing: 1, marginBottom: Math.round(size * 0.02) } }, "SAVE THIS FOR MATCHDAY"),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.034), color: "rgba(255,255,255,0.82)", marginBottom: Math.round(size * 0.04), lineHeight: 1.35 } }, "Tap save, then follow for the next one — results, tables & form, decoded."),
+    // Bright (not team-accent) so the handle reads on any team-color gradient.
+    el("div", { style: { display: "flex", color: FB_BRIGHT, fontWeight: 700, fontSize: Math.round(size * 0.05) } }, QUYDLY_IG_HANDLE()),
+  ];
+}
+
+function ord(n) {
+  if (!Number.isFinite(n)) return String(n);
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Deterministic open-loop teaser shown on the footer of each non-final slide.
+function footballTeaser(nextKind) {
+  switch (nextKind) {
+    case "scoreboard": return "Next: the full-time score →";
+    case "table": return "Next: what it did to the table →";
+    case "form": return "Next: who's actually in form →";
+    case "stat-insights": return "Next: the number that decided it →";
+    case "cta": return "";
+    default: return "";
+  }
+}
+
+// Build one football slide tree (cover stays on coverTree; the rest are full-bleed).
+// `nextKind` is the ACTUAL following slide in the (possibly form-dropped) list, so
+// the open-loop teaser stays correct.
+// "Luka Modrić · Photo: Wikipedia" — identifies the player + credits the photo.
+function playerCredit(p) {
+  if (!p) return null;
+  return `${p.name ? oneLine(p.name) + " · " : ""}Photo: ${p.credit || "Wikipedia"}`;
+}
+
+function footballSlideTree({ kind, football, accent, category, index, total, size, height, img, nextKind }) {
+  const teaser = footballTeaser(nextKind);
+  const players = img?.players || [];
+  // Hero slides (scoreboard, stat-insights) lead with a real player FACE — the
+  // emotional driver. Data-dense table/form stay on the cleaner generic stock so
+  // the rows read. Fall back to stock, then emblem/gradient, when no face exists.
+  let bgUri = null;
+  let credit = null;
+  if (kind === "scoreboard" && players[0]) { bgUri = players[0].dataUri; credit = playerCredit(players[0]); }
+  else if (kind === "stat-insights" && (players[1] || players[0])) { const p = players[1] || players[0]; bgUri = p.dataUri; credit = playerCredit(p); }
+  if (!bgUri && isRasterDataUri(img?.stockBg)) { bgUri = img.stockBg; credit = img?.stockCredit; }
+  const background = footballBackground({ size, height, heroBg: bgUri, emblem: img?.emblem, accent: teamAccent(football.match.home.name) });
+  let body;
+  if (kind === "scoreboard") body = footballScoreboard(football, { size, img });
+  else if (kind === "table") body = footballTable(football, { size });
+  else if (kind === "form") body = footballForm(football, { size });
+  else if (kind === "stat-insights") body = footballInsights(football, { size });
+  else body = footballCtaBody(size); // cta
+  return fullBleedSlideTree({ size, height, accent, category, background, body, teaser, credit: isRasterDataUri(bgUri) ? credit : null, index, total });
+}
+
 // Render the full Instagram carousel as ordered JPEG slides. Defaults to JPEG
 // because the Instagram Graph API rejects non-JPEG media containers.
 //
@@ -963,26 +1395,55 @@ function coverTree({ story, accent, category, size, height, portrait, coverHook,
 // lead entity (person, else org/place) with a credit. Resolving the image is
 // best-effort and happens once up front; any failure leaves the cover text-only.
 // `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], fetchImpl } = {}) {
-  const { width, height } = SHAPES.portrait;
-  const size = width; // scaling base for typography/padding; height adds 4:5 room
-  const accent = accentFor(story?.category_id);
-  const category = oneLine(story?.category_id || "news");
+export async function renderCarouselSlides(story, { format = "jpeg", shape = "portrait", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], football = null, fetchImpl } = {}) {
+  const { width, height } = SHAPES[shape] || SHAPES.portrait;
+  const size = width; // scaling base for typography/padding; height adds 4:5 (or 9:16) room
+  // For a resolved football match the chrome accent is the home team's color and
+  // the category chip is the competition name; otherwise the category accent/id.
+  const accent = football ? teamAccent(football.match.home.name) : accentFor(story?.category_id);
+  const category = football ? oneLine(football.competition?.name || "football") : oneLine(story?.category_id || "news");
   const fonts = await loadFonts();
-  // Default slide set depends on whether historical "why it matters" points were
-  // supplied (the "why" slide is dropped when empty) and whether an engagement
-  // MCQ was supplied (the "engagement" slide is dropped when absent). An explicit
-  // `slides` wins.
-  const slideList = slides || carouselSlidesFor(whyItMatters, question);
+  // A resolved football match selects the football slide set (cover + scoreboard
+  // /table/form/stat-insights + cta); otherwise the standard set. An explicit
+  // `slides` wins over both.
+  const slideList = slides || footballSlidesFor(football) || carouselSlidesFor(whyItMatters, question);
   const total = slideList.length;
+
+  // Football imagery: the two crests, the competition emblem, and a generic
+  // full-bleed background by result mood. All best-effort (raster only — SVG
+  // crests fall back to monogram badges). Resolved once, up front.
+  let fbImg = null;
+  if (football) {
+    const opt = fetchImpl ? { fetchImpl } : {};
+    const bg = await pickBackground({ mood: moodForMatch(football, "scoreboard"), competition: football.competition?.code, seed: football.match?.id || 0 }).catch(() => null);
+    // Real player FACES from the story's LICENSED entity enrichment (Wikipedia /
+    // editor overrides) — the emotional drive. Hero slides lead with a player
+    // face; generic stock is only the fallback when no licensed face exists.
+    const playerSpecs = entityImages(story);
+    const [crestsAndBg, players] = await Promise.all([
+      Promise.all([
+        football.match.home.crest ? fetchImageDataUri(football.match.home.crest, opt) : null,
+        football.match.away.crest ? fetchImageDataUri(football.match.away.crest, opt) : null,
+        football.competition?.emblemUrl ? fetchImageDataUri(football.competition.emblemUrl, opt) : null,
+        bg?.url ? fetchImageDataUri(bg.url, opt) : null,
+      ]),
+      Promise.all(playerSpecs.slice(0, 4).map((s) => resolveImage(s, fetchImpl))),
+    ]);
+    const [homeCrest, awayCrest, emblem, stockBg] = crestsAndBg;
+    fbImg = {
+      homeCrest, awayCrest, emblem,
+      stockBg, stockCredit: stockBg ? backgroundCredit(bg) : null,
+      players: players.filter(Boolean), // [{ dataUri, name, credit }]
+    };
+  }
 
   // Resolve real imagery once, up front, and spread it across the carousel. Each
   // content slide gets its OWN visual, best-effort and in parallel. The COVER is
   // sourced strictly: a lead PERSON photo, else an editorial illustration, else
   // (last resort) a CONTAINED org logo / place image, else the gradient floor — so
   // a logo or country flag never heroes the cover above an illustration, and never
-  // bleeds full-frame. Body slides take any other entity image, captioned. Gated
-  // by withPortrait.
+  // bleeds full-frame. Body slides take any other entity image, captioned. Runs for
+  // withPortrait OR football (football covers still resolve a lead player-face).
   let portrait = null;
   const bodyImageByKind = {};
   // What the COVER ended up showing: "photo" (licensed person photo), "illustration"
@@ -991,7 +1452,7 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   // cover (logo/none) for review instead of auto-posting it. Left undefined when
   // imagery is disabled (withPortrait off) — then the generator never gates on it.
   let coverImagery;
-  if (withPortrait) {
+  if (withPortrait || football) {
     const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
     // planEntityImagery is the single source of truth for cover/body sourcing —
     // shared with plannedIllustrationCount so the generated illustration count can't
@@ -1053,9 +1514,11 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
     // text card via slideTree.
     const tree = kind === "cover"
       ? coverTree({ story, accent, category, size, height, portrait, coverHook, coverHighlight, highlightMode })
-      : (kind === "what" || kind === "keypoints" || kind === "why")
-        ? contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters })
-        : slideTree({ kind, accent, category, index, total, size, height, question: kind === "engagement" ? question : null });
+      : football
+        ? footballSlideTree({ kind, football, accent, category, index, total, size, height, img: fbImg, nextKind: slideList[index + 1] })
+        : (kind === "what" || kind === "keypoints" || kind === "why")
+          ? contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters })
+          : slideTree({ kind, accent, category, index, total, size, height, question: kind === "engagement" ? question : null });
     const svg = await satori(tree, { width, height, fonts });
     const { buffer, contentType } = rasterize(svg, { width, format });
     out.push({ buffer, contentType, width, height, slideType: kind, index, ...(kind === "cover" ? { coverImagery } : {}) });
@@ -1063,4 +1526,4 @@ export async function renderCarouselSlides(story, { format = "jpeg", slides, wit
   return out;
 }
 
-export { SHAPES, CAROUSEL_SLIDES, coverDateLine };
+export { SHAPES, CAROUSEL_SLIDES, FOOTBALL_SLIDES, footballSlidesFor, coverDateLine, firstSentences };

@@ -11,8 +11,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderCarouselSlides, CAROUSEL_SLIDES, coverDateLine, plannedIllustrationCount } from "../lib/social/card-renderer.js";
+import { renderCarouselSlides, CAROUSEL_SLIDES, FOOTBALL_SLIDES, coverDateLine, plannedIllustrationCount } from "../lib/social/card-renderer.js";
 import { notifyCoverHeldForReview } from "../lib/social/review-notify.js";
+import { reviewTokenSig } from "../lib/social/review-token.js";
 import { createCardService } from "../lib/social/card-storage.js";
 import * as ig from "../lib/social/instagram-graph.js";
 import { generatePlatformPost, generateSocialPosts } from "../lib/social/social-post-generator.js";
@@ -68,6 +69,40 @@ test("renderCarouselSlides: no whyItMatters → 4 slides (cover/what/keypoints/c
     assert.deepEqual([s.width, s.height], [1080, 1350]);
     // JPEG SOI marker.
     assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]);
+  });
+});
+
+test("renderCarouselSlides: football context → 6 full-bleed football slides", async () => {
+  const football = {
+    competition: { code: "PL", name: "Premier League", emblemUrl: null },
+    match: {
+      id: 1, status: "FINISHED", utcDate: "2026-06-23T18:00:00Z",
+      home: { id: 64, name: "Liverpool FC", shortName: "Liverpool", tla: "LIV", crest: null },
+      away: { id: 66, name: "Manchester United FC", shortName: "Man United", tla: "MUN", crest: null },
+      score: { home: 2, away: 1 }, winner: "HOME_TEAM",
+      scorers: [{ name: "Salah", minute: 18 }],
+    },
+    standings: {
+      table: [
+        { position: 1, team: { id: 64, name: "Liverpool FC", shortName: "Liverpool", tla: "LIV" }, played: 31, goalDifference: 42, points: 73, form: "W,W,D,W,W", involved: true },
+        { position: 8, team: { id: 66, name: "Manchester United FC", shortName: "Man United", tla: "MUN" }, played: 31, goalDifference: 6, points: 46, form: "L,D,W,L,D", involved: true },
+      ],
+      involved: [
+        { position: 1, points: 73, goalDifference: 42, form: "W,W,D,W,W", teamId: 64 },
+        { position: 8, points: 46, goalDifference: 6, form: "L,D,W,L,D", teamId: 66 },
+      ],
+    },
+    insights: { lines: ["Liverpool sit 1st, Manchester United 8th."] },
+  };
+  const slides = await renderCarouselSlides(STORY, { football });
+  assert.equal(slides.length, 6);
+  assert.deepEqual(slides.map((s) => s.slideType), FOOTBALL_SLIDES);
+  assert.deepEqual(slides.map((s) => s.slideType), ["cover", "scoreboard", "table", "form", "stat-insights", "cta"]);
+  slides.forEach((s, i) => {
+    assert.equal(s.index, i);
+    assert.equal(s.contentType, "image/jpeg");
+    assert.deepEqual([s.width, s.height], [1080, 1350]);
+    assert.deepEqual([...s.buffer.subarray(0, 2)], [0xff, 0xd8]); // valid JPEG
   });
 });
 
@@ -568,6 +603,39 @@ test("notifyCoverHeldForReview: with a key → POSTs to Resend with the default 
   assert.match(body.text, /Story id: 5/);
 });
 
+test("notifyCoverHeldForReview: with SOCIAL_REVIEW_SECRET + postId → signed, expiring Approve/Reject links in html + text", async () => {
+  let body;
+  const fetchImpl = async (url, opts) => { body = JSON.parse(opts.body); return { ok: true }; };
+  const before = Date.now();
+  await notifyCoverHeldForReview({
+    story: { id: 9, headline: "H", category_id: "world" }, post: { audienceGeo: "global" }, postId: "post-abc",
+    coverImagery: "none",
+    env: { RESEND_API_KEY: "k", SOCIAL_REVIEW_SECRET: "s3cret", SOCIAL_REVIEW_BASE_URL: "https://quydly.com" },
+    fetchImpl,
+  });
+  // exp is Date.now()-based, so pull it out of the generated URL and verify the
+  // token matches reviewTokenSig for THAT exp (proves the shared signer is used).
+  const m = body.text.match(/action=approve&exp=(\d+)&token=([a-f0-9]+)/);
+  assert.ok(m, "approve link with exp + token present in text");
+  const exp = Number(m[1]);
+  assert.ok(exp > before + 13 * 86400000, "exp is ~14 days out (default TTL)");
+  assert.equal(m[2], reviewTokenSig("post-abc", "approve", exp, "s3cret"), "token signed over postId:action:exp");
+  // reject link present too, and html carries the same links (& escaped to &amp;).
+  const approve = `https://quydly.com/api/social-review?post=post-abc&action=approve&exp=${exp}&token=${m[2]}`;
+  assert.ok(body.text.includes(approve), "approve link in text fallback");
+  assert.ok(body.text.match(/action=reject&exp=\d+&token=[a-f0-9]+/), "reject link in text fallback");
+  assert.ok(body.html.includes(approve.replace(/&/g, "&amp;")), "approve link in html (escaped)");
+});
+
+test("notifyCoverHeldForReview: no SOCIAL_REVIEW_SECRET → email still sends, but without action links", async () => {
+  let body;
+  const fetchImpl = async (url, opts) => { body = JSON.parse(opts.body); return { ok: true }; };
+  const out = await notifyCoverHeldForReview({ story: STORY, post: {}, postId: "p1", coverImagery: "none", env: { RESEND_API_KEY: "k" }, fetchImpl });
+  assert.equal(out, true);
+  assert.ok(!body.html.includes("/api/social-review"));
+  assert.ok(/review queue/i.test(body.text));
+});
+
 test("notifyCoverHeldForReview: SOCIAL_REVIEW_EMAIL overrides the recipient; HTTP failure → false", async () => {
   const ok = async (url, opts) => ({ ok: true, status: 200, _body: JSON.parse(opts.body) });
   let captured;
@@ -606,9 +674,9 @@ test("cardService.getCarouselSlideUrls: uploads each slide, returns ordered desc
   const slides = await svc.getCarouselSlideUrls({ story: STORY });
   assert.equal(slides.length, 4);
   assert.deepEqual(slides.map((s) => s.index), [0, 1, 2, 3]);
-  // No why / no question / no hook → "nowhy-noq-nohook" variant segment in the path.
-  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/0-cover.jpg");
-  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill/3-cta.jpg");
+  // No why / no question / no hook / no football → "nowhy-noq-nohook-noill-nofb" variant.
+  assert.equal(slides[0].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill-nofb/0-cover.jpg");
+  assert.equal(slides[3].url, "https://cdn.test/cards/99/carousel/nowhy-noq-nohook-noill-nofb/3-cta.jpg");
   assert.equal(slides[0].contentType, "image/jpeg");
   assert.equal(mock.uploads.length, 4);
   assert.ok(mock.uploads.every((u) => /\.jpg$/.test(u.path)));
@@ -647,8 +715,8 @@ test("cardService.getCarouselSlideUrls: distinct cover hooks get distinct storag
   assert.notEqual(s1[0].url, s2[0].url);
   // A hook-less render gets the "nohook" segment, distinct from both hooked ones.
   const s0 = await svc.getCarouselSlideUrls({ story: STORY });
-  assert.ok(s0[0].url.includes("-nohook-noill/"));
-  assert.ok(!s1[0].url.includes("-nohook-noill/"));
+  assert.ok(s0[0].url.includes("-nohook-noill-nofb/"));
+  assert.ok(!s1[0].url.includes("-nohook-noill-nofb/"));
 });
 
 test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ distinct storage paths", async () => {
@@ -997,7 +1065,7 @@ test("generateSocialPosts: IG engagement question → persists a PENDING social_
 
 // ── publisher: IG ordered-slide fetch + creds-skip ──────────────────────────────
 
-function makePubSupabase({ duePosts, slidesByPost = {}, counts = {} }) {
+function makePubSupabase({ duePosts, slidesByPost = {}, reelByPost = {}, counts = {} }) {
   const byId = new Map(duePosts.map((p) => [p.id, { ...p }]));
   function from(table) {
     const q = { table, filters: {}, payload: null, count: false, single: false };
@@ -1013,7 +1081,8 @@ function makePubSupabase({ duePosts, slidesByPost = {}, counts = {} }) {
   }
   async function resolve(q) {
     if (q.table === "social_media_assets") {
-      return { data: slidesByPost[q.filters.social_post_id] || [], error: null };
+      const byType = q.filters.asset_type === "instagram_reel_video" ? reelByPost : slidesByPost;
+      return { data: byType[q.filters.social_post_id] || [], error: null };
     }
     if (q.op === "update") {
       const post = byId.get(q.filters.id);
@@ -1056,6 +1125,27 @@ test("publishApprovedPosts: IG post publishes with its ordered slides", async ()
   assert.ok(received.every((s) => s.url));
   assert.equal(sb.byId.get("ig1").status, "POSTED");
   assert.equal(sb.byId.get("ig1").platform_post_id, "IGM1");
+});
+
+test("publishApprovedPosts: IG post with a reel asset publishes as a Reel (reel wins over slides)", async () => {
+  const sb = makePubSupabase({
+    duePosts: [igPost("ig1")],
+    slidesByPost: { ig1: [{ asset_url: "https://cdn.test/0.jpg", position: 0 }] },
+    reelByPost: { ig1: [{ asset_url: "https://cdn.test/reel.mp4" }] },
+  });
+  let received;
+  const publishers = { instagram: async (post, { slides, reelUrl }) => { received = { slides, reelUrl }; return { platformPostId: "IGR1", rawResponse: {} }; } };
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getIgCreds: () => IG_CREDS, env: {} });
+  assert.equal(res.published, 1);
+  assert.equal(received.reelUrl, "https://cdn.test/reel.mp4");
+  assert.equal(received.slides, null); // reel wins → carousel slides not fetched
+  assert.equal(sb.byId.get("ig1").platform_post_id, "IGR1");
+});
+
+test("ig.publish: reelUrl → REELS dry-run (no carousel)", async () => {
+  const r = await ig.publish({ post_text: "cap" }, { creds: IG_CREDS, reelUrl: "https://cdn.test/reel.mp4", dryRun: true });
+  assert.equal(r.platformPostId, "DRYRUN-reel");
+  assert.equal(r.rawResponse.reelUrl, "https://cdn.test/reel.mp4");
 });
 
 test("publishApprovedPosts: missing IG creds → release claim + skip (does not throw)", async () => {

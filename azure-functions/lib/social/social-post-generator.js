@@ -26,7 +26,7 @@ const PLATFORMS = PLATFORM_MODULES;
 const MODEL = "claude-sonnet-4-6";
 
 const STORY_COLUMNS =
-  "id, headline, summary, category_id, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents";
+  "id, headline, summary, category_id, story_type, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents, structured_numbers, primary_geos";
 
 // IG captions append at most this many curated hashtags (reach §8.3). Topical
 // (category + entity) tags are selected first, so truncating to 3 preserves the
@@ -137,7 +137,7 @@ async function generateCoverHook(anthropic, platform, story, logger) {
 // passes validation. When a cardService is supplied and the platform declares a
 // cardShape, a rendered headline card is attached (best-effort — null on failure
 // leaves the draft text-only, exactly as before).
-export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, logger = noopLogger }) {
+export async function generatePlatformPost({ platform, story, audienceGeo, anthropic, supabase = null, cardService = null, igCarousel = false, igEngagement = false, igFootball = false, igReels = false, logger = noopLogger }) {
   const draft = platform.format(story, audienceGeo); // deterministic base
 
   if (cardService && platform.CONSTRAINTS) {
@@ -192,16 +192,43 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         engagementQuestion = await platform.generateEngagementQuestion({ anthropic, supabase, story, audienceGeo, logger });
         if (engagementQuestion) draft.engagementQuestion = engagementQuestion;
       }
-      const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls });
-      if (slides && slides.length) {
-        draft.carouselSlides = slides;
-        draft.mediaUrl = slides[0].url;
-        draft.requiresMedia = false;
-        // What the cover ended up showing ("photo"/"illustration"/"logo"/"none") —
-        // surfaced by the renderer. A weak cover (logo/flag or gradient) is held for
-        // review rather than auto-posted (see statusFor in generateSocialPosts).
-        const coverSlide = slides.find((s) => s.slideType === "cover");
-        if (coverSlide && coverSlide.coverImagery) draft.coverImagery = coverSlide.coverImagery;
+      // Football (SOCIAL_IG_FOOTBALL_ENABLED): when the story is a real football
+      // match we can resolve, the renderer swaps the standard body slides for the
+      // full-bleed Scoreboard/Table/Form/Stat-insights set (sourced from
+      // football-data.org). Lazy import — keeps the module out of load when the
+      // flag is off. Best-effort: null → the standard carousel renders.
+      let football = null;
+      if (igFootball && platform.PLATFORM === "instagram") {
+        const { isFootballStory, resolveFootballContext } = await import("./football-data.js");
+        if (isFootballStory(story)) {
+          football = await resolveFootballContext(story, { apiKey: process.env.FOOTBALL_DATA_API_KEY, logger }).catch(() => null);
+          if (football) draft.football = football;
+        }
+      }
+      // Reel (SOCIAL_IG_REELS_ENABLED): for a resolved football match, render a
+      // 9:16 Reel MP4 (the football slides + a royalty-free music bed) and publish
+      // it as a Reel instead of the carousel. Reel WINS precedence; best-effort —
+      // a render/upload failure falls back to the carousel below.
+      if (igReels && football && cardService.getReelVideoUrl) {
+        const reel = await cardService.getReelVideoUrl({ story, football });
+        if (reel?.reelUrl) {
+          draft.reelUrl = reel.reelUrl;
+          draft.mediaUrl = reel.coverUrl; // cover JPEG: admin preview + media gate + thumbnail
+          draft.requiresMedia = false;
+        }
+      }
+      if (!draft.reelUrl) {
+        const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, football });
+        if (slides && slides.length) {
+          draft.carouselSlides = slides;
+          draft.mediaUrl = slides[0].url;
+          draft.requiresMedia = false;
+          // What the cover ended up showing ("photo"/"illustration"/"logo"/"none") —
+          // surfaced by the renderer. A weak cover (logo/flag or gradient) is held for
+          // review rather than auto-posted (see statusFor in generateSocialPosts).
+          const coverSlide = slides.find((s) => s.slideType === "cover");
+          if (coverSlide && coverSlide.coverImagery) draft.coverImagery = coverSlide.coverImagery;
+        }
       }
     } else if (platform.CONSTRAINTS.cardShape) {
       // Single card. The render format is declared by the platform's CONSTRAINTS
@@ -263,7 +290,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
   return draft; // deterministic fallback
 }
 
-export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, candidateId, env = {}, notify = notifyCoverHeldForReview, logger = noopLogger }) {
+export async function generateSocialPosts({ supabase, anthropic = null, cardService = null, igCarousel = false, igEngagement = false, igHashtags = false, igFootball = false, igReels = false, candidateId, env = {}, notify = notifyCoverHeldForReview, logger = noopLogger }) {
   const { data: candidate, error: candErr } = await supabase
     .from("social_publication_candidates")
     .select("id, story_id, audience_geo, status")
@@ -326,7 +353,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     if (existing) { skipped++; continue; }
 
     const post = await generatePlatformPost({
-      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, logger,
+      platform, story, audienceGeo: candidate.audience_geo, anthropic, supabase, cardService, igCarousel, igEngagement, igFootball, igReels, logger,
     });
 
     // Append source attribution + the curated hashtag block to IG captions
@@ -336,6 +363,15 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
     // validator). Order: body → Sources block → hashtags (tags sit at the very
     // bottom of the caption by IG convention). IG-only; X/Facebook are untouched.
     if (platform.PLATFORM === "instagram") {
+      // Football: lead the caption with the deterministic full-time score line
+      // (sourced, never LLM-invented). Only when a match resolved on this post.
+      if (post.football?.match) {
+        const m = post.football.match;
+        if (Number.isFinite(m.score?.home) && Number.isFinite(m.score?.away)) {
+          const line = `${m.home.shortName || m.home.name} ${m.score.home}–${m.score.away} ${m.away.shortName || m.away.name} (${post.football.competition?.name || "Football"})`;
+          post.text = `${line}\n\n${post.text}`;
+        }
+      }
       // Source links from stories.source_documents (best-effort: no-op when the
       // story has no usable HTTPS source URLs). Not flag-gated — attribution is
       // always desirable when sources exist.
@@ -377,7 +413,7 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
       // mail call can't delay the other platforms; a failure can't abort the run.
       if (autoApproved && platform.CONSTRAINTS?.carousel && coverImageryWeak(post) && post.mediaUrl) {
         pendingNotifies.push(
-          Promise.resolve(notify({ story, post, coverImagery: post.coverImagery, env, logger }))
+          Promise.resolve(notify({ story, post, postId: inserted.id, coverImagery: post.coverImagery, env, logger }))
             .catch((err) => logger.warn(JSON.stringify({ event: "social_review_email_failed", story_id: story.id, error: err.message })))
         );
       }
@@ -438,6 +474,25 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
           .from("social_media_assets")
           .upsert(assetRows, { onConflict: "social_post_id,position", ignoreDuplicates: true });
         if (assetErr) throw new Error(`[social-post-generator] insert carousel assets: ${assetErr.message}`);
+      }
+
+      // Persist the Reel MP4 URL as a single social_media_assets row (position 0,
+      // asset_type instagram_reel_video) so the publisher can publish it as a Reel.
+      if (post.reelUrl) {
+        const { error: reelErr } = await supabase
+          .from("social_media_assets")
+          .upsert([{
+            story_id: story.id,
+            social_post_id: inserted.id,
+            asset_type: "instagram_reel_video",
+            asset_url: post.reelUrl,
+            position: 0,
+            width: 1080,
+            height: 1920,
+            format: "mp4",
+            status: "READY",
+          }], { onConflict: "social_post_id,position", ignoreDuplicates: true });
+        if (reelErr) throw new Error(`[social-post-generator] insert reel asset: ${reelErr.message}`);
       }
 
       // Persist the engagement MCQ (the question rendered on this post's

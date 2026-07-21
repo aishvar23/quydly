@@ -120,6 +120,19 @@ export async function publishApprovedPosts({
     return (assets || []).map((a) => ({ url: a.asset_url }));
   }
 
+  // Fetch a post's Reel video URL, if it was rendered as a Reel.
+  async function reelFor(postId) {
+    const { data, error } = await supabase
+      .from("social_media_assets")
+      .select("asset_url")
+      .eq("social_post_id", postId)
+      .eq("asset_type", "instagram_reel_video")
+      .order("position", { ascending: true })
+      .limit(1);
+    if (error) throw new Error(`[social-publisher] fetch reel ${postId}: ${error.message}`);
+    return data && data[0] ? data[0].asset_url : null;
+  }
+
   // Per-platform remaining daily budget — computed BEFORE the fetch so capped
   // platforms can be EXCLUDED from it. A capped platform keeps accumulating
   // APPROVED posts it can't publish today; ordered oldest-first, that backlog
@@ -215,9 +228,11 @@ export async function publishApprovedPosts({
     }
 
     try {
-      // Instagram may publish a multi-slide carousel — pass its ordered slides.
-      const slides = post.platform === "instagram" ? await carouselSlidesFor(post.id) : null;
-      const result = await publishers[post.platform](post, { creds, slides, logger });
+      // Instagram may publish a Reel (video) or a multi-slide carousel. A reel
+      // asset wins; otherwise pass the ordered carousel slides.
+      const reelUrl = post.platform === "instagram" ? await reelFor(post.id) : null;
+      const slides = post.platform === "instagram" && !reelUrl ? await carouselSlidesFor(post.id) : null;
+      const result = await publishers[post.platform](post, { creds, slides, reelUrl, logger });
       const publishedAt = new Date().toISOString();
       await supabase
         .from("social_posts")

@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderStoryCard } from "../lib/social/card-renderer.js";
+import { renderStoryCard, firstSentences } from "../lib/social/card-renderer.js";
 import { createCardService } from "../lib/social/card-storage.js";
 import { uploadMedia, publish } from "../lib/social/platforms/x.js";
 import { generatePlatformPost } from "../lib/social/social-post-generator.js";
@@ -22,6 +22,32 @@ const STORY = {
   key_points: ["Indexes closed higher", "Yields eased"],
   source_count: 3,
 };
+
+// ── firstSentences (body-slide truncation) ───────────────────────────────────
+
+test("firstSentences: an abbreviation period is not a sentence end (IG truncation bugs)", () => {
+  // Both reproduced from real IG posts where the body read as cut off mid-sentence.
+  assert.equal(
+    firstSentences("David Clayton-Thomas, the Canadian lead singer of Blood, Sweat & Tears, died on June 24 at St. Michael Hospital in Toronto. He was 83.", 1),
+    "David Clayton-Thomas, the Canadian lead singer of Blood, Sweat & Tears, died on June 24 at St. Michael Hospital in Toronto.",
+  );
+  assert.equal(
+    firstSentences("DC Studios and Warner Bros. Discovery announced a major restructuring on Tuesday. Peter Safran will co-lead.", 1),
+    "DC Studios and Warner Bros. Discovery announced a major restructuring on Tuesday.",
+  );
+});
+
+test("firstSentences: decimals, initials, and lower-abbreviations do not split", () => {
+  assert.equal(firstSentences("Inflation rose to 3.5 percent in May. Markets dipped.", 1), "Inflation rose to 3.5 percent in May.");
+  assert.equal(firstSentences("J. R. R. Tolkien wrote it. It sold millions.", 1), "J. R. R. Tolkien wrote it.");
+  assert.equal(firstSentences("The match kicks off at 7 p.m. local time. Tickets sold out.", 1), "The match kicks off at 7 p.m. local time.");
+});
+
+test("firstSentences: real boundaries still split, and short/empty inputs are safe", () => {
+  assert.equal(firstSentences("The vote passed. The bill goes to the Senate. A signing follows.", 2), "The vote passed. The bill goes to the Senate.");
+  assert.equal(firstSentences("A blurb with no terminator", 1), "A blurb with no terminator");
+  assert.equal(firstSentences("", 1), "");
+});
 
 // ── renderer ─────────────────────────────────────────────────────────────────
 
