@@ -17,6 +17,11 @@ jobs:
     runs-on: windows-latest
     environment: production
 
+    # Exposed so the optional restart step can gate on its presence (a step `if:`
+    # can read env but not secrets directly). Unset → the restart step skips.
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,9 +41,69 @@ jobs:
         working-directory: azure-functions
         run: npm run lint
 
+      # Version-stamp the package with this commit so the post-deploy step can
+      # prove the live host is actually serving THIS build (see "Verify" below).
+      - name: Stamp commit SHA
+        shell: bash
+        run: echo "${{ github.sha }}" > azure-functions/deployed-sha.txt
+
       - name: Deploy to Azure Functions
         uses: azure/functions-action@v1
         with:
           app-name: quydly-pipeline-fn
           package: azure-functions
           publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+
+      # Force a remount of the freshly-deployed package. The app runs with
+      # WEBSITE_RUN_FROM_PACKAGE=1, where a deploy has been observed NOT to reload
+      # the running worker until the host is restarted — which silently kept old
+      # code live for ~24 days. This restart makes the new code take effect
+      # immediately. Optional: it runs only when an AZURE_CREDENTIALS secret is
+      # configured (a least-privilege SP scoped to this Function App). Without it
+      # the step is skipped and the "Verify" step below still guards correctness.
+      - name: Azure login (for restart)
+        if: ${{ env.AZURE_CREDENTIALS != '' }}
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Restart Function App (remount package)
+        if: ${{ env.AZURE_CREDENTIALS != '' }}
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: az functionapp restart --name quydly-pipeline-fn --resource-group quydly-pipeline-rg
+
+      # Fail LOUDLY if the deploy didn't actually take effect. Reads the mounted
+      # wwwroot over the SCM (Kudu) API using the publish-profile credentials — no
+      # extra secret — and confirms it serves this commit's stamp, retrying to
+      # allow the package remount to settle. This turns the previously-silent
+      # "deploy succeeded but old code kept running" failure into a red build.
+      - name: Verify deployment took effect
+        shell: pwsh
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+        run: |
+          [xml]$pp = $env:PUBLISH_PROFILE
+          $prof = $pp.publishData.publishProfile | Where-Object { $_.publishMethod -eq 'MSDeploy' } | Select-Object -First 1
+          $scmHost = ($prof.publishUrl -split ':')[0]
+          $pair = "$($prof.userName):$($prof.userPWD)"
+          $auth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
+          $url = "https://$scmHost/api/vfs/site/wwwroot/deployed-sha.txt"
+          $expected = "${{ github.sha }}"
+          $ok = $false
+          for ($i = 1; $i -le 12; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri $url -Headers @{ Authorization = $auth } -UseBasicParsing -TimeoutSec 20
+              $got = ($r.Content).Trim()
+              if ($got -eq $expected) { Write-Host "Verified: live host is serving commit $got"; $ok = $true; break }
+              Write-Host "Attempt $i/12: live SHA '$got' != expected '$expected' — waiting for remount..."
+            } catch {
+              Write-Host "Attempt $i/12: SCM fetch failed: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 15
+          }
+          if (-not $ok) {
+            Write-Error "Deploy did NOT take effect: wwwroot never served commit $expected. The host is likely serving stale code — restart the Function App and investigate."
+            exit 1
+          }
