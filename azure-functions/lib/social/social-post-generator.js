@@ -9,7 +9,7 @@
 //
 // No external social API calls happen here — drafts are review-first.
 
-import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
+import { PLATFORM_MODULES, requiresMedia, platformEnabled } from "./platforms/index.js";
 import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
@@ -340,6 +340,16 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   const pendingNotifies = [];
 
   for (const platform of PLATFORMS) {
+    // Per-platform kill switch (SOCIAL_<P>_ENABLED=false — see platforms/index.js):
+    // generate NO draft for a disabled platform. Without this, auto-approved
+    // drafts would pile up APPROVED forever behind the publisher's matching gate
+    // and all fire in one burst on re-enable. Candidates are shared across
+    // platforms, so the remaining platforms' drafts still generate normally.
+    if (!platformEnabled(env, platform.PLATFORM)) {
+      logger(JSON.stringify({ event: "social_generate_platform_disabled", platform: platform.PLATFORM }));
+      continue;
+    }
+
     // Idempotency (§12.2): skip if a post already exists for this triple.
     const { data: existing, error: exErr } = await supabase
       .from("social_posts")

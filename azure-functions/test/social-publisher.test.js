@@ -136,6 +136,34 @@ test("publishApprovedPosts: respects per-day cap", async () => {
   assert.equal(sb.byId.get("b").status, "APPROVED");
 });
 
+test("publishApprovedPosts: SOCIAL_X_ENABLED=false disables X without touching other platforms", async () => {
+  const fbPost = { id: "f", story_id: 2, platform: "facebook", audience_geo: "global", post_text: "FB quydly.com",
+    media_url: "https://cdn.example/card.jpg", status: "APPROVED", scheduled_for: null, platform_post_id: null };
+  const sb = makeSupabase({ duePosts: [xPost("a"), fbPost] });
+  const publishers = {
+    x: async () => { throw new Error("x publisher must not be called when disabled"); },
+    facebook: async (p) => ({ platformPostId: `fb_${p.id}`, rawResponse: {} }),
+  };
+  const res = await publishApprovedPosts({
+    supabase: sb.client, publishers, getCreds: CREDS_FN, getFbCreds: CREDS_FN,
+    env: { SOCIAL_X_ENABLED: "false" },
+  });
+
+  assert.deepEqual(res, { published: 1, failed: 0, skipped: 0 });
+  // The X row is never fetched or claimed — left APPROVED, untouched.
+  assert.equal(sb.byId.get("a").status, "APPROVED");
+  assert.equal(sb.byId.get("f").status, "POSTED");
+});
+
+test("publishApprovedPosts: all platforms disabled → clean no-op", async () => {
+  const sb = makeSupabase({ duePosts: [xPost("a")] });
+  const publishers = { x: async () => { throw new Error("must not be called"); } };
+  const res = await publishApprovedPosts({ supabase: sb.client, publishers, getCreds: CREDS_FN, env: { SOCIAL_X_ENABLED: "0" } });
+
+  assert.deepEqual(res, { published: 0, failed: 0, skipped: 0 });
+  assert.equal(sb.byId.get("a").status, "APPROVED");
+});
+
 test("publishApprovedPosts: a capped platform does not starve a publishable one", async () => {
   // Regression: X is capped (cap 1, 1 already posted) and its APPROVED backlog
   // is OLDER than IG's. Ordered oldest-first, X would fill the batch and starve

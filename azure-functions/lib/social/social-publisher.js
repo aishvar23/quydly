@@ -15,7 +15,7 @@ import { publish as xPublish, publishReply as xPublishReply } from "./platforms/
 import { credsFromEnv as xCredsFromEnv } from "./x-oauth1.js";
 import { publish as igPublish, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
 import { publish as fbPublish, credsFromEnv as fbCredsFromEnv } from "./facebook-graph.js";
-import { requiresMedia } from "./platforms/index.js";
+import { requiresMedia, platformEnabled } from "./platforms/index.js";
 
 const BATCH = 20;
 const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish, facebook: fbPublish };
@@ -84,7 +84,20 @@ export async function publishApprovedPosts({
   // Defaults to the production host so no env config is needed; override only to
   // point at a non-prod domain.
   const publicBase = String(env.QUYDLY_PUBLIC_BASE_URL || "https://www.quydly.com").replace(/\/+$/, "");
-  const enabledPlatforms = Object.keys(publishers);
+  // Per-platform kill switch (SOCIAL_<P>_ENABLED=false — see platforms/index.js):
+  // a disabled platform is excluded from the fetch entirely, so nothing is
+  // claimed, published, or replied-to for it. Its rows are left exactly as they
+  // are (this also blocks admin publish-now, which only flips status to APPROVED
+  // and relies on this worker to actually post).
+  const enabledPlatforms = Object.keys(publishers).filter((p) => {
+    if (platformEnabled(env, p)) return true;
+    logger(JSON.stringify({ event: "social_publish_platform_disabled", platform: p }));
+    return false;
+  });
+  if (enabledPlatforms.length === 0) {
+    logger(JSON.stringify({ event: "social_publish_none", reason: "all_platforms_disabled" }));
+    return { published: 0, failed: 0, skipped: 0 };
+  }
 
   // Lazy, per-platform credential resolution. A platform whose creds are
   // unavailable (not configured) has its posts released + skipped — it does not
