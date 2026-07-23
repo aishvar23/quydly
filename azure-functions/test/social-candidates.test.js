@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildEligiblePairs, buildPublishReason } from "../lib/social/social-candidates.js";
+import { buildEligiblePairs, buildPublishReason, groupForCategory } from "../lib/social/social-candidates.js";
 import { classifySensitivity, SENSITIVITY } from "../lib/social/social-safety.js";
 
 // ── classifySensitivity ──────────────────────────────────────────────────────
@@ -165,6 +165,125 @@ test("buildEligiblePairs: orders by geo, then relevance desc, then story_score d
     out.map((p) => `${p.audienceGeo}:${p.story.id}`),
     ["global:2", "global:1", "india:3"]
   );
+});
+
+// ── category weighting (FLAGS.social.categoryWeights) ────────────────────────
+
+const WEIGHTS = {
+  enabled: true,
+  defaultGroup: "others",
+  groups: {
+    aiTech: { categories: ["ai", "tech"], weight: 40 },
+    world:  { categories: ["world"],      weight: 40 },
+    sports: { categories: ["sports"],     weight: 10 },
+    others: { categories: [],             weight: 10 },
+  },
+};
+
+function catStory(id, category, score = 50) {
+  return { id, story_score: score, confidence_score: 8, category_id: category, headline: "h", summary: "s" };
+}
+
+// Ample supply in every group; rel score descending by id so ordering is known.
+function supply(countsByCategory) {
+  const storyById = new Map();
+  const audiences = [];
+  let id = 1;
+  for (const [category, n] of Object.entries(countsByCategory)) {
+    for (let i = 0; i < n; i++, id++) {
+      storyById.set(id, catStory(id, category, 100 - id));
+      audiences.push({ story_id: id, audience_geo: "global", relevance_score: 100 - id });
+    }
+  }
+  return { storyById, audiences };
+}
+
+function mixOf(pairs) {
+  const mix = {};
+  for (const p of pairs) {
+    const g = groupForCategory(p.story.category_id, WEIGHTS);
+    mix[g] = (mix[g] || 0) + 1;
+  }
+  return mix;
+}
+
+test("groupForCategory: maps listed categories to their group, everything else to defaultGroup", () => {
+  assert.equal(groupForCategory("ai", WEIGHTS), "aiTech");
+  assert.equal(groupForCategory("tech", WEIGHTS), "aiTech");
+  assert.equal(groupForCategory("world", WEIGHTS), "world");
+  assert.equal(groupForCategory("sports", WEIGHTS), "sports");
+  assert.equal(groupForCategory("culture", WEIGHTS), "others");
+  assert.equal(groupForCategory("finance", WEIGHTS), "others");
+  assert.equal(groupForCategory(null, WEIGHTS), "others");
+});
+
+test("categoryWeights: 10 slots with full supply land 4/4/1/1 (40/40/10/10)", () => {
+  const { storyById, audiences } = supply({ ai: 3, tech: 3, world: 6, sports: 3, culture: 3 });
+  const out = buildEligiblePairs({
+    audiences, storyById, existingKeys: new Set(), countsByGeo: {},
+    cap: 10, categoryWeights: WEIGHTS,
+  });
+  assert.equal(out.length, 10);
+  assert.deepEqual(mixOf(out), { aiTech: 4, world: 4, sports: 1, others: 1 });
+});
+
+test("categoryWeights: empty group's share redistributes proportionally (never posts nothing)", () => {
+  // No sports and no ai/tech supply at all → world and others split all 10 slots.
+  const { storyById, audiences } = supply({ world: 20, culture: 20 });
+  const out = buildEligiblePairs({
+    audiences, storyById, existingKeys: new Set(), countsByGeo: {},
+    cap: 10, categoryWeights: WEIGHTS,
+  });
+  assert.equal(out.length, 10);
+  assert.deepEqual(mixOf(out), { world: 8, others: 2 }); // 40:10 ratio over 10 slots
+});
+
+test("categoryWeights: only 'others' available → all slots still fill", () => {
+  const { storyById, audiences } = supply({ culture: 5 });
+  const out = buildEligiblePairs({
+    audiences, storyById, existingKeys: new Set(), countsByGeo: {},
+    cap: 3, categoryWeights: WEIGHTS,
+  });
+  assert.equal(out.length, 3);
+  assert.deepEqual(mixOf(out), { others: 3 });
+});
+
+test("categoryWeights: groupCountsByGeo seeds the round-robin so 1-per-run drip converges", () => {
+  // Today the geo already created 4 world + 1 others and zero aiTech; with a
+  // single run slot the most-behind group (aiTech) must win — not world, even
+  // though world stories outscore everything.
+  const { storyById, audiences } = supply({ world: 5, ai: 1, culture: 3 });
+  const out = buildEligiblePairs({
+    audiences, storyById, existingKeys: new Set(),
+    countsByGeo: { global: 5 }, cap: 24, perRunCap: 1,
+    categoryWeights: WEIGHTS,
+    groupCountsByGeo: { global: { world: 4, others: 1 } },
+  });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].story.category_id, "ai");
+});
+
+test("categoryWeights: within a group, higher relevance still wins", () => {
+  const storyById = new Map([[1, catStory(1, "ai", 50)], [2, catStory(2, "tech", 50)]]);
+  const audiences = [
+    { story_id: 1, audience_geo: "global", relevance_score: 25 },
+    { story_id: 2, audience_geo: "global", relevance_score: 30 },
+  ];
+  const out = buildEligiblePairs({
+    audiences, storyById, existingKeys: new Set(), countsByGeo: {},
+    cap: 1, categoryWeights: WEIGHTS,
+  });
+  assert.equal(out[0].story.id, 2);
+});
+
+test("categoryWeights: disabled → legacy pure score ordering", () => {
+  const { storyById, audiences } = supply({ culture: 2, ai: 2 });
+  const out = buildEligiblePairs({
+    audiences, storyById, existingKeys: new Set(), countsByGeo: {},
+    cap: 4, categoryWeights: { ...WEIGHTS, enabled: false },
+  });
+  // Pure relevance order = ascending id in supply()
+  assert.deepEqual(out.map((p) => p.story.id), [1, 2, 3, 4]);
 });
 
 // ── buildPublishReason ───────────────────────────────────────────────────────

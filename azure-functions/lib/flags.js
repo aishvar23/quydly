@@ -28,12 +28,16 @@ const FLAGS = {
   // is asserted explicitly in the synthesizer so the relaxed bar can never admit a
   // single-domain singleton even if a future clustering change leaks one through.
   synthesis: {
-    // narrative.confidence_score floor. Kept at 6 for `ai` (NOT lowered) on
-    // purpose: backend fetchStoryPool (the global quiz path) requires
-    // confidence_score >= 6, so a confidence-5 story would write but be invisible
-    // to the daily quiz — a dead row. Holding ai at 6 keeps every created AI story
-    // quiz-reachable, which is the actual goal ("more AI stories in the quiz").
-    confidence:        { default: 6, ai: 6 },
+    // narrative.confidence_score floor. Lowered to 5 for `ai`. Thin AI clusters
+    // (2 articles / 2 domains, entity-poor) give the synthesis LLM little
+    // corroboration, so it honestly returns confidence 5 even for substantive,
+    // multi-domain coverage — and the default-6 floor rejected ~80% of eligible AI
+    // clusters (only 2 of 10 wrote a story post-#132). The downstream coupling is
+    // handled in tandem: backend fetchStoryPool (the global quiz path) was made
+    // per-category to require confidence_score >= 5 for `ai` (>= 6 elsewhere), so a
+    // confidence-5 AI story is now quiz-reachable rather than a dead row. The two
+    // floors MUST move together — see backend/services/articleStore.js fetchStoryPool.
+    confidence:        { default: 6, ai: 5 },
     // key_points completeness. AI write-ups frequently land 2 solid points off a
     // 2-source cluster; demanding 3 discards otherwise-usable stories. The audit
     // (storyAudit.js) still independently rejects hollow/circular key_points for
@@ -76,9 +80,11 @@ const FLAGS = {
     minRelevance:    20, // story_audiences.relevance_score >= this
     freshnessHours:  36, // story published within this window
     // Categories the EXISTING handles (@quydly / @quydlyenglish) must NOT post.
-    // The `ai` vertical gets its own X/IG handles (future milestone); until that
-    // dedicated path exists, keep AI stories off the current accounts.
-    excludeCategories: ["ai"],
+    // `ai` was excluded here while the AI vertical waited for dedicated handles,
+    // but the owner's category-mix target (2026-07-23: AI/Tech ≈40% of published
+    // posts) is unreachable without it — `tech` alone yields ~1 eligible story
+    // per fortnight. Re-add "ai" here if/when dedicated AI handles ship.
+    excludeCategories: [],
     maxCandidatesPerDayPerGeo: 24, // hard ceiling on new candidates per geo per day
     // Per-run drip: the selector runs hourly, so capping how many candidates a
     // single run creates per geo spreads the daily quota across the day instead
@@ -86,6 +92,30 @@ const FLAGS = {
     // every post fire in one midnight burst, then go silent for ~24h). With the
     // hourly cadence, 1/run ≈ 1 post/hour ≈ maxCandidatesPerDayPerGeo per day.
     maxCandidatesPerRunPerGeo: 1,
+
+    // Category-mix weighting for candidate selection (owner request 2026-07-23:
+    // published posts skewed heavily world/culture; target AI&Tech 40%, World
+    // 40%, Sports 10%, everything else 10%). Selection uses a deterministic
+    // weighted round-robin (D'Hondt quotients) per geo, seeded with the groups
+    // of candidates already created today, so the hourly 1-per-run drip
+    // converges on these proportions across the day. A group with no eligible
+    // stories simply cedes its slots to the others in proportion — supply never
+    // stalls because a bucket is empty. NOTE: candidates are shared by ALL
+    // platforms (X/IG/FB), so this mix applies pipeline-wide, not just IG.
+    //   groups     — name → { categories: [story.category_id...], weight }
+    //   defaultGroup — bucket for any category not listed in a group
+    // `sports` has no story category yet; it activates automatically if one is
+    // added, and until then its 10% redistributes to the other groups.
+    categoryWeights: {
+      enabled: true,
+      defaultGroup: "others",
+      groups: {
+        aiTech: { categories: ["ai", "tech"], weight: 40 },
+        world:  { categories: ["world"],      weight: 40 },
+        sports: { categories: ["sports"],     weight: 10 },
+        others: { categories: [],             weight: 10 }, // culture, finance, science, …
+      },
+    },
 
     // Service Bus queue the selector enqueues generation jobs to (D4)
     generateQueue: "social-post-generate-queue",
