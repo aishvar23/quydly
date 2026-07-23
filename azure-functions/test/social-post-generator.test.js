@@ -191,3 +191,15 @@ test("generateSocialPosts: idempotent when posts already exist", async () => {
   assert.equal(res.skipped, 3);
   assert.equal(mock.inserted.length, 0);
 });
+
+test("generateSocialPosts: SOCIAL_X_ENABLED=false generates no X draft; other platforms unaffected", async () => {
+  const mock = makeSupabaseMock({ candidate: CANDIDATE, story: STORY });
+  const res = await generateSocialPosts({
+    supabase: mock.client, candidateId: "cand-1", env: { SOCIAL_X_ENABLED: "false" },
+  });
+
+  assert.equal(res.created, 2);
+  assert.deepEqual(mock.inserted.map((p) => p.platform).sort(), ["facebook", "instagram"]);
+  // Candidate still advances — the remaining platforms' pipeline is unaffected.
+  assert.equal(mock.candidateUpdates.at(-1).status, "POST_GENERATED");
+});
