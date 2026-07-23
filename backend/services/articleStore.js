@@ -137,7 +137,14 @@ function storyToArticle(story) {
  * Fetch synthesized stories for a category (up to 10), sorted by story_score.
  * Returns [] (not throws) when no stories exist — caller falls back to fetchArticlePool.
  *
- * Only returns verified stories with confidence_score >= 6 updated within 24h.
+ * Only returns verified stories with confidence_score >= floor updated within 24h.
+ * The floor is per-category: 5 for `ai`, 6 for everything else. AI clusters are
+ * thin (2-domain, entity-poor) so the synthesis LLM honestly reports confidence 5
+ * even for substantive coverage; a default-6 floor here would make those stories
+ * quiz-invisible. This MUST stay in lockstep with the synthesis confidence gate
+ * (azure-functions/lib/flags.js → synthesis.confidence.ai = 5): the synth gate
+ * decides whether a story row is written, this filter decides whether it reaches
+ * the quiz — if they diverge you get either dead rows or starved categories.
  * 24h is intentional: quiz generation runs daily at 7AM and should pull only
  * stories synthesised in the previous cycle. Widen to 48h+ only if categories
  * routinely starve due to low pipeline throughput.
@@ -145,12 +152,14 @@ function storyToArticle(story) {
 export async function fetchStoryPool(category_id, limit = 10) {
   const supabase = buildSupabase();
 
+  const minConfidence = category_id === "ai" ? 5 : 6;
+
   const { data, error } = await supabase
     .from("stories")
     .select("id, headline, summary, key_points, confidence_score, source_count")
     .eq("category_id", category_id)
     .eq("quiz_candidate", true)
-    .gte("confidence_score", 6)
+    .gte("confidence_score", minConfidence)
     .gte("updated_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
     .order("quizability_score", { ascending: false })
     .order("story_score", { ascending: false })
