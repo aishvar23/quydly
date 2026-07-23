@@ -24,6 +24,18 @@ const MAX_CLUSTER_ENTITIES = 10;
 // FLAGS (default 3; relaxed to 2 for `ai`, whose headlines are entity-poor).
 const MIN_SHARED_ENTITIES  = FLAGS.clustering.minSharedEntities;
 const SYNTHESIS_COOLDOWN_H = 4;       // re-enqueue only if synthesis_queued_at > 4h ago
+// Stale-claim recovery sweep (step 0 of the run). A synthesizer invocation
+// that dies after claiming a cluster (functionTimeout kill, or an error path
+// that couldn't reset the row) leaves it wedged in PROCESSING forever: SB
+// redeliveries land inside the synthesizer's 15-min PROCESSING lease, read
+// "sibling still running", and complete the message — and this function only
+// ever fetches PENDING rows, so the cluster becomes invisible to the whole
+// pipeline (2026-07-23 incident: every cluster enqueued after 12:00 UTC
+// wedged this way while the Anthropic API was failing; 6 of them AI). The
+// sweep resets stale claims to PENDING. Threshold is 2× the synthesizer's
+// PROCESSING_LEASE_MS (15 min) and 3× the 10-min functionTimeout, so a live
+// invocation can never be reclaimed out from under itself.
+const STALE_PROCESSING_MS  = 30 * 60 * 1000;
 
 function minSharedEntitiesFor(categoryId) {
   return MIN_SHARED_ENTITIES[categoryId] ?? MIN_SHARED_ENTITIES.default;
@@ -79,6 +91,38 @@ export default async function articleClusterer(context, timer) {
 
   const supabase = getSupabase();
   const now      = new Date().toISOString();
+
+  // ── 0. Reclaim wedged PROCESSING clusters (stale-claim recovery sweep) ────
+  // Must run BEFORE the no-articles early return below, or recovery stalls
+  // exactly when ingestion is quiet. Bounded below by the 36h River window so
+  // month-old strays aren't resurrected as stale news. Reclaimed rows get
+  // updated_at = now, so they re-enter this run's PENDING working set (step 2)
+  // and re-enqueue through the normal eligibility gates + 4h synthesis
+  // cooldown — a wedged cluster self-heals within one or two runs.
+  const staleClaimCutoff = new Date(Date.now() - STALE_PROCESSING_MS).toISOString();
+  const reclaimSince     = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+  const { data: reclaimedRows, error: reclaimError } = await supabase
+    .from("clusters")
+    .update({ status: "PENDING", updated_at: now })
+    .eq("status", "PROCESSING")
+    .lt("updated_at", staleClaimCutoff)
+    .gte("updated_at", reclaimSince)
+    .select("id");
+
+  if (reclaimError) {
+    // The sweep is auxiliary recovery — log loudly but never fail the
+    // clustering run over it; the next 2h run retries the sweep.
+    context.log.error(JSON.stringify({
+      event: "stale_processing_reclaim_error",
+      error: reclaimError.message,
+    }));
+  } else if (reclaimedRows && reclaimedRows.length > 0) {
+    context.log(JSON.stringify({
+      event:       "stale_processing_reclaimed",
+      count:       reclaimedRows.length,
+      cluster_ids: reclaimedRows.map((r) => r.id),
+    }));
+  }
 
   // ── 1. Fetch unclustered DONE articles (Change 1 from design doc) ─────────
   // Strict filter: clustered_at IS NULL AND status = 'DONE'.
