@@ -379,8 +379,21 @@ export default async function articleClusterer(context, timer) {
     // ── 5. Synthesize-queue: enqueue eligible clusters ────────────────────────
     // 6.5: guard — skip if recently queued (within SYNTHESIS_COOLDOWN_H hours)
     // 6.6: write synthesis_queued_at to DB BEFORE sending to SB queue
+    //
+    // A CLEAN pre-existing cluster (not _isNew, not _dirty — no persist this
+    // run) is still re-enqueueable once its synthesis cooldown lapses. This is
+    // the recovery path for clusters whose synthesize message was lost or
+    // consumed by a failed synthesis (send failure per the comment below, or a
+    // reclaimed wedge victim from the 2026-07-23 incident). Gating enqueue on
+    // `persisted` alone silently stranded any such cluster that gained no new
+    // articles: never dirty → never persisted → never re-enqueued, despite the
+    // "next run will re-enqueue after 4h" contract stated below. The DB row
+    // already exists with status PENDING and `score` is computed fresh above,
+    // so eligibility reflects current recency. A dirty cluster whose persist
+    // FAILED stays excluded (persisted=false, _dirty=true) — its row is stale.
+    const requeueableClean = !cluster._isNew && !cluster._dirty;
     if (
-      persisted &&
+      (persisted || requeueableClean) &&
       persistedId !== null &&
       score >= ELIGIBLE_SCORE &&
       cluster.article_ids.length    >= MIN_ARTICLE_COUNT &&
