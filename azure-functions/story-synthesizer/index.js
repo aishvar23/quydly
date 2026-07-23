@@ -942,6 +942,33 @@ export function tolerantEntityOverlap(clusterEntities, storyEntities) {
   return { overlap, specificShared };
 }
 
+// ── Claim release (wedge prevention) ─────────────────────────────────────────
+// Release a held PROCESSING claim back to PENDING so the SB redelivery (or the
+// clusterer's stale-claim sweep) can genuinely retry the cluster. Without this,
+// a post-claim throw wedges the cluster permanently: the redelivery arrives
+// within PROCESSING_LEASE_MS, reads "fresh sibling running", and COMPLETES the
+// message — the retry budget is consumed by no-ops and the clusterer never
+// re-enqueues non-PENDING rows (root cause of the 2026-07-23 outage: every
+// cluster enqueued after 12:00 UTC was lost while Anthropic calls were
+// failing). Conditional on status=PROCESSING so we only undo our own claim and
+// can never stomp a concurrent invocation's terminal PROCESSED write. Never
+// throws — callers are already on an error path and must rethrow THEIR error;
+// a failed release is logged and left to the clusterer sweep to recover.
+async function releaseClaim(supabase, context, cluster_id) {
+  try {
+    const { error } = await supabase
+      .from("clusters")
+      .update({ status: "PENDING", updated_at: new Date().toISOString() })
+      .eq("id", cluster_id)
+      .eq("status", "PROCESSING");
+    if (error) {
+      context.log.error(JSON.stringify({ event: "claim_release_failed", cluster_id, error: error.message }));
+    }
+  } catch (err) {
+    context.log.error(JSON.stringify({ event: "claim_release_failed", cluster_id, error: err.message }));
+  }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 //
 // Exported as `run` (the name function.json points to via entryPoint) AND
@@ -1084,7 +1111,12 @@ export async function run(context, message) {
   }
 
   if (lastErr) {
-    // All retries exhausted — throw so SB retries (up to maxDeliveryCount=3)
+    // All retries exhausted — release the claim FIRST, then throw so SB
+    // retries (up to maxDeliveryCount=3). Mirrors the artErr reset above:
+    // with the row back in PENDING the redelivery re-claims and retries for
+    // real instead of bailing inside the lease window and completing the
+    // message (which permanently wedged the cluster — 2026-07-23 incident).
+    await releaseClaim(supabase, context, cluster_id);
     throw lastErr;
   }
 
@@ -1276,8 +1308,16 @@ export async function run(context, message) {
   }));
 
   // River model: find or create story — Step 2 of processing contract
-  const riverCutoff   = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
-  const existingStory = await findExistingStory(supabase, cluster, riverCutoff);
+  // River-lookup query errors are retryable transients — release the claim
+  // before propagating so the SB redelivery can re-claim (wedge prevention).
+  const riverCutoff = new Date(Date.now() - RIVER_WINDOW_MS).toISOString();
+  let existingStory;
+  try {
+    existingStory = await findExistingStory(supabase, cluster, riverCutoff);
+  } catch (err) {
+    await releaseClaim(supabase, context, cluster_id);
+    throw err;
+  }
 
   // P2-2: find ≤ 3 prior related stories in same category sharing ≥ 2
   // entities. Computed against cleanedEntities (post-P3-5 proper-cased
@@ -1423,7 +1463,12 @@ export async function run(context, message) {
       })
       .eq("id", existingStory.id);
 
-    if (updateErr) throw new Error(`story update: ${updateErr.message}`);
+    if (updateErr) {
+      // Retryable DB failure — release the claim so SB redelivery can retry
+      // instead of wedging the cluster in PROCESSING (see releaseClaim).
+      await releaseClaim(supabase, context, cluster_id);
+      throw new Error(`story update: ${updateErr.message}`);
+    }
 
     story_id = existingStory.id;
     context.log(JSON.stringify({ event: "story_merged", cluster_id, story_id, story_score, disposition, global_significance_score: globalSignificanceScore }));
@@ -1516,7 +1561,12 @@ export async function run(context, message) {
       .select("id")
       .single();
 
-    if (insertErr) throw new Error(`story insert: ${insertErr.message}`);
+    if (insertErr) {
+      // Retryable DB failure — release the claim so SB redelivery can retry
+      // instead of wedging the cluster in PROCESSING (see releaseClaim).
+      await releaseClaim(supabase, context, cluster_id);
+      throw new Error(`story insert: ${insertErr.message}`);
+    }
 
     story_id = inserted.id;
     context.log(JSON.stringify({ event: "story_written", cluster_id, story_id, story_score, disposition, global_significance_score: globalSignificanceScore }));
