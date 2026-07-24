@@ -14,6 +14,7 @@ import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 import { notifyCoverHeldForReview } from "./review-notify.js";
+import { parseJSONFromLLM } from "./mcq.js";
 
 // A carousel cover with no real photo and no editorial illustration — only a
 // contained logo/flag ("logo") or the bare gradient ("none") — is too weak to
@@ -45,10 +46,9 @@ async function generateWithClaude(anthropic, platform, story, audienceGeo) {
     messages: [{ role: "user", content: platform.buildPrompt(story, audienceGeo) }],
   });
 
-  let raw = String(msg?.content?.[0]?.text || "").trim();
-  raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-
-  const parsed = JSON.parse(raw);
+  // Tolerant parse (shared with the MCQ/engagement sites): survives the model
+  // wrapping the JSON in prose or appending text after it (seen live 2026-07-24).
+  const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
   const text = parsed && parsed.post_text;
   if (!text || typeof text !== "string") {
     throw new Error("Claude response missing post_text");
@@ -69,10 +69,7 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
       messages: [{ role: "user", content: platform.buildWhyItMattersPrompt(story) }],
     });
 
-    let raw = String(msg?.content?.[0]?.text || "").trim();
-    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-
-    const parsed = JSON.parse(raw);
+    const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
     const points = Array.isArray(parsed?.points) ? parsed.points : [];
     return points
       .map((p) => (typeof p === "string" ? p.trim() : ""))
@@ -104,10 +101,7 @@ async function generateCoverHook(anthropic, platform, story, logger) {
       messages: [{ role: "user", content: platform.buildHookPrompt(story) }],
     });
 
-    let raw = String(msg?.content?.[0]?.text || "").trim();
-    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-
-    const parsed = JSON.parse(raw);
+    const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
     const hook = typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
     const highlight = typeof parsed?.highlight === "string" ? parsed.highlight.trim() : "";
 
