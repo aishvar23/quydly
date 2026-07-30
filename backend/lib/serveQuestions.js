@@ -145,10 +145,15 @@ export async function resolveQuestions({ audience, category, token, redis, supab
     // always has a non-empty quiz_questions, so count==0 means cold start, not
     // caught up.)
     if (!category) {
+      // Count only ACTIVE-category rows: an audience whose backlog is entirely
+      // retired-category rows is still a cold start (the filtered RPC above can
+      // never serve those rows), so it must not mask the daily_questions
+      // fallback and strand users on a false "all caught up".
       const { count, error: cntErr } = await supabase
         .from("quiz_questions")
         .select("id", { count: "exact", head: true })
-        .eq("audience", audience);
+        .eq("audience", audience)
+        .in("category_id", ACTIVE_CATEGORY_IDS);
       if (!cntErr && (count ?? 0) === 0) {
         const { questions: pool, generatedAt = null, source } =
           await getAllQuestions(date, audience, redis, supabase);
