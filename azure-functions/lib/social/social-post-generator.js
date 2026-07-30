@@ -9,6 +9,7 @@
 //
 // No external social API calls happen here — drafts are review-first.
 
+import FLAGS from "../flags.js";
 import { PLATFORM_MODULES, requiresMedia, platformEnabled } from "./platforms/index.js";
 import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
@@ -302,6 +303,23 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
 
   if (storyErr) throw new Error(`[social-post-generator] fetch story: ${storyErr.message}`);
   if (!story) throw new Error(`[social-post-generator] story not found: ${candidate.story_id}`);
+
+  // Excluded categories (FLAGS.social.excludeCategories, e.g. culture retired
+  // 2026-07-30) are gated at the selector, but a candidate created BEFORE the
+  // exclusion shipped is already in flight and reaches this point — reject it
+  // terminally so it can never produce drafts. A rejection-write failure still
+  // skips generation this run (fail closed for excluded content).
+  if ((FLAGS.social.excludeCategories ?? []).includes(story.category_id)) {
+    const { error: rejErr } = await supabase
+      .from("social_publication_candidates")
+      .update({ status: "REJECTED", reviewer_notes: `category "${story.category_id}" excluded`, updated_at: new Date().toISOString() })
+      .eq("id", candidate.id);
+    if (rejErr) {
+      logger.warn(JSON.stringify({ event: "social_generate_reject_write_failed", candidate_id: candidate.id, error: rejErr.message }));
+    }
+    logger(JSON.stringify({ event: "social_generate_excluded_category", candidate_id: candidate.id, category: story.category_id }));
+    return { created: 0, skipped: 0 };
+  }
 
   // Phase 5 + L4: a candidate the selector marked AUTO_APPROVED produces drafts
   // that skip human review. Instagram auto-approves ONLY once it has a media
