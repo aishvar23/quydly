@@ -396,6 +396,7 @@ export default function App() {
     setSkipped(false);
     setWager(25);
     setResults([]);
+    setEndRank(null);
     setScreen("quiz");
   };
 
@@ -603,18 +604,19 @@ export default function App() {
   // Switch beat straight from the end screen and start a fresh run. Answers on
   // the way to a caught-up end screen are already checkpointed (handleNext
   // banks the page before fetching; handleStart arrives with results empty),
-  // so no submit is needed here — just clear the shown summary and refetch.
+  // so no submit is needed here. The shown summary (`results`/`endRank`) is
+  // NOT cleared up front: if the target beat is ALSO caught up (or the fetch
+  // fails), the player keeps their completed round's score and share grid —
+  // loadRun clears them only once a new run actually starts.
   // Takes the category explicitly (not from state) since setSelectedCategory
-  // hasn't applied yet within this closure. If the target beat is ALSO caught
-  // up, we land back on the same screen with the new chip active — never
-  // stranded, the picker stays available.
+  // hasn't applied yet within this closure. On a double-caught-up we land back
+  // on the same screen with the new chip active — never stranded, the picker
+  // stays available.
   const handleCaughtUpSwitch = async (rawCategory) => {
     const next = rawCategory ?? null;
     if (navigating.current) return;
     navigating.current = true;
     setSelectedCategory(next);
-    setResults([]);
-    setEndRank(null);
     setLoadError(null);
     setScreen("loading");
     try {
