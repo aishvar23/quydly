@@ -13,7 +13,7 @@
 //     back across days until none remain → { allCaughtUp: true }. Optional
 //     single-category (beat) filter.
 
-import { CATEGORIES, SESSION_SIZE } from "../../config/categories.js";
+import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE } from "../../config/categories.js";
 import { quizDay } from "./quizDay.js";
 import { questionsKey } from "./cacheKeys.js";
 
@@ -22,7 +22,15 @@ import { questionsKey } from "./cacheKeys.js";
 // fetches the next page excluding what was just attempted.
 const SIGNED_IN_PAGE_SIZE = 10;
 
-const VALID_CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
+// EDITORIAL_MIX is the single source of truth for category participation.
+// A retired category (e.g. culture, 2026-07-30) keeps its CATEGORIES entry for
+// rendering historical content but must not be servable: its historical
+// backlog is excluded from the all-beats run (p_active_categories below) and
+// ?category= requests for it normalize to null (all active beats).
+const ACTIVE_CATEGORY_IDS = CATEGORIES
+  .filter((c) => (EDITORIAL_MIX[c.id] ?? 0) > 0)
+  .map((c) => c.id);
+const VALID_CATEGORY_IDS = new Set(ACTIVE_CATEGORY_IDS);
 
 // quiz_questions row → the shape QuestionScreen consumes.
 function mapRow(r) {
@@ -114,11 +122,12 @@ export async function resolveQuestions({ audience, category, token, redis, supab
   // ── Signed-in: unbounded, multi-day, exclude-attempted ─────────────────────
   if (isSignedIn) {
     const { data, error } = await supabase.rpc("serve_unseen", {
-      p_user:     user.id,
-      p_audience: audience,
-      p_category: category ?? null,
-      p_today:    date,
-      p_limit:    SIGNED_IN_PAGE_SIZE,
+      p_user:              user.id,
+      p_audience:          audience,
+      p_category:          category ?? null,
+      p_today:             date,
+      p_limit:             SIGNED_IN_PAGE_SIZE,
+      p_active_categories: ACTIVE_CATEGORY_IDS,
     });
     if (error) throw new Error(`serve_unseen failed: ${error.message}`);
 
