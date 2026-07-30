@@ -95,7 +95,10 @@ const FLAGS = {
     // but the owner's category-mix target (2026-07-23: AI/Tech ≈40% of published
     // posts) is unreachable without it — `tech` alone yields ~1 eligible story
     // per fortnight. Re-add "ai" here if/when dedicated AI handles ship.
-    excludeCategories: [],
+    // "culture" retired 2026-07-30: residual stories inside the freshness
+    // window must not become candidates — the live decideCandidateStatus path
+    // bypasses the safeCategories allowlist, so this exclude is the only gate.
+    excludeCategories: ["culture"],
     maxCandidatesPerDayPerGeo: 24, // hard ceiling on new candidates per geo per day
     // Per-run drip: the selector runs hourly, so capping how many candidates a
     // single run creates per geo spreads the daily quota across the day instead
