@@ -58,19 +58,33 @@ function activeOnly(questions) {
 // Redis → daily_questions (today) → latest row at/before date → empty.
 // NEVER generates in the request path (generation runs only from the cron).
 export async function getAllQuestions(date, audience, redis, supabase) {
+  // A filtered pool smaller than one guest session (SESSION_SIZE) would burn
+  // the anonymous single-session-per-day cap on an undersized run, so each
+  // step only returns a pool that can fill a full session and otherwise falls
+  // through. The largest undersized pool seen is kept as a LAST RESORT —
+  // serving 4 questions on a degraded day still beats a false allCaughtUp.
+  let best = null;
+  const remember = (candidate) => {
+    if (!best || candidate.questions.length > best.questions.length) best = candidate;
+  };
+
   if (redis) {
     try {
       await redis.connect();
       const cached = await redis.get(questionsKey(date, audience));
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const active = activeOnly(parsed);
-          if (active.length > 0) return { questions: active, source: "redis" };
+        const active = Array.isArray(parsed) ? activeOnly(parsed) : [];
+        if (active.length >= SESSION_SIZE) return { questions: active, source: "redis" };
+        if (active.length > 0) {
+          // Undersized after filtering: the key still holds valid content, so
+          // keep it and look for a fuller pool below.
+          remember({ questions: active, generatedAt: null, source: "redis" });
+        } else {
+          // Empty or all-retired — unusable as a hot pool; drop the key and
+          // continue through the Supabase fallback chain like any cache miss.
+          await redis.del(questionsKey(date, audience));
         }
-        // Empty or all-retired — unusable as a hot pool; drop the key and
-        // continue through the Supabase fallback chain like any cache miss.
-        await redis.del(questionsKey(date, audience));
       }
     } catch {
       // Redis unavailable — fall through to Supabase.
@@ -90,10 +104,13 @@ export async function getAllQuestions(date, audience, redis, supabase) {
     if (error) throw new Error(`daily_questions lookup failed: ${error.message}`);
     if (data && Array.isArray(data.questions) && data.questions.length > 0) {
       const active = activeOnly(data.questions);
-      if (active.length > 0) {
+      if (active.length >= SESSION_SIZE) {
         return { questions: active, generatedAt: data.generated_at, source: "supabase" };
       }
-      // All-retired pool — fall through to the latest-row step.
+      if (active.length > 0) {
+        remember({ questions: active, generatedAt: data.generated_at, source: "supabase" });
+      }
+      // Undersized or all-retired — fall through to the latest-row step.
     }
   }
 
@@ -107,10 +124,21 @@ export async function getAllQuestions(date, audience, redis, supabase) {
   if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
   if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
     const active = activeOnly(latest.questions);
-    if (active.length > 0) {
+    if (active.length >= SESSION_SIZE) {
       console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
       return { questions: active, generatedAt: latest.generated_at, source: "supabase-latest" };
     }
+    if (active.length > 0) {
+      remember({ questions: active, generatedAt: latest.generated_at, source: "supabase-latest" });
+    }
+  }
+
+  if (best) {
+    console.warn(
+      `[GET /api/questions] no full-session pool at or before ${date} — ` +
+      `serving undersized (${best.questions.length}) from ${best.source}`,
+    );
+    return best;
   }
 
   console.error(`[GET /api/questions] no daily_questions rows at or before ${date}`);
