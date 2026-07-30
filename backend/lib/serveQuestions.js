@@ -121,7 +121,7 @@ export async function resolveQuestions({ audience, category, token, redis, supab
 
   // ── Signed-in: unbounded, multi-day, exclude-attempted ─────────────────────
   if (isSignedIn) {
-    const { data, error } = await supabase.rpc("serve_unseen", {
+    let { data, error } = await supabase.rpc("serve_unseen", {
       p_user:              user.id,
       p_audience:          audience,
       p_category:          category ?? null,
@@ -129,6 +129,25 @@ export async function resolveQuestions({ audience, category, token, redis, supab
       p_limit:             SIGNED_IN_PAGE_SIZE,
       p_active_categories: ACTIVE_CATEGORY_IDS,
     });
+    // Rollout compatibility: if the DB still has only the legacy 5-arg
+    // serve_unseen (migration_serve_active_categories.sql not applied — e.g. a
+    // fresh environment or a DB rollback), PostgREST answers PGRST202
+    // ("function not found in schema cache"). Retry the legacy shape ONLY on
+    // that exact code — any other failure must surface, not fall back — and
+    // warn loudly: the legacy call serves retired categories unfiltered.
+    if (error && error.code === "PGRST202") {
+      console.warn(
+        "[serveQuestions] 6-arg serve_unseen missing (PGRST202) — retrying legacy 5-arg call " +
+        "(retired categories UNFILTERED); apply backend/db/migration_serve_active_categories.sql",
+      );
+      ({ data, error } = await supabase.rpc("serve_unseen", {
+        p_user:     user.id,
+        p_audience: audience,
+        p_category: category ?? null,
+        p_today:    date,
+        p_limit:    SIGNED_IN_PAGE_SIZE,
+      }));
+    }
     if (error) throw new Error(`serve_unseen failed: ${error.message}`);
 
     const rows = data ?? [];

@@ -628,8 +628,11 @@ export default function App() {
       }
       loadRun(data);
     } catch {
-      setLoadError("Couldn't load questions. Check your connection and try again.");
-      setScreen("home");
+      // Transient fetch failure: stay on the end screen — it is the only
+      // screen rendering the completed round's summary, and the picker is
+      // still there to retry. beatNotice auto-clears via its effect.
+      setBeatNotice("Couldn't load that beat — check your connection and try again.");
+      setScreen("end");
     } finally {
       navigating.current = false;
     }
@@ -766,6 +769,7 @@ export default function App() {
           selectedCategory={selectedCategory}
           onSwitchBeat={handleCaughtUpSwitch}
           onBackHome={handleBackHome}
+          beatNotice={beatNotice}
         />
       )}
 
