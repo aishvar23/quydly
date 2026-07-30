@@ -114,22 +114,26 @@ export async function getAllQuestions(date, audience, redis, supabase) {
     }
   }
 
-  const { data: latest, error: latestErr } = await supabase
+  // Scan the last few generations newest-first rather than LIMIT 1: the newest
+  // row can be the same undersized/all-retired row the step above rejected, so
+  // a single-row fetch would never reach an older playable pool. A week of
+  // rows is far beyond any realistic generation gap.
+  const { data: latestRows, error: latestErr } = await supabase
     .from("daily_questions")
     .select("questions, generated_at, date")
     .lte("date", date)
     .order("date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(7);
   if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
-  if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
-    const active = activeOnly(latest.questions);
+  for (const row of latestRows ?? []) {
+    if (!Array.isArray(row.questions) || row.questions.length === 0) continue;
+    const active = activeOnly(row.questions);
     if (active.length >= SESSION_SIZE) {
-      console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
-      return { questions: active, generatedAt: latest.generated_at, source: "supabase-latest" };
+      console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${row.date})`);
+      return { questions: active, generatedAt: row.generated_at, source: "supabase-latest" };
     }
     if (active.length > 0) {
-      remember({ questions: active, generatedAt: latest.generated_at, source: "supabase-latest" });
+      remember({ questions: active, generatedAt: row.generated_at, source: "supabase-latest" });
     }
   }
 
