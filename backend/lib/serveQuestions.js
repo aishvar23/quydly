@@ -44,6 +44,16 @@ function mapRow(r) {
   };
 }
 
+// Hot pools are cached jsonb generated at cron time: a pool generated BEFORE a
+// category retirement (or served via the latest-row fallback below) can still
+// contain retired-category questions, so every pool is filtered on read —
+// retirement takes effect immediately, not at the next successful generation.
+function activeOnly(questions) {
+  return Array.isArray(questions)
+    ? questions.filter((q) => VALID_CATEGORY_IDS.has(q.categoryId))
+    : [];
+}
+
 // Resolve the hot daily pool for the anonymous fast path:
 // Redis → daily_questions (today) → latest row at/before date → empty.
 // NEVER generates in the request path (generation runs only from the cron).
@@ -54,7 +64,7 @@ export async function getAllQuestions(date, audience, redis, supabase) {
       const cached = await redis.get(questionsKey(date, audience));
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return { questions: parsed, source: "redis" };
+        if (Array.isArray(parsed) && parsed.length > 0) return { questions: activeOnly(parsed), source: "redis" };
         await redis.del(questionsKey(date, audience));
       }
     } catch {
@@ -74,7 +84,7 @@ export async function getAllQuestions(date, audience, redis, supabase) {
       .maybeSingle();
     if (error) throw new Error(`daily_questions lookup failed: ${error.message}`);
     if (data && Array.isArray(data.questions) && data.questions.length > 0) {
-      return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
+      return { questions: activeOnly(data.questions), generatedAt: data.generated_at, source: "supabase" };
     }
   }
 
@@ -88,7 +98,7 @@ export async function getAllQuestions(date, audience, redis, supabase) {
   if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
   if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
     console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
-    return { questions: latest.questions, generatedAt: latest.generated_at, source: "supabase-latest" };
+    return { questions: activeOnly(latest.questions), generatedAt: latest.generated_at, source: "supabase-latest" };
   }
 
   console.error(`[GET /api/questions] no daily_questions rows at or before ${date}`);
