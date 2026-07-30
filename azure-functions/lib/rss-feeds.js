@@ -94,13 +94,13 @@ const RSS_FEEDS = [
   { url: "https://www.thehindubusinessline.com/feeder/default.rss",       domain: "thehindubusinessline.com", category: "finance", authority_score: 0.6, source_country: "in", source_region: "south_asia", language: "en", is_global_source: false },
 
   // ── Culture ────────────────────────────────────────────────────────────────
-  { url: "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",  domain: "bbc.com",              category: "culture", authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
-  { url: "https://www.theguardian.com/culture/rss",                       domain: "theguardian.com",      category: "culture", authority_score: 0.8, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },
-  { url: "https://www.rollingstone.com/music/music-news/feed/",           domain: "rollingstone.com",     category: "culture", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
-  { url: "https://variety.com/feed/",                                     domain: "variety.com",          category: "culture", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
-  { url: "https://deadline.com/feed/",                                    domain: "deadline.com",         category: "culture", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
-  { url: "https://www.hollywoodreporter.com/feed/",                       domain: "hollywoodreporter.com",category: "culture", authority_score: 0.6, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
-  { url: "https://pitchfork.com/rss/news/",                               domain: "pitchfork.com",        category: "culture", authority_score: 0.4, source_country: "us", source_region: "north_america",  language: "en", is_global_source: false },
+  // RETIRED (owner decision 2026-07-30: "no one is interested in culture") — no
+  // culture feeds are ingested. The `culture` category id stays in
+  // config/categories.js (selectable: false) so historical questions still
+  // render. To revive the vertical, restore feeds here (previously: BBC
+  // entertainment_and_arts, Guardian /culture/rss, rollingstone.com,
+  // variety.com, deadline.com, hollywoodreporter.com, pitchfork.com) and
+  // re-add culture to EDITORIAL_MIX + the frontend picker.
 
   // ── Science ────────────────────────────────────────────────────────────────
   { url: "https://www.nature.com/nature.rss",                             domain: "nature.com",           category: "science", authority_score: 0.6, source_country: "gb", source_region: "western_europe", language: "en", is_global_source: true  },

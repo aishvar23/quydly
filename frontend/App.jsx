@@ -596,6 +596,51 @@ export default function App() {
     }
   };
 
+  // Escape hatches from the caught-up end screen — without these the player is
+  // stranded (the caught-up state hides "Play more?") and only a page reload
+  // gets them out.
+  //
+  // Switch beat straight from the end screen and start a fresh run. Answers on
+  // the way to a caught-up end screen are already checkpointed (handleNext
+  // banks the page before fetching; handleStart arrives with results empty),
+  // so no submit is needed here — just clear the shown summary and refetch.
+  // Takes the category explicitly (not from state) since setSelectedCategory
+  // hasn't applied yet within this closure. If the target beat is ALSO caught
+  // up, we land back on the same screen with the new chip active — never
+  // stranded, the picker stays available.
+  const handleCaughtUpSwitch = async (rawCategory) => {
+    const next = rawCategory ?? null;
+    if (navigating.current) return;
+    navigating.current = true;
+    setSelectedCategory(next);
+    setResults([]);
+    setEndRank(null);
+    setLoadError(null);
+    setScreen("loading");
+    try {
+      const data = await fetchQuestions(next);
+      if (data.allCaughtUp || !data.questions?.length) {
+        setAllCaughtUp(true);
+        setScreen("end");
+        return;
+      }
+      loadRun(data);
+    } catch {
+      setLoadError("Couldn't load questions. Check your connection and try again.");
+      setScreen("home");
+    } finally {
+      navigating.current = false;
+    }
+  };
+
+  // Back to Home from the caught-up end screen (Home has the beat picker too).
+  const handleBackHome = () => {
+    setResults([]);
+    setEndRank(null);
+    setAllCaughtUp(false);
+    setScreen("home");
+  };
+
   // Quit anytime → see results for what's been answered so far. Unlimited
   // (signed-in) only: anonymous users keep the fixed 5-question session, so
   // they must never early-finalize a completion via this path.
@@ -715,6 +760,10 @@ export default function App() {
             }
           }}
           allCaughtUp={allCaughtUp}
+          canChooseBeat={canChooseBeat}
+          selectedCategory={selectedCategory}
+          onSwitchBeat={handleCaughtUpSwitch}
+          onBackHome={handleBackHome}
         />
       )}
 

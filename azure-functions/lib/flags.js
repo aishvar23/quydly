@@ -69,6 +69,17 @@ const FLAGS = {
     // hasSpecificHighSignalEntity still applies, so a bare region overlap alone
     // never anchors a merge regardless of this count.
     minSharedEntities: { default: 3, ai: 2 },
+
+    // Per-category ceiling on synthesize-queue enqueues per UTC day
+    // (distinct clusters, counted via clusters.synthesis_queued_at). Categories
+    // not listed are unlimited; empty map = no caps (and the clusterer runs
+    // zero extra queries). Enforced in article-clusterer's enqueue gate: a
+    // capped cluster stays PENDING (no synthesis_queued_at write) and may
+    // enqueue on a later day while still inside the 36h River window.
+    // Generic mechanism, kept for future per-category throttling (e.g.
+    // { sports: 2 }). Culture no longer needs a cap — its feeds were removed
+    // outright from rss-feeds.js (owner decision 2026-07-30).
+    maxSynthesisEnqueuesPerDay: {},
   },
 
   // Social distribution pipeline thresholds (Phase 1+).
@@ -132,7 +143,8 @@ const FLAGS = {
       minStoryScore:  28,
       minUniqueDomains: 3,
       maxPerDay:       25, // anti-spam ceiling (was 3 when gated). Tune via SOCIAL_MAX_AUTO_PER_DAY.
-      safeCategories: ["science", "technology", "culture", "finance"],
+      // "culture" pruned 2026-07-30 — the vertical is retired (no feeds ingested).
+      safeCategories: ["science", "technology", "finance"],
     },
   },
 };
