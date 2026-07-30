@@ -11,6 +11,7 @@ const AUDIENCE_COUNTRY_CODE = { india: "in" };
 // filtered BEFORE pools are sized and counted, or residual rows can trip the
 // minRowsForAudienceFeed gate / occupy target slices with unusable stories.
 const inEditorialMix = (categoryId) => (EDITORIAL_MIX[categoryId] ?? 0) > 0;
+const ACTIVE_CATEGORY_IDS = Object.keys(EDITORIAL_MIX).filter(inEditorialMix);
 
 function buildSupabase() {
   return createClient(
@@ -50,20 +51,24 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
   const threshold     = audienceMix.globalSigThreshold;
   const countryCode   = AUDIENCE_COUNTRY_CODE[audience];
 
-  // Overfetch all audience-ranked rows so JS bucketing has enough to work with
+  // Overfetch all audience-ranked rows so JS bucketing has enough to work with.
+  // The active-category filter rides IN the query (inner join) so retired-
+  // category rows can't consume the limit window — same reasoning as Pool C.
   const { data: audRows, error: audErr } = await supabase
     .from("story_audiences")
     .select(
       "story_id, relevance_score, rank_bucket, rank_priority, " +
-      "stories(id, headline, summary, key_points, confidence_score, source_count, category_id, primary_geos, global_significance_score)"
+      "stories!inner(id, headline, summary, key_points, confidence_score, source_count, category_id, primary_geos, global_significance_score)"
     )
     .eq("audience_geo", audience)
+    .in("stories.category_id", ACTIVE_CATEGORY_IDS)
     .order("rank_priority", { ascending: true })
     .order("relevance_score", { ascending: false })
     .limit(300);
 
   if (audErr) throw new Error(`story_audiences fetch (${audience}): ${audErr.message}`);
 
+  // Query-level filter is authoritative; this re-check is defense-in-depth.
   const rows = (audRows ?? []).filter((r) => r.stories && inEditorialMix(r.stories.category_id));
 
   // Pool A: hero/standard + country in primary_geos
@@ -96,9 +101,13 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
   let poolC = [];
   if (globalOnlyTarget > 0) {
     const excludeIds = [...poolAIds, ...poolBIds];
+    // Category filter must be in the QUERY, not post-fetch: applied after
+    // .limit(), high-ranking retired-category rows would consume the limit
+    // window and starve Pool C while usable active stories sit beyond it.
     let query = supabase
       .from("stories")
       .select("id, headline, summary, category_id, global_significance_score")
+      .in("category_id", ACTIVE_CATEGORY_IDS)
       .gte("global_significance_score", threshold)
       .order("global_significance_score", { ascending: false })
       .limit(globalOnlyTarget + 20);
@@ -111,7 +120,7 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
     if (cErr) {
       console.warn(`[articleStore] Pool C fetch failed: ${cErr.message}`);
     } else {
-      poolC = (cRows ?? []).filter((s) => inEditorialMix(s.category_id)).map(storyToArticle);
+      poolC = (cRows ?? []).map(storyToArticle);
     }
   }
 
