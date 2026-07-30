@@ -164,10 +164,14 @@ export async function generateDaily(audience = "global", { silent = false } = {}
           ...poolC,
         ];
 
-        // Index stories by category for preferred-category picking
+        // Index stories by category for preferred-category picking.
+        // EDITORIAL_MIX gates participation here too: residual story_audiences
+        // rows for a retired category (e.g. culture) must not resurface via the
+        // exhausted-pool fallback below.
         const byCat     = {};
         const byCatIdx  = {};
         for (const s of geoStories) {
+          if ((EDITORIAL_MIX[s.category_id] ?? 0) <= 0) continue;
           (byCat[s.category_id] = byCat[s.category_id] ?? []).push(s);
         }
         for (const catId of Object.keys(byCat)) byCatIdx[catId] = 0;
