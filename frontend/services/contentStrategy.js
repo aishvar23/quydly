@@ -36,7 +36,7 @@ const CustomStrategy = (weights) => ({
 export function getActiveStrategy() {
   switch (FLAGS.activeStrategy) {
     case "beat":   return BeatStrategy("tech");
-    case "custom": return CustomStrategy({ world: 1, tech: 2, finance: 1, culture: 1 });
+    case "custom": return CustomStrategy({ world: 1, tech: 2, finance: 1, science: 1 });
     default:       return EditorialStrategy;
   }
 }

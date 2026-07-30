@@ -69,6 +69,17 @@ const FLAGS = {
     // hasSpecificHighSignalEntity still applies, so a bare region overlap alone
     // never anchors a merge regardless of this count.
     minSharedEntities: { default: 3, ai: 2 },
+
+    // Per-category ceiling on synthesize-queue enqueues per UTC day
+    // (distinct clusters, counted via clusters.synthesis_queued_at). Categories
+    // not listed are unlimited; empty map = no caps (and the clusterer runs
+    // zero extra queries). Enforced in article-clusterer's enqueue gate: a
+    // capped cluster stays PENDING (no synthesis_queued_at write) and may
+    // enqueue on a later day while still inside the 36h River window.
+    // Generic mechanism, kept for future per-category throttling (e.g.
+    // { sports: 2 }). Culture no longer needs a cap — its feeds were removed
+    // outright from rss-feeds.js (owner decision 2026-07-30).
+    maxSynthesisEnqueuesPerDay: {},
   },
 
   // Social distribution pipeline thresholds (Phase 1+).
@@ -84,7 +95,10 @@ const FLAGS = {
     // but the owner's category-mix target (2026-07-23: AI/Tech ≈40% of published
     // posts) is unreachable without it — `tech` alone yields ~1 eligible story
     // per fortnight. Re-add "ai" here if/when dedicated AI handles ship.
-    excludeCategories: [],
+    // "culture" retired 2026-07-30: residual stories inside the freshness
+    // window must not become candidates — the live decideCandidateStatus path
+    // bypasses the safeCategories allowlist, so this exclude is the only gate.
+    excludeCategories: ["culture"],
     maxCandidatesPerDayPerGeo: 24, // hard ceiling on new candidates per geo per day
     // Per-run drip: the selector runs hourly, so capping how many candidates a
     // single run creates per geo spreads the daily quota across the day instead
@@ -132,7 +146,8 @@ const FLAGS = {
       minStoryScore:  28,
       minUniqueDomains: 3,
       maxPerDay:       25, // anti-spam ceiling (was 3 when gated). Tune via SOCIAL_MAX_AUTO_PER_DAY.
-      safeCategories: ["science", "technology", "culture", "finance"],
+      // "culture" pruned 2026-07-30 — the vertical is retired (no feeds ingested).
+      safeCategories: ["science", "technology", "finance"],
     },
   },
 };

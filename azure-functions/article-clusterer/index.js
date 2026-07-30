@@ -277,8 +277,42 @@ export default async function articleClusterer(context, timer) {
   let clusters_below_quality  = 0;
   let clusters_persist_failed = 0;
   let clusters_eligible       = 0;
+  let clusters_capped         = 0;
 
   const synthesizeCooldownCutoff = new Date(Date.now() - SYNTHESIS_COOLDOWN_H * 60 * 60 * 1000).toISOString();
+
+  // Per-category daily enqueue cap (FLAGS.clustering.maxSynthesisEnqueuesPerDay,
+  // e.g. culture: 1). The cap bounds DISTINCT clusters stamped per UTC day —
+  // exactly what this seed query counts. A re-enqueue of a cluster already
+  // stamped today updates the same row (same story refreshed after cooldown),
+  // so it occupies its existing slot rather than consuming a new one; the gate
+  // below mirrors that so in-run accounting and the next timer run's seed
+  // count agree. A count-query failure fails OPEN for that category — logged
+  // loudly so it surfaces — since failing closed would silently freeze the
+  // category on transient DB errors.
+  const dailyEnqueueCap = FLAGS.clustering.maxSynthesisEnqueuesPerDay ?? {};
+  const enqueuedToday   = {}; // category_id → count (null = count unknown, cap not enforced this run)
+  const utcDayStart = new Date();
+  utcDayStart.setUTCHours(0, 0, 0, 0);
+  const utcDayStartIso = utcDayStart.toISOString();
+  for (const catId of Object.keys(dailyEnqueueCap)) {
+    const { count, error: capErr } = await supabase
+      .from("clusters")
+      .select("id", { count: "exact", head: true })
+      .eq("category_id", catId)
+      .gte("synthesis_queued_at", utcDayStartIso);
+
+    if (capErr) {
+      context.log.error(JSON.stringify({
+        event:    "synthesis_daily_cap_count_error",
+        category: catId,
+        error:    capErr.message,
+      }));
+      enqueuedToday[catId] = null;
+    } else {
+      enqueuedToday[catId] = count ?? 0;
+    }
+  }
 
   for (const cluster of workingSet) {
     const score = computeClusterScore(cluster);
@@ -406,6 +440,28 @@ export default async function articleClusterer(context, timer) {
         cluster.synthesis_queued_at > synthesizeCooldownCutoff;
 
       if (!recentlyQueued) {
+        // Per-category daily cap: at/over the ceiling, skip the enqueue WITHOUT
+        // touching synthesis_queued_at — the cluster stays PENDING and remains
+        // re-enqueueable on a later day while inside the 36h River window.
+        const cap        = dailyEnqueueCap[cluster.category_id];
+        const usedToday  = enqueuedToday[cluster.category_id];
+        // A cluster already stamped earlier today is a re-enqueue of the same
+        // story: it occupies the slot the seed query already counted, so it
+        // bypasses the ceiling and must not consume another slot below.
+        const alreadyCountedToday =
+          cluster.synthesis_queued_at !== null &&
+          cluster.synthesis_queued_at >= utcDayStartIso;
+        if (cap != null && usedToday != null && !alreadyCountedToday && usedToday >= cap) {
+          clusters_capped++;
+          context.log(JSON.stringify({
+            event:      "synthesis_daily_cap_reached",
+            cluster_id: persistedId,
+            category:   cluster.category_id,
+            cap,
+          }));
+          continue;
+        }
+
         // Step a: write synthesis_queued_at BEFORE queue send
         const { error: sqErr } = await supabase
           .from("clusters")
@@ -420,6 +476,18 @@ export default async function articleClusterer(context, timer) {
           }));
           // If DB write fails, skip the queue send — next run will retry
           continue;
+        }
+
+        // The row is now stamped synthesis_queued_at=today, which is exactly
+        // what the daily-cap seed query counts — consume a cap slot so a second
+        // same-category cluster in this run is capped too. (Counted even if the
+        // SB send below fails: the stamp is what tomorrow's seed query sees.)
+        // A re-stamp of a cluster already counted today consumes nothing — the
+        // seed count already includes its row.
+        if (!alreadyCountedToday &&
+            dailyEnqueueCap[cluster.category_id] != null &&
+            enqueuedToday[cluster.category_id] != null) {
+          enqueuedToday[cluster.category_id]++;
         }
 
         // Step b: send to synthesize-queue
@@ -454,6 +522,7 @@ export default async function articleClusterer(context, timer) {
     clusters_below_quality,
     clusters_persist_failed,
     clusters_eligible,
+    clusters_capped,
   };
 
   context.log(JSON.stringify({ event: "clustering_complete", ...summary }));
