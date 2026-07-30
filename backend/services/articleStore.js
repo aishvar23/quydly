@@ -2,8 +2,15 @@
 // Queries raw_articles for verified, recent, high-quality articles by category.
 
 import { createClient } from "@supabase/supabase-js";
+import { EDITORIAL_MIX } from "../../config/categories.js";
 
 const AUDIENCE_COUNTRY_CODE = { india: "in" };
+
+// EDITORIAL_MIX is the single source of truth for category participation: a
+// category absent from the mix (e.g. culture, retired 2026-07-30) must be
+// filtered BEFORE pools are sized and counted, or residual rows can trip the
+// minRowsForAudienceFeed gate / occupy target slices with unusable stories.
+const inEditorialMix = (categoryId) => (EDITORIAL_MIX[categoryId] ?? 0) > 0;
 
 function buildSupabase() {
   return createClient(
@@ -57,7 +64,7 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
 
   if (audErr) throw new Error(`story_audiences fetch (${audience}): ${audErr.message}`);
 
-  const rows = (audRows ?? []).filter((r) => r.stories);
+  const rows = (audRows ?? []).filter((r) => r.stories && inEditorialMix(r.stories.category_id));
 
   // Pool A: hero/standard + country in primary_geos
   const poolA = rows
@@ -104,7 +111,7 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
     if (cErr) {
       console.warn(`[articleStore] Pool C fetch failed: ${cErr.message}`);
     } else {
-      poolC = (cRows ?? []).map(storyToArticle);
+      poolC = (cRows ?? []).filter((s) => inEditorialMix(s.category_id)).map(storyToArticle);
     }
   }
 
