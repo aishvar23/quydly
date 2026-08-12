@@ -150,8 +150,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // slots (null where a scene/image/upload failed). Best-effort: the renderer
   // falls back to the brand-graphic floor for any null slot. Memoised so the
   // expensive generation runs at most once per (story, count).
-  async function buildIllustrations({ story, anthropic, count }) {
-    const results = await generateIllustrations({ anthropic, openaiKey, story, count, logger });
+  async function buildIllustrations({ story, anthropic, count, hook }) {
+    const results = await generateIllustrations({ anthropic, openaiKey, story, count, hook, logger });
     return Promise.all(results.map(async (r, i) => {
       if (!r) return null;
       try {
@@ -166,11 +166,11 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   return {
     // Returns an array of up to `count` illustration URLs (null per failed slot),
     // or [] when disabled / no client / generation fails.
-    async getIllustrationUrls({ story, anthropic, count = 1 } = {}) {
+    async getIllustrationUrls({ story, anthropic, count = 1, hook = "" } = {}) {
       if (!igIllustration || !anthropic || !story || story.id == null || count < 1) return [];
       const key = `${story.id}:illustrations:${count}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildIllustrations({ story, anthropic, count }).catch((err) => {
+      const p = buildIllustrations({ story, anthropic, count, hook }).catch((err) => {
         logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
         return [];
       });

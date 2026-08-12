@@ -186,7 +186,9 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         const { plannedIllustrationCount } = await import("./card-renderer.js");
         const gaps = plannedIllustrationCount(story, { whyItMatters });
         if (gaps > 0) {
-          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: gaps });
+          // Key the illustrations off the cover hook (the swipe-earning angle),
+          // so the generated slide art echoes the cover copy.
+          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: gaps, hook: coverHook });
         }
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the

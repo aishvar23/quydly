@@ -29,11 +29,16 @@ RULES
 
 Respond ONLY with JSON, no markdown: { "scene": "..." }`;
 
-export function buildConceptPrompt(story) {
-  const facts = keyPointStrings(story).slice(0, 3).map((k) => `- ${k}`).join("\n") || "(none)";
-  return `Headline: ${story?.headline}
+// Key the scene off the story's SPINE — the cover HOOK (the swipe-earning angle
+// the cover promises) plus the headline + summary — rather than the first three
+// key points. The hook is what the imagery should echo, so the cover art matches
+// the cover copy; a couple of key points stay only as thin supporting context.
+export function buildConceptPrompt(story, hook = "") {
+  const facts = keyPointStrings(story).slice(0, 2).map((k) => `- ${k}`).join("\n") || "(none)";
+  const hookLine = hook ? `Cover hook (the angle to echo): ${hook}\n` : "";
+  return `${hookLine}Headline: ${story?.headline}
 Summary: ${story?.summary}
-Key points:
+Supporting context:
 ${facts}
 
 Write the scene now.`;
@@ -44,12 +49,12 @@ export function buildImagePrompt(scene) {
   return `Flat modern editorial vector illustration. Bold simple geometric shapes, clean lines, a limited palette over a deep navy (#0B0F1A) background, soft depth and a subtle grain. Generic anonymous stylized figures only — NO real or recognizable faces, NO text or letters, NO brand logos. Scene: ${scene}`;
 }
 
-async function writeScene({ anthropic, story, logger }) {
+async function writeScene({ anthropic, story, hook = "", logger }) {
   try {
     const msg = await anthropic.messages.create({
       model: CONCEPT_MODEL, max_tokens: 160,
       system: ILLUSTRATION_CONCEPT_SYSTEM,
-      messages: [{ role: "user", content: buildConceptPrompt(story) }],
+      messages: [{ role: "user", content: buildConceptPrompt(story, hook) }],
     });
     logLlmUsage(logger, "social.illustration_scene", msg, { story_id: story?.id });
     const scene = parseJSONFromLLM(msg?.content?.[0]?.text)?.scene;
@@ -61,12 +66,14 @@ async function writeScene({ anthropic, story, logger }) {
 }
 
 // Call OpenAI gpt-image-1 → PNG Buffer (or null). gpt-image-1 returns base64.
+// MEDIUM quality: the illustration always sits BEHIND the slide scrim (detail is
+// hidden), so medium is materially cheaper for no visible loss vs high.
 async function renderImage({ openaiKey, prompt, fetchImpl = fetch, logger }) {
   try {
     const res = await fetchImpl(OPENAI_IMAGE_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size: IMAGE_SIZE, quality: "high" }),
+      body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size: IMAGE_SIZE, quality: "medium" }),
     });
     if (!res.ok) {
       logger?.warn?.(JSON.stringify({ event: "illustration_image_http", status: res.status }));
@@ -84,9 +91,9 @@ async function renderImage({ openaiKey, prompt, fetchImpl = fetch, logger }) {
 
 // Generate a story illustration → { buffer (PNG), contentType, scene } or null.
 // Best-effort and additive: any missing input or failure returns null.
-export async function generateIllustration({ anthropic, openaiKey, story, fetchImpl, logger } = {}) {
+export async function generateIllustration({ anthropic, openaiKey, story, hook = "", fetchImpl, logger } = {}) {
   if (!anthropic || !openaiKey || !story) return null;
-  const scene = await writeScene({ anthropic, story, logger });
+  const scene = await writeScene({ anthropic, story, hook, logger });
   if (!scene) return null;
   const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });
   if (!buffer) return null;
@@ -105,23 +112,24 @@ RULES (apply to EVERY scene)
 
 Respond ONLY with JSON, no markdown: { "scenes": ["...", "..."] }`;
 
-export function buildScenesPrompt(story, count) {
-  const facts = keyPointStrings(story).slice(0, 3).map((k) => `- ${k}`).join("\n") || "(none)";
-  return `Produce exactly ${count} distinct scenes.
-Headline: ${story?.headline}
+export function buildScenesPrompt(story, count, hook = "") {
+  const facts = keyPointStrings(story).slice(0, 2).map((k) => `- ${k}`).join("\n") || "(none)";
+  const hookLine = hook ? `Cover hook (slide 1's angle — the FIRST scene should echo it): ${hook}\n` : "";
+  return `Produce exactly ${count} distinct scenes, one per carousel slide in order.
+${hookLine}Headline: ${story?.headline}
 Summary: ${story?.summary}
-Key points:
+Supporting context:
 ${facts}
 
 Write the ${count} scenes now.`;
 }
 
-async function writeScenes({ anthropic, story, count, logger }) {
+async function writeScenes({ anthropic, story, count, hook = "", logger }) {
   try {
     const msg = await anthropic.messages.create({
       model: CONCEPT_MODEL, max_tokens: 80 + count * 60,
       system: ILLUSTRATION_SCENES_SYSTEM,
-      messages: [{ role: "user", content: buildScenesPrompt(story, count) }],
+      messages: [{ role: "user", content: buildScenesPrompt(story, count, hook) }],
     });
     logLlmUsage(logger, "social.illustration_scenes", msg, { story_id: story?.id, scene_count: count });
     const scenes = parseJSONFromLLM(msg?.content?.[0]?.text)?.scenes;
@@ -136,9 +144,9 @@ async function writeScenes({ anthropic, story, count, logger }) {
 // each { buffer, contentType, scene } or null (a per-image failure doesn't sink
 // the others). Returns [] when disabled or the scene write fails. Images render
 // in parallel.
-export async function generateIllustrations({ anthropic, openaiKey, story, count = 1, fetchImpl, logger } = {}) {
+export async function generateIllustrations({ anthropic, openaiKey, story, count = 1, hook = "", fetchImpl, logger } = {}) {
   if (!anthropic || !openaiKey || !story || count < 1) return [];
-  const scenes = (await writeScenes({ anthropic, story, count, logger })).slice(0, count);
+  const scenes = (await writeScenes({ anthropic, story, count, hook, logger })).slice(0, count);
   if (!scenes.length) return [];
   return Promise.all(scenes.map(async (scene) => {
     const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });
