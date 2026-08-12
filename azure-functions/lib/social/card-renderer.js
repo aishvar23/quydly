@@ -447,16 +447,24 @@ function entityImages(story) {
 //   coverFallbackSpec — the lead org/place image RESERVED as the cover's last
 //                       resort (only when no person cover), or null;
 //   bodyKinds         — the non-cover content kinds present;
+//   photoBodyKinds    — the body kinds ELIGIBLE for a current-story entity photo
+//                       (bodyKinds minus "engagement"); bodySpecs align to these;
 //   bodySpecs         — the entity images for the body slides, with the reserved
 //                       cover entity held back so it never appears on both.
+//
+// The engagement slide is excluded from entity photos: its MCQ is drawn from a
+// DIFFERENT (previous) story, so a current-story entity photo would visually
+// assert an entity unrelated to the question. It keeps the neutral gradient floor
+// (it is not sized an illustration either — see plannedIllustrationCount).
 function planEntityImagery(story, contentKinds) {
   const hasCover = contentKinds.includes("cover");
   const coverSpec = hasCover ? leadPersonImage(story) : null;
   const coverFallbackSpec = (hasCover && !coverSpec) ? leadOrgPlaceImage(story) : null;
   const reservedName = coverSpec?.name || coverFallbackSpec?.name;
   const bodyKinds = contentKinds.filter((k) => k !== "cover");
-  const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, bodyKinds.length);
-  return { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs };
+  const photoBodyKinds = bodyKinds.filter((k) => k !== "engagement");
+  const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, photoBodyKinds.length);
+  return { hasCover, coverSpec, coverFallbackSpec, bodyKinds, photoBodyKinds, bodySpecs };
 }
 
 // Canonical, ORDER-PRESERVING list of the news slide kinds that carry a full-bleed
@@ -1668,10 +1676,12 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
     // drift from this allocation. The cover photo is a lead PERSON only; the lead
     // org/place is reserved as the cover's last resort (Pass 3) and kept off the
     // body slides so the same logo never appears on both.
-    const { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
+    const { hasCover, coverSpec, coverFallbackSpec, photoBodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
     const specByKind = {};
     if (hasCover) specByKind.cover = coverSpec;
-    bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
+    // engagement is intentionally absent from photoBodyKinds (cross-story MCQ), so
+    // it never claims a current-story entity photo — it keeps the gradient floor.
+    photoBodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
 
     // Pass 1 — resolve the licensed photo for each slide (best-effort, parallel).
     const photoByKind = {};
