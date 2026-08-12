@@ -396,6 +396,7 @@ export default function App() {
     setSkipped(false);
     setWager(25);
     setResults([]);
+    setEndRank(null);
     setScreen("quiz");
   };
 
@@ -596,6 +597,55 @@ export default function App() {
     }
   };
 
+  // Escape hatches from the caught-up end screen — without these the player is
+  // stranded (the caught-up state hides "Play more?") and only a page reload
+  // gets them out.
+  //
+  // Switch beat straight from the end screen and start a fresh run. Answers on
+  // the way to a caught-up end screen are already checkpointed (handleNext
+  // banks the page before fetching; handleStart arrives with results empty),
+  // so no submit is needed here. The shown summary (`results`/`endRank`) is
+  // NOT cleared up front: if the target beat is ALSO caught up (or the fetch
+  // fails), the player keeps their completed round's score and share grid —
+  // loadRun clears them only once a new run actually starts.
+  // Takes the category explicitly (not from state) since setSelectedCategory
+  // hasn't applied yet within this closure. On a double-caught-up we land back
+  // on the same screen with the new chip active — never stranded, the picker
+  // stays available.
+  const handleCaughtUpSwitch = async (rawCategory) => {
+    const next = rawCategory ?? null;
+    if (navigating.current) return;
+    navigating.current = true;
+    setSelectedCategory(next);
+    setLoadError(null);
+    setScreen("loading");
+    try {
+      const data = await fetchQuestions(next);
+      if (data.allCaughtUp || !data.questions?.length) {
+        setAllCaughtUp(true);
+        setScreen("end");
+        return;
+      }
+      loadRun(data);
+    } catch {
+      // Transient fetch failure: stay on the end screen — it is the only
+      // screen rendering the completed round's summary, and the picker is
+      // still there to retry. beatNotice auto-clears via its effect.
+      setBeatNotice("Couldn't load that beat — check your connection and try again.");
+      setScreen("end");
+    } finally {
+      navigating.current = false;
+    }
+  };
+
+  // Back to Home from the caught-up end screen (Home has the beat picker too).
+  const handleBackHome = () => {
+    setResults([]);
+    setEndRank(null);
+    setAllCaughtUp(false);
+    setScreen("home");
+  };
+
   // Quit anytime → see results for what's been answered so far. Unlimited
   // (signed-in) only: anonymous users keep the fixed 5-question session, so
   // they must never early-finalize a completion via this path.
@@ -715,6 +765,11 @@ export default function App() {
             }
           }}
           allCaughtUp={allCaughtUp}
+          canChooseBeat={canChooseBeat}
+          selectedCategory={selectedCategory}
+          onSwitchBeat={handleCaughtUpSwitch}
+          onBackHome={handleBackHome}
+          beatNotice={beatNotice}
         />
       )}
 

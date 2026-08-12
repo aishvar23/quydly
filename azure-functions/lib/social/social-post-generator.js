@@ -9,11 +9,13 @@
 //
 // No external social API calls happen here — drafts are review-first.
 
-import { PLATFORM_MODULES, requiresMedia } from "./platforms/index.js";
+import FLAGS from "../flags.js";
+import { PLATFORM_MODULES, requiresMedia, platformEnabled } from "./platforms/index.js";
 import { validatePost, validateCoverHook } from "./social-validation.js";
 import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 import { notifyCoverHeldForReview } from "./review-notify.js";
+import { parseJSONFromLLM } from "./mcq.js";
 import { MODEL_EDITORIAL } from "../models.js";
 import { logLlmUsage } from "../llmUsage.js";
 
@@ -52,10 +54,9 @@ async function generateWithClaude(anthropic, platform, story, audienceGeo, logge
     platform: platform.PLATFORM, story_id: story?.id, audience_geo: audienceGeo,
   });
 
-  let raw = String(msg?.content?.[0]?.text || "").trim();
-  raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-
-  const parsed = JSON.parse(raw);
+  // Tolerant parse (shared with the MCQ/engagement sites): survives the model
+  // wrapping the JSON in prose or appending text after it (seen live 2026-07-24).
+  const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
   const text = parsed && parsed.post_text;
   if (!text || typeof text !== "string") {
     throw new Error("Claude response missing post_text");
@@ -79,10 +80,7 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
       platform: platform.PLATFORM, story_id: story?.id,
     });
 
-    let raw = String(msg?.content?.[0]?.text || "").trim();
-    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-
-    const parsed = JSON.parse(raw);
+    const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
     const points = Array.isArray(parsed?.points) ? parsed.points : [];
     return points
       .map((p) => (typeof p === "string" ? p.trim() : ""))
@@ -117,10 +115,7 @@ async function generateCoverHook(anthropic, platform, story, logger) {
       platform: platform.PLATFORM, story_id: story?.id,
     });
 
-    let raw = String(msg?.content?.[0]?.text || "").trim();
-    raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-
-    const parsed = JSON.parse(raw);
+    const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
     const hook = typeof parsed?.hook === "string" ? parsed.hook.trim() : "";
     const highlight = typeof parsed?.highlight === "string" ? parsed.highlight.trim() : "";
 
@@ -322,6 +317,23 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   if (storyErr) throw new Error(`[social-post-generator] fetch story: ${storyErr.message}`);
   if (!story) throw new Error(`[social-post-generator] story not found: ${candidate.story_id}`);
 
+  // Excluded categories (FLAGS.social.excludeCategories, e.g. culture retired
+  // 2026-07-30) are gated at the selector, but a candidate created BEFORE the
+  // exclusion shipped is already in flight and reaches this point — reject it
+  // terminally so it can never produce drafts. A rejection-write failure still
+  // skips generation this run (fail closed for excluded content).
+  if ((FLAGS.social.excludeCategories ?? []).includes(story.category_id)) {
+    const { error: rejErr } = await supabase
+      .from("social_publication_candidates")
+      .update({ status: "REJECTED", reviewer_notes: `category "${story.category_id}" excluded`, updated_at: new Date().toISOString() })
+      .eq("id", candidate.id);
+    if (rejErr) {
+      logger.warn(JSON.stringify({ event: "social_generate_reject_write_failed", candidate_id: candidate.id, error: rejErr.message }));
+    }
+    logger(JSON.stringify({ event: "social_generate_excluded_category", candidate_id: candidate.id, category: story.category_id }));
+    return { created: 0, skipped: 0 };
+  }
+
   // Phase 5 + L4: a candidate the selector marked AUTO_APPROVED produces drafts
   // that skip human review. Instagram auto-approves ONLY once it has a media
   // asset (its carousel slides / square card → post.mediaUrl is set). The earlier
@@ -353,6 +365,16 @@ export async function generateSocialPosts({ supabase, anthropic = null, cardServ
   const pendingNotifies = [];
 
   for (const platform of PLATFORMS) {
+    // Per-platform kill switch (SOCIAL_<P>_ENABLED=false — see platforms/index.js):
+    // generate NO draft for a disabled platform. Without this, auto-approved
+    // drafts would pile up APPROVED forever behind the publisher's matching gate
+    // and all fire in one burst on re-enable. Candidates are shared across
+    // platforms, so the remaining platforms' drafts still generate normally.
+    if (!platformEnabled(env, platform.PLATFORM)) {
+      logger(JSON.stringify({ event: "social_generate_platform_disabled", platform: platform.PLATFORM }));
+      continue;
+    }
+
     // Idempotency (§12.2): skip if a post already exists for this triple.
     const { data: existing, error: exErr } = await supabase
       .from("social_posts")

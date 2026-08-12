@@ -2,8 +2,16 @@
 // Queries raw_articles for verified, recent, high-quality articles by category.
 
 import { createClient } from "@supabase/supabase-js";
+import { EDITORIAL_MIX } from "../../config/categories.js";
 
 const AUDIENCE_COUNTRY_CODE = { india: "in" };
+
+// EDITORIAL_MIX is the single source of truth for category participation: a
+// category absent from the mix (e.g. culture, retired 2026-07-30) must be
+// filtered BEFORE pools are sized and counted, or residual rows can trip the
+// minRowsForAudienceFeed gate / occupy target slices with unusable stories.
+const inEditorialMix = (categoryId) => (EDITORIAL_MIX[categoryId] ?? 0) > 0;
+const ACTIVE_CATEGORY_IDS = Object.keys(EDITORIAL_MIX).filter(inEditorialMix);
 
 function buildSupabase() {
   return createClient(
@@ -43,21 +51,25 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
   const threshold     = audienceMix.globalSigThreshold;
   const countryCode   = AUDIENCE_COUNTRY_CODE[audience];
 
-  // Overfetch all audience-ranked rows so JS bucketing has enough to work with
+  // Overfetch all audience-ranked rows so JS bucketing has enough to work with.
+  // The active-category filter rides IN the query (inner join) so retired-
+  // category rows can't consume the limit window — same reasoning as Pool C.
   const { data: audRows, error: audErr } = await supabase
     .from("story_audiences")
     .select(
       "story_id, relevance_score, rank_bucket, rank_priority, " +
-      "stories(id, headline, summary, key_points, confidence_score, source_count, category_id, primary_geos, global_significance_score)"
+      "stories!inner(id, headline, summary, key_points, confidence_score, source_count, category_id, primary_geos, global_significance_score)"
     )
     .eq("audience_geo", audience)
+    .in("stories.category_id", ACTIVE_CATEGORY_IDS)
     .order("rank_priority", { ascending: true })
     .order("relevance_score", { ascending: false })
     .limit(300);
 
   if (audErr) throw new Error(`story_audiences fetch (${audience}): ${audErr.message}`);
 
-  const rows = (audRows ?? []).filter((r) => r.stories);
+  // Query-level filter is authoritative; this re-check is defense-in-depth.
+  const rows = (audRows ?? []).filter((r) => r.stories && inEditorialMix(r.stories.category_id));
 
   // Pool A: hero/standard + country in primary_geos
   const poolA = rows
@@ -89,9 +101,13 @@ export async function fetchAudienceStoryPools(audience, supabase, totalNeeded, m
   let poolC = [];
   if (globalOnlyTarget > 0) {
     const excludeIds = [...poolAIds, ...poolBIds];
+    // Category filter must be in the QUERY, not post-fetch: applied after
+    // .limit(), high-ranking retired-category rows would consume the limit
+    // window and starve Pool C while usable active stories sit beyond it.
     let query = supabase
       .from("stories")
       .select("id, headline, summary, category_id, global_significance_score")
+      .in("category_id", ACTIVE_CATEGORY_IDS)
       .gte("global_significance_score", threshold)
       .order("global_significance_score", { ascending: false })
       .limit(globalOnlyTarget + 20);
@@ -137,7 +153,14 @@ function storyToArticle(story) {
  * Fetch synthesized stories for a category (up to 10), sorted by story_score.
  * Returns [] (not throws) when no stories exist — caller falls back to fetchArticlePool.
  *
- * Only returns verified stories with confidence_score >= 6 updated within 24h.
+ * Only returns verified stories with confidence_score >= floor updated within 24h.
+ * The floor is per-category: 5 for `ai`, 6 for everything else. AI clusters are
+ * thin (2-domain, entity-poor) so the synthesis LLM honestly reports confidence 5
+ * even for substantive coverage; a default-6 floor here would make those stories
+ * quiz-invisible. This MUST stay in lockstep with the synthesis confidence gate
+ * (azure-functions/lib/flags.js → synthesis.confidence.ai = 5): the synth gate
+ * decides whether a story row is written, this filter decides whether it reaches
+ * the quiz — if they diverge you get either dead rows or starved categories.
  * 24h is intentional: quiz generation runs daily at 7AM and should pull only
  * stories synthesised in the previous cycle. Widen to 48h+ only if categories
  * routinely starve due to low pipeline throughput.
@@ -145,12 +168,14 @@ function storyToArticle(story) {
 export async function fetchStoryPool(category_id, limit = 10) {
   const supabase = buildSupabase();
 
+  const minConfidence = category_id === "ai" ? 5 : 6;
+
   const { data, error } = await supabase
     .from("stories")
     .select("id, headline, summary, key_points, confidence_score, source_count")
     .eq("category_id", category_id)
     .eq("quiz_candidate", true)
-    .gte("confidence_score", 6)
+    .gte("confidence_score", minConfidence)
     .gte("updated_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
     .order("quizability_score", { ascending: false })
     .order("story_score", { ascending: false })

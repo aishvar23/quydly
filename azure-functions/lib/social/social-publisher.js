@@ -15,7 +15,8 @@ import { publish as xPublish, publishReply as xPublishReply } from "./platforms/
 import { credsFromEnv as xCredsFromEnv } from "./x-oauth1.js";
 import { publish as igPublish, credsFromEnv as igCredsFromEnv } from "./instagram-graph.js";
 import { publish as fbPublish, credsFromEnv as fbCredsFromEnv } from "./facebook-graph.js";
-import { requiresMedia } from "./platforms/index.js";
+import FLAGS from "../flags.js";
+import { requiresMedia, platformEnabled } from "./platforms/index.js";
 
 const BATCH = 20;
 const DEFAULT_PUBLISHERS = { x: xPublish, instagram: igPublish, facebook: fbPublish };
@@ -84,7 +85,20 @@ export async function publishApprovedPosts({
   // Defaults to the production host so no env config is needed; override only to
   // point at a non-prod domain.
   const publicBase = String(env.QUYDLY_PUBLIC_BASE_URL || "https://www.quydly.com").replace(/\/+$/, "");
-  const enabledPlatforms = Object.keys(publishers);
+  // Per-platform kill switch (SOCIAL_<P>_ENABLED=false — see platforms/index.js):
+  // a disabled platform is excluded from the fetch entirely, so nothing is
+  // claimed, published, or replied-to for it. Its rows are left exactly as they
+  // are (this also blocks admin publish-now, which only flips status to APPROVED
+  // and relies on this worker to actually post).
+  const enabledPlatforms = Object.keys(publishers).filter((p) => {
+    if (platformEnabled(env, p)) return true;
+    logger(JSON.stringify({ event: "social_publish_platform_disabled", platform: p }));
+    return false;
+  });
+  if (enabledPlatforms.length === 0) {
+    logger(JSON.stringify({ event: "social_publish_none", reason: "all_platforms_disabled" }));
+    return { published: 0, failed: 0, skipped: 0 };
+  }
 
   // Lazy, per-platform credential resolution. A platform whose creds are
   // unavailable (not configured) has its posts released + skipped — it does not
@@ -172,7 +186,7 @@ export async function publishApprovedPosts({
   // Due, unpublished posts for platforms that still have budget today.
   const { data: posts, error } = await supabase
     .from("social_posts")
-    .select("id, story_id, platform, audience_geo, post_text, media_url, status, scheduled_for, platform_post_id, social_question_id")
+    .select("id, story_id, platform, audience_geo, post_text, media_url, status, scheduled_for, platform_post_id, social_question_id, stories(category_id)")
     .in("status", ["APPROVED", "SCHEDULED"])
     .in("platform", publishablePlatforms)
     .is("platform_post_id", null)
@@ -191,6 +205,27 @@ export async function publishApprovedPosts({
   let published = 0, failed = 0, skipped = 0;
 
   for (const post of posts) {
+    // Excluded categories (FLAGS.social.excludeCategories, e.g. culture retired
+    // 2026-07-30): selector + generator gates can't reach APPROVED/SCHEDULED
+    // rows that already existed when the exclusion shipped — terminally reject
+    // them here so they can never publish (and stop refilling the batch).
+    // Guarded like the claim below so a concurrently-claimed row isn't touched.
+    const postCategory = post.stories?.category_id;
+    if (postCategory && (FLAGS.social.excludeCategories ?? []).includes(postCategory)) {
+      const { error: rejErr } = await supabase
+        .from("social_posts")
+        .update({ status: "REJECTED", updated_at: new Date(now).toISOString() })
+        .eq("id", post.id)
+        .is("platform_post_id", null)
+        .in("status", ["APPROVED", "SCHEDULED"]);
+      if (rejErr) {
+        logger.warn(JSON.stringify({ event: "social_publish_reject_write_failed", post_id: post.id, error: rejErr.message }));
+      }
+      skipped++;
+      logger(JSON.stringify({ event: "social_publish_excluded_category", post_id: post.id, category: postCategory }));
+      continue;
+    }
+
     if (remaining[post.platform] <= 0) {
       skipped++;
       logger(JSON.stringify({ event: "social_publish_cap_reached", platform: post.platform, post_id: post.id }));

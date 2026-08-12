@@ -13,7 +13,7 @@
 //     back across days until none remain → { allCaughtUp: true }. Optional
 //     single-category (beat) filter.
 
-import { CATEGORIES, SESSION_SIZE } from "../../config/categories.js";
+import { CATEGORIES, EDITORIAL_MIX, SESSION_SIZE } from "../../config/categories.js";
 import { quizDay } from "./quizDay.js";
 import { questionsKey } from "./cacheKeys.js";
 
@@ -22,7 +22,15 @@ import { questionsKey } from "./cacheKeys.js";
 // fetches the next page excluding what was just attempted.
 const SIGNED_IN_PAGE_SIZE = 10;
 
-const VALID_CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
+// EDITORIAL_MIX is the single source of truth for category participation.
+// A retired category (e.g. culture, 2026-07-30) keeps its CATEGORIES entry for
+// rendering historical content but must not be servable: its historical
+// backlog is excluded from the all-beats run (p_active_categories below) and
+// ?category= requests for it normalize to null (all active beats).
+const ACTIVE_CATEGORY_IDS = CATEGORIES
+  .filter((c) => (EDITORIAL_MIX[c.id] ?? 0) > 0)
+  .map((c) => c.id);
+const VALID_CATEGORY_IDS = new Set(ACTIVE_CATEGORY_IDS);
 
 // quiz_questions row → the shape QuestionScreen consumes.
 function mapRow(r) {
@@ -36,18 +44,47 @@ function mapRow(r) {
   };
 }
 
+// Hot pools are cached jsonb generated at cron time: a pool generated BEFORE a
+// category retirement (or served via the latest-row fallback below) can still
+// contain retired-category questions, so every pool is filtered on read —
+// retirement takes effect immediately, not at the next successful generation.
+function activeOnly(questions) {
+  return Array.isArray(questions)
+    ? questions.filter((q) => VALID_CATEGORY_IDS.has(q.categoryId))
+    : [];
+}
+
 // Resolve the hot daily pool for the anonymous fast path:
 // Redis → daily_questions (today) → latest row at/before date → empty.
 // NEVER generates in the request path (generation runs only from the cron).
 export async function getAllQuestions(date, audience, redis, supabase) {
+  // A filtered pool smaller than one guest session (SESSION_SIZE) would burn
+  // the anonymous single-session-per-day cap on an undersized run, so each
+  // step only returns a pool that can fill a full session and otherwise falls
+  // through. The largest undersized pool seen is kept as a LAST RESORT —
+  // serving 4 questions on a degraded day still beats a false allCaughtUp.
+  let best = null;
+  const remember = (candidate) => {
+    if (!best || candidate.questions.length > best.questions.length) best = candidate;
+  };
+
   if (redis) {
     try {
       await redis.connect();
       const cached = await redis.get(questionsKey(date, audience));
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return { questions: parsed, source: "redis" };
-        await redis.del(questionsKey(date, audience));
+        const active = Array.isArray(parsed) ? activeOnly(parsed) : [];
+        if (active.length >= SESSION_SIZE) return { questions: active, source: "redis" };
+        if (active.length > 0) {
+          // Undersized after filtering: the key still holds valid content, so
+          // keep it and look for a fuller pool below.
+          remember({ questions: active, generatedAt: null, source: "redis" });
+        } else {
+          // Empty or all-retired — unusable as a hot pool; drop the key and
+          // continue through the Supabase fallback chain like any cache miss.
+          await redis.del(questionsKey(date, audience));
+        }
       }
     } catch {
       // Redis unavailable — fall through to Supabase.
@@ -66,21 +103,46 @@ export async function getAllQuestions(date, audience, redis, supabase) {
       .maybeSingle();
     if (error) throw new Error(`daily_questions lookup failed: ${error.message}`);
     if (data && Array.isArray(data.questions) && data.questions.length > 0) {
-      return { questions: data.questions, generatedAt: data.generated_at, source: "supabase" };
+      const active = activeOnly(data.questions);
+      if (active.length >= SESSION_SIZE) {
+        return { questions: active, generatedAt: data.generated_at, source: "supabase" };
+      }
+      if (active.length > 0) {
+        remember({ questions: active, generatedAt: data.generated_at, source: "supabase" });
+      }
+      // Undersized or all-retired — fall through to the latest-row step.
     }
   }
 
-  const { data: latest, error: latestErr } = await supabase
+  // Scan the last few generations newest-first rather than LIMIT 1: the newest
+  // row can be the same undersized/all-retired row the step above rejected, so
+  // a single-row fetch would never reach an older playable pool. A week of
+  // rows is far beyond any realistic generation gap.
+  const { data: latestRows, error: latestErr } = await supabase
     .from("daily_questions")
     .select("questions, generated_at, date")
     .lte("date", date)
     .order("date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(7);
   if (latestErr) throw new Error(`daily_questions latest lookup failed: ${latestErr.message}`);
-  if (latest && Array.isArray(latest.questions) && latest.questions.length > 0) {
-    console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${latest.date})`);
-    return { questions: latest.questions, generatedAt: latest.generated_at, source: "supabase-latest" };
+  for (const row of latestRows ?? []) {
+    if (!Array.isArray(row.questions) || row.questions.length === 0) continue;
+    const active = activeOnly(row.questions);
+    if (active.length >= SESSION_SIZE) {
+      console.warn(`[GET /api/questions] today's quiz (${date}) missing — serving latest (${row.date})`);
+      return { questions: active, generatedAt: row.generated_at, source: "supabase-latest" };
+    }
+    if (active.length > 0) {
+      remember({ questions: active, generatedAt: row.generated_at, source: "supabase-latest" });
+    }
+  }
+
+  if (best) {
+    console.warn(
+      `[GET /api/questions] no full-session pool at or before ${date} — ` +
+      `serving undersized (${best.questions.length}) from ${best.source}`,
+    );
+    return best;
   }
 
   console.error(`[GET /api/questions] no daily_questions rows at or before ${date}`);
@@ -113,13 +175,33 @@ export async function resolveQuestions({ audience, category, token, redis, supab
 
   // ── Signed-in: unbounded, multi-day, exclude-attempted ─────────────────────
   if (isSignedIn) {
-    const { data, error } = await supabase.rpc("serve_unseen", {
-      p_user:     user.id,
-      p_audience: audience,
-      p_category: category ?? null,
-      p_today:    date,
-      p_limit:    SIGNED_IN_PAGE_SIZE,
+    let { data, error } = await supabase.rpc("serve_unseen", {
+      p_user:              user.id,
+      p_audience:          audience,
+      p_category:          category ?? null,
+      p_today:             date,
+      p_limit:             SIGNED_IN_PAGE_SIZE,
+      p_active_categories: ACTIVE_CATEGORY_IDS,
     });
+    // Rollout compatibility: if the DB still has only the legacy 5-arg
+    // serve_unseen (migration_serve_active_categories.sql not applied — e.g. a
+    // fresh environment or a DB rollback), PostgREST answers PGRST202
+    // ("function not found in schema cache"). Retry the legacy shape ONLY on
+    // that exact code — any other failure must surface, not fall back — and
+    // warn loudly: the legacy call serves retired categories unfiltered.
+    if (error && error.code === "PGRST202") {
+      console.warn(
+        "[serveQuestions] 6-arg serve_unseen missing (PGRST202) — retrying legacy 5-arg call " +
+        "(retired categories UNFILTERED); apply backend/db/migration_serve_active_categories.sql",
+      );
+      ({ data, error } = await supabase.rpc("serve_unseen", {
+        p_user:     user.id,
+        p_audience: audience,
+        p_category: category ?? null,
+        p_today:    date,
+        p_limit:    SIGNED_IN_PAGE_SIZE,
+      }));
+    }
     if (error) throw new Error(`serve_unseen failed: ${error.message}`);
 
     const rows = data ?? [];
@@ -136,10 +218,15 @@ export async function resolveQuestions({ audience, category, token, redis, supab
     // always has a non-empty quiz_questions, so count==0 means cold start, not
     // caught up.)
     if (!category) {
+      // Count only ACTIVE-category rows: an audience whose backlog is entirely
+      // retired-category rows is still a cold start (the filtered RPC above can
+      // never serve those rows), so it must not mask the daily_questions
+      // fallback and strand users on a false "all caught up".
       const { count, error: cntErr } = await supabase
         .from("quiz_questions")
         .select("id", { count: "exact", head: true })
-        .eq("audience", audience);
+        .eq("audience", audience)
+        .in("category_id", ACTIVE_CATEGORY_IDS);
       if (!cntErr && (count ?? 0) === 0) {
         const { questions: pool, generatedAt = null, source } =
           await getAllQuestions(date, audience, redis, supabase);

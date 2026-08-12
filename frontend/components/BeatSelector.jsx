@@ -21,6 +21,10 @@ const FONT = {
 
 const ALL_BEAT = { id: null, label: "All", emoji: "✦" };
 
+// Retired categories (selectable: false, e.g. culture) are hidden from the
+// picker but keep rendering support elsewhere via their CATEGORIES entry.
+const SELECTABLE_CATEGORIES = CATEGORIES.filter((c) => c.selectable !== false);
+
 export default function BeatSelector({ selectedCategory = null, onSelect, scale = 1, align = "flex-start", notice }) {
   const s = (v) => v * scale;
   const textAlign = align === "center" ? "center" : "left";
@@ -31,7 +35,7 @@ export default function BeatSelector({ selectedCategory = null, onSelect, scale 
         Your Beat
       </Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: s(6), justifyContent: align }}>
-        {[ALL_BEAT, ...CATEGORIES].map((c) => {
+        {[ALL_BEAT, ...SELECTABLE_CATEGORIES].map((c) => {
           const active = (selectedCategory ?? null) === (c.id ?? null);
           return (
             <TouchableOpacity

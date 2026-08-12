@@ -27,20 +27,65 @@ function pairKey(storyId, audienceGeo) {
   return `${storyId}::${audienceGeo}`;
 }
 
+// Pure: map a story category_id to its weight-group name.
+// Any category not listed in a group falls into `defaultGroup` (catch-all).
+export function groupForCategory(categoryId, categoryWeights) {
+  const groups = categoryWeights?.groups || {};
+  for (const [name, group] of Object.entries(groups)) {
+    if ((group.categories || []).includes(categoryId)) return name;
+  }
+  return categoryWeights?.defaultGroup || null;
+}
+
+// Pick the next weight-group to draw from: highest D'Hondt quotient
+// weight/(used+1) among groups that still have eligible pairs. Ties break on
+// higher raw weight, then group declaration order (deterministic). Groups with
+// no candidates are skipped entirely, so an empty bucket's share redistributes
+// proportionally to the rest instead of stalling selection.
+function pickNextGroup(queues, groups, used) {
+  let best = null;
+  let bestQ = -1;
+  let bestW = -1;
+  for (const [name, queue] of queues) {
+    if (queue.length === 0) continue;
+    const weight = Number(groups[name]?.weight) || 0;
+    const q = weight / ((used[name] || 0) + 1);
+    if (q > bestQ || (q === bestQ && weight > bestW)) {
+      best = name;
+      bestQ = q;
+      bestW = weight;
+    }
+  }
+  return best;
+}
+
 // Pure: given fetched data, return the ordered list of eligible (story, geo) pairs
 // to create, excluding existing candidates and respecting the per-geo daily cap.
 //
-//   audiences      [{ story_id, audience_geo, relevance_score }]
-//   storyById      Map<story_id, storyRow>
-//   existingKeys   Set<"storyId::geo"> already-present candidates
-//   countsByGeo    { [geo]: number } candidates already created today for that geo
-//   cap            max candidates per day per geo (daily ceiling)
-//   perRunCap      max candidates to create per geo in THIS run (drip across the
-//                  day via the hourly cadence). Defaults to no limit.
-export function buildEligiblePairs({ audiences, storyById, existingKeys, countsByGeo, cap, perRunCap = Infinity }) {
-  const dayUsed = { ...countsByGeo };
-  const runUsed = {};
-
+//   audiences        [{ story_id, audience_geo, relevance_score }]
+//   storyById        Map<story_id, storyRow>
+//   existingKeys     Set<"storyId::geo"> already-present candidates
+//   countsByGeo      { [geo]: number } candidates already created today for that geo
+//   cap              max candidates per day per geo (daily ceiling)
+//   perRunCap        max candidates to create per geo in THIS run (drip across the
+//                    day via the hourly cadence). Defaults to no limit.
+//   categoryWeights  optional FLAGS.social.categoryWeights. When enabled, slots
+//                    within each geo are allocated by deterministic weighted
+//                    round-robin (D'Hondt) across category groups instead of pure
+//                    score order. Within a group, score order still decides.
+//   groupCountsByGeo { [geo]: { [group]: number } } today's already-created
+//                    candidates per group — seeds the round-robin so the daily
+//                    mix converges on the weights even at 1 candidate per run.
+export function buildEligiblePairs({
+  audiences,
+  storyById,
+  existingKeys,
+  countsByGeo,
+  cap,
+  perRunCap = Infinity,
+  categoryWeights = null,
+  groupCountsByGeo = {},
+}) {
   const eligible = (audiences || [])
     .filter((a) => storyById.has(a.story_id))
     .filter((a) => !existingKeys.has(pairKey(a.story_id, a.audience_geo)))
@@ -57,14 +102,42 @@ export function buildEligiblePairs({ audiences, storyById, existingKeys, countsB
     return Number(y.story.story_score) - Number(x.story.story_score);
   });
 
-  const selected = [];
+  // Bucket per geo, preserving the score ordering within each geo.
+  const byGeo = new Map();
   for (const pair of eligible) {
-    const geo = pair.audienceGeo;
-    if ((dayUsed[geo] || 0) >= cap) continue;        // daily ceiling
-    if ((runUsed[geo] || 0) >= perRunCap) continue;  // this-run drip
-    dayUsed[geo] = (dayUsed[geo] || 0) + 1;
-    runUsed[geo] = (runUsed[geo] || 0) + 1;
-    selected.push(pair);
+    if (!byGeo.has(pair.audienceGeo)) byGeo.set(pair.audienceGeo, []);
+    byGeo.get(pair.audienceGeo).push(pair);
+  }
+
+  const weighted = Boolean(categoryWeights?.enabled && categoryWeights.groups);
+  const selected = [];
+
+  for (const [geo, pairs] of byGeo) {
+    let slots = Math.min(Math.max(0, cap - (countsByGeo[geo] || 0)), perRunCap);
+    if (slots <= 0) continue;
+
+    if (!weighted) {
+      // Legacy behaviour: pure score order.
+      selected.push(...pairs.slice(0, slots));
+      continue;
+    }
+
+    // Group queues, declared groups first so tie-breaks are deterministic.
+    const queues = new Map(Object.keys(categoryWeights.groups).map((g) => [g, []]));
+    for (const pair of pairs) {
+      const g = groupForCategory(pair.story.category_id || pair.story.category, categoryWeights);
+      if (!queues.has(g)) queues.set(g, []);
+      queues.get(g).push(pair);
+    }
+
+    const used = { ...(groupCountsByGeo[geo] || {}) };
+    while (slots > 0) {
+      const g = pickNextGroup(queues, categoryWeights.groups, used);
+      if (!g) break; // no eligible pairs left in any group
+      selected.push(queues.get(g).shift());
+      used[g] = (used[g] || 0) + 1;
+      slots--;
+    }
   }
   return selected;
 }
@@ -119,17 +192,28 @@ export async function selectEligibleStories(supabase, { now = new Date(), flags 
 
   const existingKeys = new Set((existing || []).map((c) => pairKey(c.story_id, c.audience_geo)));
 
-  // 4. Today's per-geo counts for the daily cap.
+  // 4. Today's per-geo counts for the daily cap, plus per-group counts (the
+  //    candidate row stores the story's category) to seed the category-mix
+  //    round-robin so the daily mix converges on the configured weights.
   const { data: todays, error: todayErr } = await supabase
     .from("social_publication_candidates")
-    .select("audience_geo")
+    .select("audience_geo, category")
     .gte("selected_at", startOfUtcDayIso(now));
 
   if (todayErr) throw new Error(`[social-candidates] fetch today's counts: ${todayErr.message}`);
 
+  const categoryWeights = flags.categoryWeights || null;
   const countsByGeo = {};
+  const groupCountsByGeo = {};
   for (const row of todays || []) {
     countsByGeo[row.audience_geo] = (countsByGeo[row.audience_geo] || 0) + 1;
+    if (categoryWeights?.enabled) {
+      const g = groupForCategory(row.category, categoryWeights);
+      if (g) {
+        const geoGroups = groupCountsByGeo[row.audience_geo] || (groupCountsByGeo[row.audience_geo] = {});
+        geoGroups[g] = (geoGroups[g] || 0) + 1;
+      }
+    }
   }
 
   return buildEligiblePairs({
@@ -139,6 +223,8 @@ export async function selectEligibleStories(supabase, { now = new Date(), flags 
     countsByGeo,
     cap: flags.maxCandidatesPerDayPerGeo,
     perRunCap: flags.maxCandidatesPerRunPerGeo ?? Infinity,
+    categoryWeights,
+    groupCountsByGeo,
   });
 }
 

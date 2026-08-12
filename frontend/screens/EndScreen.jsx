@@ -7,6 +7,7 @@ import { CATEGORIES } from "../../config/categories";
 import FLAGS from "../../config/flags";
 import SaveStreakModal from "../components/SaveStreakModal";
 import StatsBar from "../components/StatsBar";
+import BeatSelector from "../components/BeatSelector";
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const T = {
@@ -81,6 +82,7 @@ function makeStyles(scale) {
 
     // Streak note
     streakNote: { textAlign: "center", marginBottom: s(14), fontFamily: FONT.body, fontSize: s(13), color: T.amber },
+    caughtUpNotice: { textAlign: "center", marginTop: s(10), fontFamily: FONT.body, fontSize: s(13), color: T.amber },
 
     // Buttons
     shareBtn:         { width: "100%", paddingVertical: s(14), backgroundColor: T.amber, borderRadius: s(11), alignItems: "center", marginBottom: s(10) },
@@ -117,7 +119,11 @@ function MixBar({ pct, styles }) {
 //   streak    — number
 //   rank      — number | null  (from POST /api/complete response)
 //   onPlayAgain — () => void
-export default function EndScreen({ score, maxScore, attempted, skippedCount = 0, lifetimeScore = 0, accuracy = 0, lifetimeAnswered = 0, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp }) {
+//   canChooseBeat / selectedCategory / onSwitchBeat / onBackHome — caught-up
+//     escape hatches: when the current beat is exhausted, signed-in users get
+//     the shared BeatSelector to jump straight into another beat, and everyone
+//     gets a Back-to-Home button — no page reload needed.
+export default function EndScreen({ score, maxScore, attempted, skippedCount = 0, lifetimeScore = 0, accuracy = 0, lifetimeAnswered = 0, results, strategy, streak, rank, promptSaveStreak, supabase, onStreakSaved, onPlayAgain, onBeforeOAuth, allCaughtUp, canChooseBeat = false, selectedCategory = null, onSwitchBeat, onBackHome, beatNotice = null }) {
   const { width } = useWindowDimensions();
   const scale  = Math.min(Math.min(width, MAX_WIDTH) / BASE_WIDTH, 1.0);
   const styles = useMemo(() => makeStyles(scale), [scale]);
@@ -216,8 +222,37 @@ export default function EndScreen({ score, maxScore, attempted, skippedCount = 0
           <Text style={styles.shareBtnText}>{copied ? "Copied! ✓" : "Share My Score →"}</Text>
         </TouchableOpacity>
         {allCaughtUp ? (
-          <View style={styles.playAgainBtn}>
-            <Text style={styles.playAgainBtnText}>✓ You're all caught up — come back tomorrow</Text>
+          <View style={{ width: "100%" }}>
+            <View style={styles.playAgainBtn}>
+              <Text style={styles.playAgainBtnText}>
+                {canChooseBeat
+                  ? "✓ You're all caught up in this beat"
+                  : "✓ You're all caught up — come back tomorrow"}
+              </Text>
+            </View>
+            {/* Transient notice (e.g. a failed beat-switch fetch) — the round
+                summary above stays intact, so the player loses nothing. */}
+            {beatNotice && <Text style={styles.caughtUpNotice}>{beatNotice}</Text>}
+            {/* Signed-in: switch beats right here instead of dead-ending. */}
+            {canChooseBeat && onSwitchBeat && (
+              <View style={{ marginTop: scale * 14 }}>
+                <BeatSelector
+                  selectedCategory={selectedCategory}
+                  onSelect={onSwitchBeat}
+                  scale={scale}
+                  align="center"
+                />
+              </View>
+            )}
+            {onBackHome && (
+              <TouchableOpacity
+                style={[styles.playAgainBtn, { marginTop: scale * 10 }]}
+                onPress={onBackHome}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.playAgainBtnText}>← Back to Home</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <TouchableOpacity style={styles.playAgainBtn} onPress={onPlayAgain} activeOpacity={0.7}>

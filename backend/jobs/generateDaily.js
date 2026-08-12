@@ -164,10 +164,14 @@ export async function generateDaily(audience = "global", { silent = false } = {}
           ...poolC,
         ];
 
-        // Index stories by category for preferred-category picking
+        // Index stories by category for preferred-category picking.
+        // EDITORIAL_MIX gates participation here too: residual story_audiences
+        // rows for a retired category (e.g. culture) must not resurface via the
+        // exhausted-pool fallback below.
         const byCat     = {};
         const byCatIdx  = {};
         for (const s of geoStories) {
+          if ((EDITORIAL_MIX[s.category_id] ?? 0) <= 0) continue;
           (byCat[s.category_id] = byCat[s.category_id] ?? []).push(s);
         }
         for (const catId of Object.keys(byCat)) byCatIdx[catId] = 0;
@@ -207,7 +211,21 @@ export async function generateDaily(audience = "global", { silent = false } = {}
     const articlePools = {};
     const poolIndexes  = {};
     for (const cat of CATEGORIES) {
-      const neededSlots = (EDITORIAL_MIX[cat.id] ?? 1) * TOTAL_SESSIONS;
+      // EDITORIAL_MIX is the single source of truth for participation: a
+      // category absent from the mix (e.g. culture, retired 2026-07-30) gets
+      // zero slots — defaulting the missing key to 1 would silently resurrect
+      // a retired category through the fallback pool.
+      const neededSlots = (EDITORIAL_MIX[cat.id] ?? 0) * TOTAL_SESSIONS;
+
+      // A zero-slot category gets no questions — keep its pool empty so it is
+      // never served, not even via the exhaustion fallback, and skip the
+      // pointless fetches.
+      if (neededSlots <= 0) {
+        articlePools[cat.id] = [];
+        poolIndexes[cat.id]  = 0;
+        continue;
+      }
+
       const stories = await fetchStoryPool(cat.id, neededSlots);
 
       if (stories.length >= neededSlots) {

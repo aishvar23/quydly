@@ -24,6 +24,18 @@ const MAX_CLUSTER_ENTITIES = 10;
 // FLAGS (default 3; relaxed to 2 for `ai`, whose headlines are entity-poor).
 const MIN_SHARED_ENTITIES  = FLAGS.clustering.minSharedEntities;
 const SYNTHESIS_COOLDOWN_H = 4;       // re-enqueue only if synthesis_queued_at > 4h ago
+// Stale-claim recovery sweep (step 0 of the run). A synthesizer invocation
+// that dies after claiming a cluster (functionTimeout kill, or an error path
+// that couldn't reset the row) leaves it wedged in PROCESSING forever: SB
+// redeliveries land inside the synthesizer's 15-min PROCESSING lease, read
+// "sibling still running", and complete the message — and this function only
+// ever fetches PENDING rows, so the cluster becomes invisible to the whole
+// pipeline (2026-07-23 incident: every cluster enqueued after 12:00 UTC
+// wedged this way while the Anthropic API was failing; 6 of them AI). The
+// sweep resets stale claims to PENDING. Threshold is 2× the synthesizer's
+// PROCESSING_LEASE_MS (15 min) and 3× the 10-min functionTimeout, so a live
+// invocation can never be reclaimed out from under itself.
+const STALE_PROCESSING_MS  = 30 * 60 * 1000;
 
 function minSharedEntitiesFor(categoryId) {
   return MIN_SHARED_ENTITIES[categoryId] ?? MIN_SHARED_ENTITIES.default;
@@ -79,6 +91,38 @@ export default async function articleClusterer(context, timer) {
 
   const supabase = getSupabase();
   const now      = new Date().toISOString();
+
+  // ── 0. Reclaim wedged PROCESSING clusters (stale-claim recovery sweep) ────
+  // Must run BEFORE the no-articles early return below, or recovery stalls
+  // exactly when ingestion is quiet. Bounded below by the 36h River window so
+  // month-old strays aren't resurrected as stale news. Reclaimed rows get
+  // updated_at = now, so they re-enter this run's PENDING working set (step 2)
+  // and re-enqueue through the normal eligibility gates + 4h synthesis
+  // cooldown — a wedged cluster self-heals within one or two runs.
+  const staleClaimCutoff = new Date(Date.now() - STALE_PROCESSING_MS).toISOString();
+  const reclaimSince     = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+  const { data: reclaimedRows, error: reclaimError } = await supabase
+    .from("clusters")
+    .update({ status: "PENDING", updated_at: now })
+    .eq("status", "PROCESSING")
+    .lt("updated_at", staleClaimCutoff)
+    .gte("updated_at", reclaimSince)
+    .select("id");
+
+  if (reclaimError) {
+    // The sweep is auxiliary recovery — log loudly but never fail the
+    // clustering run over it; the next 2h run retries the sweep.
+    context.log.error(JSON.stringify({
+      event: "stale_processing_reclaim_error",
+      error: reclaimError.message,
+    }));
+  } else if (reclaimedRows && reclaimedRows.length > 0) {
+    context.log(JSON.stringify({
+      event:       "stale_processing_reclaimed",
+      count:       reclaimedRows.length,
+      cluster_ids: reclaimedRows.map((r) => r.id),
+    }));
+  }
 
   // ── 1. Fetch unclustered DONE articles (Change 1 from design doc) ─────────
   // Strict filter: clustered_at IS NULL AND status = 'DONE'.
@@ -233,8 +277,42 @@ export default async function articleClusterer(context, timer) {
   let clusters_below_quality  = 0;
   let clusters_persist_failed = 0;
   let clusters_eligible       = 0;
+  let clusters_capped         = 0;
 
   const synthesizeCooldownCutoff = new Date(Date.now() - SYNTHESIS_COOLDOWN_H * 60 * 60 * 1000).toISOString();
+
+  // Per-category daily enqueue cap (FLAGS.clustering.maxSynthesisEnqueuesPerDay,
+  // e.g. culture: 1). The cap bounds DISTINCT clusters stamped per UTC day —
+  // exactly what this seed query counts. A re-enqueue of a cluster already
+  // stamped today updates the same row (same story refreshed after cooldown),
+  // so it occupies its existing slot rather than consuming a new one; the gate
+  // below mirrors that so in-run accounting and the next timer run's seed
+  // count agree. A count-query failure fails OPEN for that category — logged
+  // loudly so it surfaces — since failing closed would silently freeze the
+  // category on transient DB errors.
+  const dailyEnqueueCap = FLAGS.clustering.maxSynthesisEnqueuesPerDay ?? {};
+  const enqueuedToday   = {}; // category_id → count (null = count unknown, cap not enforced this run)
+  const utcDayStart = new Date();
+  utcDayStart.setUTCHours(0, 0, 0, 0);
+  const utcDayStartIso = utcDayStart.toISOString();
+  for (const catId of Object.keys(dailyEnqueueCap)) {
+    const { count, error: capErr } = await supabase
+      .from("clusters")
+      .select("id", { count: "exact", head: true })
+      .eq("category_id", catId)
+      .gte("synthesis_queued_at", utcDayStartIso);
+
+    if (capErr) {
+      context.log.error(JSON.stringify({
+        event:    "synthesis_daily_cap_count_error",
+        category: catId,
+        error:    capErr.message,
+      }));
+      enqueuedToday[catId] = null;
+    } else {
+      enqueuedToday[catId] = count ?? 0;
+    }
+  }
 
   for (const cluster of workingSet) {
     const score = computeClusterScore(cluster);
@@ -335,8 +413,21 @@ export default async function articleClusterer(context, timer) {
     // ── 5. Synthesize-queue: enqueue eligible clusters ────────────────────────
     // 6.5: guard — skip if recently queued (within SYNTHESIS_COOLDOWN_H hours)
     // 6.6: write synthesis_queued_at to DB BEFORE sending to SB queue
+    //
+    // A CLEAN pre-existing cluster (not _isNew, not _dirty — no persist this
+    // run) is still re-enqueueable once its synthesis cooldown lapses. This is
+    // the recovery path for clusters whose synthesize message was lost or
+    // consumed by a failed synthesis (send failure per the comment below, or a
+    // reclaimed wedge victim from the 2026-07-23 incident). Gating enqueue on
+    // `persisted` alone silently stranded any such cluster that gained no new
+    // articles: never dirty → never persisted → never re-enqueued, despite the
+    // "next run will re-enqueue after 4h" contract stated below. The DB row
+    // already exists with status PENDING and `score` is computed fresh above,
+    // so eligibility reflects current recency. A dirty cluster whose persist
+    // FAILED stays excluded (persisted=false, _dirty=true) — its row is stale.
+    const requeueableClean = !cluster._isNew && !cluster._dirty;
     if (
-      persisted &&
+      (persisted || requeueableClean) &&
       persistedId !== null &&
       score >= ELIGIBLE_SCORE &&
       cluster.article_ids.length    >= MIN_ARTICLE_COUNT &&
@@ -349,6 +440,28 @@ export default async function articleClusterer(context, timer) {
         cluster.synthesis_queued_at > synthesizeCooldownCutoff;
 
       if (!recentlyQueued) {
+        // Per-category daily cap: at/over the ceiling, skip the enqueue WITHOUT
+        // touching synthesis_queued_at — the cluster stays PENDING and remains
+        // re-enqueueable on a later day while inside the 36h River window.
+        const cap        = dailyEnqueueCap[cluster.category_id];
+        const usedToday  = enqueuedToday[cluster.category_id];
+        // A cluster already stamped earlier today is a re-enqueue of the same
+        // story: it occupies the slot the seed query already counted, so it
+        // bypasses the ceiling and must not consume another slot below.
+        const alreadyCountedToday =
+          cluster.synthesis_queued_at !== null &&
+          cluster.synthesis_queued_at >= utcDayStartIso;
+        if (cap != null && usedToday != null && !alreadyCountedToday && usedToday >= cap) {
+          clusters_capped++;
+          context.log(JSON.stringify({
+            event:      "synthesis_daily_cap_reached",
+            cluster_id: persistedId,
+            category:   cluster.category_id,
+            cap,
+          }));
+          continue;
+        }
+
         // Step a: write synthesis_queued_at BEFORE queue send
         const { error: sqErr } = await supabase
           .from("clusters")
@@ -363,6 +476,18 @@ export default async function articleClusterer(context, timer) {
           }));
           // If DB write fails, skip the queue send — next run will retry
           continue;
+        }
+
+        // The row is now stamped synthesis_queued_at=today, which is exactly
+        // what the daily-cap seed query counts — consume a cap slot so a second
+        // same-category cluster in this run is capped too. (Counted even if the
+        // SB send below fails: the stamp is what tomorrow's seed query sees.)
+        // A re-stamp of a cluster already counted today consumes nothing — the
+        // seed count already includes its row.
+        if (!alreadyCountedToday &&
+            dailyEnqueueCap[cluster.category_id] != null &&
+            enqueuedToday[cluster.category_id] != null) {
+          enqueuedToday[cluster.category_id]++;
         }
 
         // Step b: send to synthesize-queue
@@ -397,6 +522,7 @@ export default async function articleClusterer(context, timer) {
     clusters_below_quality,
     clusters_persist_failed,
     clusters_eligible,
+    clusters_capped,
   };
 
   context.log(JSON.stringify({ event: "clustering_complete", ...summary }));
