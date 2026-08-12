@@ -29,11 +29,16 @@ RULES
 
 Respond ONLY with JSON, no markdown: { "scene": "..." }`;
 
-export function buildConceptPrompt(story) {
-  const facts = keyPointStrings(story).slice(0, 3).map((k) => `- ${k}`).join("\n") || "(none)";
-  return `Headline: ${story?.headline}
+// Key the scene off the story's SPINE — the cover HOOK (the swipe-earning angle
+// the cover promises) plus the headline + summary — rather than the first three
+// key points. The hook is what the imagery should echo, so the cover art matches
+// the cover copy; a couple of key points stay only as thin supporting context.
+export function buildConceptPrompt(story, hook = "") {
+  const facts = keyPointStrings(story).slice(0, 2).map((k) => `- ${k}`).join("\n") || "(none)";
+  const hookLine = hook ? `Cover hook (the angle to echo): ${hook}\n` : "";
+  return `${hookLine}Headline: ${story?.headline}
 Summary: ${story?.summary}
-Key points:
+Supporting context:
 ${facts}
 
 Write the scene now.`;
@@ -44,12 +49,12 @@ export function buildImagePrompt(scene) {
   return `Flat modern editorial vector illustration. Bold simple geometric shapes, clean lines, a limited palette over a deep navy (#0B0F1A) background, soft depth and a subtle grain. Generic anonymous stylized figures only — NO real or recognizable faces, NO text or letters, NO brand logos. Scene: ${scene}`;
 }
 
-async function writeScene({ anthropic, story, logger }) {
+async function writeScene({ anthropic, story, hook = "", logger }) {
   try {
     const msg = await anthropic.messages.create({
       model: CONCEPT_MODEL, max_tokens: 160,
       system: ILLUSTRATION_CONCEPT_SYSTEM,
-      messages: [{ role: "user", content: buildConceptPrompt(story) }],
+      messages: [{ role: "user", content: buildConceptPrompt(story, hook) }],
     });
     logLlmUsage(logger, "social.illustration_scene", msg, { story_id: story?.id });
     const scene = parseJSONFromLLM(msg?.content?.[0]?.text)?.scene;
@@ -61,12 +66,14 @@ async function writeScene({ anthropic, story, logger }) {
 }
 
 // Call OpenAI gpt-image-1 → PNG Buffer (or null). gpt-image-1 returns base64.
+// MEDIUM quality: the illustration always sits BEHIND the slide scrim (detail is
+// hidden), so medium is materially cheaper for no visible loss vs high.
 async function renderImage({ openaiKey, prompt, fetchImpl = fetch, logger }) {
   try {
     const res = await fetchImpl(OPENAI_IMAGE_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size: IMAGE_SIZE, quality: "high" }),
+      body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size: IMAGE_SIZE, quality: "medium" }),
     });
     if (!res.ok) {
       logger?.warn?.(JSON.stringify({ event: "illustration_image_http", status: res.status }));
@@ -84,9 +91,9 @@ async function renderImage({ openaiKey, prompt, fetchImpl = fetch, logger }) {
 
 // Generate a story illustration → { buffer (PNG), contentType, scene } or null.
 // Best-effort and additive: any missing input or failure returns null.
-export async function generateIllustration({ anthropic, openaiKey, story, fetchImpl, logger } = {}) {
+export async function generateIllustration({ anthropic, openaiKey, story, hook = "", fetchImpl, logger } = {}) {
   if (!anthropic || !openaiKey || !story) return null;
-  const scene = await writeScene({ anthropic, story, logger });
+  const scene = await writeScene({ anthropic, story, hook, logger });
   if (!scene) return null;
   const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });
   if (!buffer) return null;
@@ -105,42 +112,82 @@ RULES (apply to EVERY scene)
 
 Respond ONLY with JSON, no markdown: { "scenes": ["...", "..."] }`;
 
-export function buildScenesPrompt(story, count) {
-  const facts = keyPointStrings(story).slice(0, 3).map((k) => `- ${k}`).join("\n") || "(none)";
-  return `Produce exactly ${count} distinct scenes.
-Headline: ${story?.headline}
+// Human label for each carousel slide an illustration can back — so the scene
+// writer knows WHICH section each scene is for (they map positionally to the
+// photo-less slots, which may SKIP the cover when it has a photo).
+const SCENE_ROLE = {
+  cover: "the opening / headline moment",
+  what: "what happened",
+  numbers: "the key numbers behind the story",
+  keypoints: "the key facts",
+  why: "why it matters",
+  content: "the story",
+};
+
+// `kinds` is the ORDERED list of slide roles the scenes will back (from
+// plannedIllustrationKinds) — NOT necessarily slide 1..N, since photo-backed
+// slides are skipped. Each scene is described against its real role, and ONLY the
+// cover scene (when present) is told to echo the hook; when the cover is
+// photo-backed it is absent from `kinds`, so no body scene is mis-framed as it.
+export function buildScenesPrompt(story, kinds, hook = "") {
+  const facts = keyPointStrings(story).slice(0, 2).map((k) => `- ${k}`).join("\n") || "(none)";
+  const list = kinds.map((k, i) => {
+    const role = SCENE_ROLE[k] || SCENE_ROLE.content;
+    const echo = k === "cover" && hook ? ` — this scene MUST echo the cover hook: "${hook}"` : "";
+    return `${i + 1}. ${role}${echo}`;
+  }).join("\n");
+  // When the cover isn't among the slots, the hook is still the story's angle —
+  // keep every scene consistent with it, but don't force one to be a cover shot.
+  const angle = hook && !kinds.includes("cover") ? `Overall story angle to stay consistent with: ${hook}\n` : "";
+  return `Produce exactly ${kinds.length} distinct scenes — one for each carousel slide below, IN THIS ORDER:
+${list}
+${angle}Headline: ${story?.headline}
 Summary: ${story?.summary}
-Key points:
+Supporting context:
 ${facts}
 
-Write the ${count} scenes now.`;
+Write the ${kinds.length} scenes now.`;
 }
 
-async function writeScenes({ anthropic, story, count, logger }) {
+async function writeScenes({ anthropic, story, kinds, hook = "", logger }) {
   try {
+    const count = kinds.length;
     const msg = await anthropic.messages.create({
       model: CONCEPT_MODEL, max_tokens: 80 + count * 60,
       system: ILLUSTRATION_SCENES_SYSTEM,
-      messages: [{ role: "user", content: buildScenesPrompt(story, count) }],
+      messages: [{ role: "user", content: buildScenesPrompt(story, kinds, hook) }],
     });
     logLlmUsage(logger, "social.illustration_scenes", msg, { story_id: story?.id, scene_count: count });
     const scenes = parseJSONFromLLM(msg?.content?.[0]?.text)?.scenes;
-    return Array.isArray(scenes) ? scenes.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()) : [];
+    // Preserve POSITION: scene i is for kinds[i]. A malformed/empty element must
+    // stay an empty slot ("") rather than be compacted out, otherwise every later
+    // role-specific scene shifts onto the wrong slide (the caller maps by index).
+    return Array.isArray(scenes) ? scenes.map((s) => (typeof s === "string" ? s.trim() : "")) : [];
   } catch (err) {
     logger?.warn?.(JSON.stringify({ event: "illustration_scenes_failed", story_id: story?.id, error: err.message }));
     return [];
   }
 }
 
-// Generate up to `count` distinct illustrations → array aligned to the scenes,
-// each { buffer, contentType, scene } or null (a per-image failure doesn't sink
-// the others). Returns [] when disabled or the scene write fails. Images render
+// Generate one distinct illustration per slot → array aligned to the scenes, each
+// { buffer, contentType, scene } or null (a per-image failure doesn't sink the
+// others). Slots come from `kinds` (the ordered photo-less slide roles) so each
+// scene is framed for its real slide; `count` is a legacy fallback that makes N
+// generic slots. Returns [] when disabled or the scene write fails. Images render
 // in parallel.
-export async function generateIllustrations({ anthropic, openaiKey, story, count = 1, fetchImpl, logger } = {}) {
-  if (!anthropic || !openaiKey || !story || count < 1) return [];
-  const scenes = (await writeScenes({ anthropic, story, count, logger })).slice(0, count);
-  if (!scenes.length) return [];
-  return Promise.all(scenes.map(async (scene) => {
+export async function generateIllustrations({ anthropic, openaiKey, story, kinds = null, count = 1, hook = "", fetchImpl, logger } = {}) {
+  // Prefer explicit slide KINDS (so each scene is framed for its real slot); fall
+  // back to N generic "content" slots when only a count is supplied (legacy path).
+  const slotKinds = Array.isArray(kinds) && kinds.length ? kinds : Array.from({ length: Math.max(0, count) }, () => "content");
+  if (!anthropic || !openaiKey || !story || !slotKinds.length) return [];
+  const scenes = (await writeScenes({ anthropic, story, kinds: slotKinds, hook, logger })).slice(0, slotKinds.length);
+  if (!scenes.some(Boolean)) return []; // no usable scene at any slot
+  // Iterate by SLOT so the result length always equals slotKinds.length and index
+  // i stays aligned to slotKinds[i]: an empty/malformed scene → a null placeholder
+  // (never an image call), so a later role-specific scene can't shift onto its slot.
+  return Promise.all(slotKinds.map(async (_kind, i) => {
+    const scene = scenes[i];
+    if (!scene) return null;
     const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });
     return buffer ? { buffer, contentType: "image/png", scene } : null;
   }));

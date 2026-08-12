@@ -175,18 +175,27 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       // slides = cover + what + key points (+ why when present). The renderer
       // routes these to exactly the photo-less slides (gap-fill).
       let illustrationUrls = [];
+      let illustrationKinds = [];
       if (anthropic && cardService.getIllustrationUrls) {
-        // Lazy import: plannedIllustrationCount lives in card-renderer (which pulls
+        // Lazy import: plannedIllustrationKinds lives in card-renderer (which pulls
         // satori/resvg), so import it only here — inside the cards-enabled branch,
         // where the renderer is already loaded — never at module load (that would
-        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js). It counts
+        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js). It lists
         // the photo-less content slides under the cover/body sourcing rules — the
         // cover included whenever it has no lead PERSON photo — so an org logo or a
         // place flag never starves the cover of an illustration.
-        const { plannedIllustrationCount } = await import("./card-renderer.js");
-        const gaps = plannedIllustrationCount(story, { whyItMatters });
-        if (gaps > 0) {
-          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: gaps });
+        const { plannedIllustrationKinds } = await import("./card-renderer.js");
+        // The ORDERED photo-less slide kinds (cover may be absent when it has a
+        // photo). Passing the kinds — not just a count — lets the scene writer
+        // frame each scene for its real slot and echo the hook only on the cover.
+        const illKinds = plannedIllustrationKinds(story, { whyItMatters });
+        if (illKinds.length > 0) {
+          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, kinds: illKinds, hook: coverHook });
+          // Carry the kinds alongside the URLs so the renderer routes each
+          // illustration to its EXPLICIT slide (by kind), not by gap position —
+          // otherwise a planned photo that fails to fetch at render time shifts a
+          // body scene onto another slot.
+          illustrationKinds = illKinds;
         }
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
@@ -226,7 +235,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         }
       }
       if (!draft.reelUrl) {
-        const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, football });
+        const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football });
         if (slides && slides.length) {
           draft.carouselSlides = slides;
           draft.mediaUrl = slides[0].url;

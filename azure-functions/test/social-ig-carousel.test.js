@@ -223,6 +223,43 @@ test("renderCarouselSlides: cover prefers an illustration over an org logo/place
   assert.ok(!calls.includes("https://upload.wikimedia.org/acme.png")); // org logo NOT used on the cover
 });
 
+test("renderCarouselSlides: a failed illustration slot does NOT shift a later scene onto the cover", async () => {
+  // illustrationUrls is positionally aligned to the gap slots (scene 0 = cover).
+  // When the cover's illustration failed (null slot 0) but slide 2's succeeded,
+  // the cover must NOT inherit slide 2's scene — its null slot is preserved and
+  // the cover stays on the gradient floor ("none"). Guards the no-compaction fix.
+  const story = { ...STORY, primary_entities_enriched: [] }; // no photos → cover + what are gaps
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  const slides = await renderCarouselSlides(story, {
+    slides: ["cover", "what"], withPortrait: true,
+    illustrationUrls: [null, "https://cdn.test/ill-1.png"], fetchImpl,
+  });
+  assert.equal(slides[0].coverImagery, "none"); // cover kept its null slot (NOT backfilled with ill-1)
+  // ill-1 belongs to slide 2 ("what"), so it IS still fetched — just never for the cover.
+  assert.ok(calls.includes("https://cdn.test/ill-1.png"));
+});
+
+test("renderCarouselSlides: a planned cover photo that fails to fetch does NOT pull a body scene onto the cover", async () => {
+  // STORY_PERSON's cover is planned photo-backed, so illustrationKinds omits it
+  // (only ["what"] is generated). If the person photo then FAILS to fetch, the
+  // cover becomes bare — but it must NOT inherit the "what" scene by position.
+  // Kind-routing places ill-what on the WHAT slide only; the cover stays "none".
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("jane.png")) return { ok: false, status: 404, headers: { get: () => null } }; // cover photo fails
+    return imgResponse();
+  };
+  const slides = await renderCarouselSlides(STORY_PERSON, {
+    slides: ["cover", "what"], withPortrait: true,
+    illustrationKinds: ["what"], illustrationUrls: ["https://cdn.test/ill-what.png"], fetchImpl,
+  });
+  assert.equal(slides[0].coverImagery, "none"); // NOT "illustration" — the what-scene never landed on the cover
+  assert.ok(calls.includes("https://cdn.test/ill-what.png")); // it rendered on the WHAT slide instead
+});
+
 test("renderCarouselSlides: cover falls back to a CONTAINED org image only when no illustration", async () => {
   // Same org-only story but NO illustration supplied: the org image is the last
   // resort and IS fetched (better than the gradient), rendered contained.
@@ -728,6 +765,21 @@ test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ disti
   const b = await svc.getCarouselSlideUrls({ story: STORY, coverHook: hook, coverHighlight: "Oracle" });
   // The highlighted span changes the cover bytes, so the fingerprint must differ.
   assert.notEqual(a[0].url, b[0].url);
+});
+
+test("cardService.getCarouselSlideUrls: same illustration count, different kinds ⇒ distinct storage paths", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+  const urls = ["https://cdn.test/ill-a.png", "https://cdn.test/ill-b.png"];
+  // Same URLs and count, but a DIFFERENT ordered kinds routing (which artwork lands
+  // on which slide) → the carousel variant (memo key + storage path) must differ,
+  // else the second render would collide with / overwrite the first even though the
+  // artwork-to-slide mapping changed. (The bogus URLs fail to fetch → gradient; the
+  // storage PATH is deterministic from the inputs regardless.)
+  const s1 = await svc.getCarouselSlideUrls({ story: STORY, illustrationUrls: urls, illustrationKinds: ["cover", "what"] });
+  const s2 = await svc.getCarouselSlideUrls({ story: STORY, illustrationUrls: urls, illustrationKinds: ["what", "keypoints"] });
+  assert.notEqual(s1[0].url, s2[0].url);
+  assert.match(s1[0].url, /-ill[0-9a-f]{10}-nofb\//); // routing fingerprinted, not "noill"
 });
 
 test("cardService.getIllustrationUrls: [] when OPENAI_API_KEY is absent (Tier-2 disabled)", async () => {

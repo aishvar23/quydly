@@ -48,6 +48,30 @@ function hookFingerprint(coverHook, coverHighlight) {
   return createHash("sha1").update(`${h.length}:${h}:${hl}`).digest("hex").slice(0, 12);
 }
 
+// Each illustration scene is now framed for a SPECIFIC slide kind, so the ORDERED
+// kinds list is part of the artwork identity: two calls for the same (story, hook)
+// with a different ordered kinds list of the same length (e.g. ['cover','what'] vs
+// ['what','keypoints']) produce different art and must NOT share a memo entry or
+// storage path. "nokinds" for the legacy count-only path (no per-kind framing).
+function kindsFingerprint(kinds) {
+  const list = Array.isArray(kinds) ? kinds.filter((k) => typeof k === "string") : [];
+  if (!list.length) return "nokinds";
+  return createHash("sha1").update(list.join(",")).digest("hex").slice(0, 8);
+}
+
+// The illustrations PLACED on the carousel change its slide bytes, so the carousel
+// variant must fingerprint the whole ROUTING — the ordered (kind, url) slots — not
+// just the count: two renders with the same illustration count but a different
+// ordered kinds list (which artwork lands on which slide) or different URLs produce
+// different slides and must NOT share a memo entry or storage path. Returns "noill"
+// when nothing is placed, keeping the pre-illustration variant string stable.
+function illustrationFingerprint(kinds, urls) {
+  const u = Array.isArray(urls) ? urls : [];
+  if (!u.some((x) => x)) return "noill";
+  const k = Array.isArray(kinds) ? kinds : [];
+  return `ill${createHash("sha1").update(JSON.stringify([k, u])).digest("hex").slice(0, 10)}`;
+}
+
 // A resolved football match drives the whole slide set (score/table/form), so it
 // is part of the slide bytes — fingerprint the match id + score + competition so
 // a corrected score re-renders to a FRESH path (never serves stale slides).
@@ -118,8 +142,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Keying only on story.id let a later render upsert-overwrite an earlier post's
   // slide, so that post could publish the wrong engagement question while its
   // social_post_engagement row still held the original Q&A (wrong 12h answer).
-  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], football = null, variant }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, football }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], illustrationKinds = [], football = null, variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
@@ -150,12 +174,17 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // slots (null where a scene/image/upload failed). Best-effort: the renderer
   // falls back to the brand-graphic floor for any null slot. Memoised so the
   // expensive generation runs at most once per (story, count).
-  async function buildIllustrations({ story, anthropic, count }) {
-    const results = await generateIllustrations({ anthropic, openaiKey, story, count, logger });
+  async function buildIllustrations({ story, anthropic, kinds, count, hook, variant }) {
+    const results = await generateIllustrations({ anthropic, openaiKey, story, kinds, count, hook, logger });
     return Promise.all(results.map(async (r, i) => {
       if (!r) return null;
       try {
-        return await upload({ path: `cards/${story.id}/illustration-${i}.png`, buffer: r.buffer, contentType: r.contentType });
+        // The hook AND the ordered slide kinds drive the generated scene
+        // (illustration.js frames each scene per kind and echoes the hook on the
+        // cover), so both are part of the artwork identity: fingerprint them into
+        // the object path so a different hook/kinds variant can't upsert-overwrite
+        // an earlier one's assets (same discipline as the carousel `variant` path).
+        return await upload({ path: `cards/${story.id}/illustration/${variant}/${i}.png`, buffer: r.buffer, contentType: r.contentType });
       } catch (err) {
         logger.warn(JSON.stringify({ event: "social_illustration_upload_failed", story_id: story.id, index: i, error: err.message }));
         return null;
@@ -166,11 +195,20 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   return {
     // Returns an array of up to `count` illustration URLs (null per failed slot),
     // or [] when disabled / no client / generation fails.
-    async getIllustrationUrls({ story, anthropic, count = 1 } = {}) {
-      if (!igIllustration || !anthropic || !story || story.id == null || count < 1) return [];
-      const key = `${story.id}:illustrations:${count}`;
+    async getIllustrationUrls({ story, anthropic, kinds = null, count = 1, hook = "" } = {}) {
+      // `kinds` (the ordered photo-less slide roles) is authoritative when given;
+      // count is the legacy fallback. n = how many illustrations to generate.
+      const slotKinds = Array.isArray(kinds) ? kinds : [];
+      const n = slotKinds.length || count;
+      if (!igIllustration || !anthropic || !story || story.id == null || n < 1) return [];
+      // The hook AND the ordered kinds change the generated artwork, so both are
+      // part of the cache identity: without them, a second call for the same
+      // (story, count) with a revised hook or a different ordered kinds list would
+      // return the first call's art. Mirrors the carousel memo/path discipline.
+      const variant = `${hookFingerprint(hook)}-${kindsFingerprint(slotKinds)}`;
+      const key = `${story.id}:illustrations:${n}:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildIllustrations({ story, anthropic, count }).catch((err) => {
+      const p = buildIllustrations({ story, anthropic, kinds: slotKinds, count: n, hook, variant }).catch((err) => {
         logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
         return [];
       });
@@ -197,16 +235,18 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], football = null }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], illustrationKinds = [], football = null }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
-      // distinct (whyItMatters, question, coverHook+highlight, #illustrations,
-      // football match) variant never overwrites another's bytes.
-      const illCount = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean).length;
-      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illCount ? `ill${illCount}` : "noill"}-${footballFingerprint(football)}`;
+      // distinct (whyItMatters, question, coverHook+highlight, illustration routing,
+      // football match) variant never overwrites another's bytes. The illustration
+      // segment fingerprints the ordered (kind, url) slots — not just the count —
+      // so a different routing over the same count gets its own path.
+      const illFp = illustrationFingerprint(illustrationKinds, illustrationUrls);
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illFp}-${footballFingerprint(football)}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, football, variant }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));

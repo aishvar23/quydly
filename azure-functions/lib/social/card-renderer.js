@@ -65,14 +65,23 @@ const SHAPES = {
 const CAROUSEL_SLIDES = ["cover", "what", "keypoints", "why", "engagement", "cta"];
 const CAROUSEL_SLIDES_NO_WHY = ["cover", "what", "keypoints", "engagement", "cta"];
 
-// Pick the slide list for a story based on whether historical "why it matters"
-// points were supplied and whether an engagement MCQ was supplied. Each optional
-// slide is dropped when it would be empty, so a story with neither renders the
-// original 4-slide set (cover/what/keypoints/cta).
-function carouselSlidesFor(whyItMatters, question) {
+// Pick the slide list for a story. Optional slides are dropped when they would be
+// empty, so a story with none renders the original 4-slide set
+// (cover/what/keypoints/cta):
+//   • "why"       — only when historical "why it matters" points were supplied;
+//   • "numbers"   — a "By the numbers" data slide (Anton hero numerals built from
+//                   story.structured_numbers), inserted right after "what" so the
+//                   hard data pays off the cover hook early. Only when the story
+//                   carries usable sourced figures (hasNumbers);
+//   • "engagement"— only when a valid MCQ was supplied.
+function carouselSlidesFor(whyItMatters, question, hasNumbers = false) {
   const why = Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : [];
   let list = why.length ? CAROUSEL_SLIDES : CAROUSEL_SLIDES_NO_WHY;
   if (!isEngagementQuestion(question)) list = list.filter((k) => k !== "engagement");
+  if (hasNumbers) {
+    const at = list.indexOf("what");
+    list = at >= 0 ? [...list.slice(0, at + 1), "numbers", ...list.slice(at + 1)] : ["numbers", ...list];
+  }
   return list;
 }
 
@@ -100,6 +109,48 @@ const PAD_Y_RATIO = 0.075; // vertical — unchanged, opened-post look
 // longer. Dropping to the smaller size sooner keeps long headlines — especially
 // when the cover also stacks a date line and a portrait — from overflowing.
 const HEADLINE_COMPACT_CHARS = 80;
+
+// ── Gold-standard news carousel THEME ────────────────────────────────────────
+//
+// Single source of truth for the "Wealth-class" news carousel look (benchmarked
+// on @wealth): the display + body faces, the bottom-weighted legibility scrim,
+// the type scale (as fractions of the 1080px canvas width — Satori scales by
+// width), the padding, and the default accent. The news slide renderers
+// (coverTree / contentSlideTree / the numbers slide) read from THIS object
+// instead of scattered magic numbers, so the whole set reads as ONE designed
+// template and the template can be tuned in one place. The FOOTBALL variant
+// keeps its own constants (FB_* / fullBleedSlideTree) — do not fold it in here.
+const THEME = {
+  bg: BG,
+  fg: FG,
+  muted: MUTED,
+  display: "Anton", // condensed heavy face — cover hook, section heads, hero numerals
+  body: "Lato", // readable face — ledes, bullets, options, captions
+  padXRatio: PAD_X_RATIO,
+  padYRatio: PAD_Y_RATIO,
+  accentFallback: "#22D3EE", // neutral cyan when a story has no category accent
+  // Bottom-weighted scrim shared by every news body slide: light up top so the
+  // photo reads, ramping to near-opaque BG where the text sits. Satori cannot
+  // sample the image, so this ramp is tuned to hold legible over the BRIGHTEST
+  // plausible photo — it reaches ~0.75 by 46% down, because the tallest body
+  // (the numbers slide: hero numeral + label + rows) starts that high and used
+  // to wash out over bright imagery when the ramp only reached ~0.30 there. ONE
+  // ramp for the whole set so the carousel reads as one designed template.
+  bodyScrim:
+    "linear-gradient(180deg, rgba(11,15,26,0.20) 0%, rgba(11,15,26,0.45) 28%, rgba(11,15,26,0.75) 46%, rgba(11,15,26,0.92) 64%, rgba(11,15,26,0.98) 100%)",
+  // Dark halo behind text so a bright element poking through the scrim can't
+  // erase a glyph — belt-and-braces with the scrim. `textShadow` for body text;
+  // `textShadowHero` (wider, heavier) for the big Anton hero numeral / hooks,
+  // which cover more area and so sit over more image variance.
+  textShadow: "0 2px 8px rgba(11,15,26,0.60)",
+  textShadowHero: "0 3px 14px rgba(11,15,26,0.72)",
+  // Type scale as fractions of the 1080px width.
+  scale: {
+    coverHook: 0.072, coverHookLong: 0.058,
+    statHero: 0.2, section: 0.05, eyebrow: 0.03,
+    lede: 0.052, body: 0.04, stat: 0.052, statLabel: 0.03, caption: 0.024,
+  },
+};
 
 // ── Cover date line ──────────────────────────────────────────────────────────
 //
@@ -184,6 +235,34 @@ function keyPoints(story) {
     .map((p) => (typeof p === "string" ? p : p && (p.text || p.point)) || "")
     .map((s) => oneLine(s))
     .filter(Boolean);
+}
+
+// Common English function words to ignore when scoring key-point relevance, so
+// overlap is driven by content words (entities, topic terms), not "the"/"and".
+const KP_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "have", "has", "had", "was", "were",
+  "are", "will", "would", "its", "into", "over", "after", "amid", "than", "then", "who", "which",
+  "but", "not", "you", "your", "their", "they", "them", "his", "her", "our", "out", "per", "via",
+]);
+
+// Order a story's key points by on-topic relevance to the HEADLINE + primary
+// entities (a light narrative fix — the full coherence gate is a later phase), so
+// the most on-topic point leads the "Key points" slide and off-topic tangents
+// sink. Scored by shared content-word count; ties keep the original order (stable).
+function orderedKeyPoints(story) {
+  const pts = keyPoints(story);
+  if (pts.length <= 1) return pts;
+  const ents = (Array.isArray(story?.primary_entities_enriched) ? story.primary_entities_enriched : [])
+    .map((e) => e && e.name).filter(Boolean).join(" ");
+  const words = (s) => (String(s || "").toLowerCase().match(/[a-z0-9]{3,}/g) || []).filter((w) => !KP_STOPWORDS.has(w));
+  const topic = new Set(words(`${oneLine(story?.headline)} ${ents}`));
+  const scored = pts.map((p, i) => {
+    let s = 0;
+    for (const w of new Set(words(p))) if (topic.has(w)) s++;
+    return { p, i, s };
+  });
+  scored.sort((a, b) => b.s - a.s || a.i - b.i);
+  return scored.map((x) => x.p);
 }
 
 // Abbreviations whose trailing period is NOT a sentence boundary. Without this
@@ -368,31 +447,62 @@ function entityImages(story) {
 //   coverFallbackSpec — the lead org/place image RESERVED as the cover's last
 //                       resort (only when no person cover), or null;
 //   bodyKinds         — the non-cover content kinds present;
+//   photoBodyKinds    — the body kinds ELIGIBLE for a current-story entity photo
+//                       (bodyKinds minus "engagement"); bodySpecs align to these;
 //   bodySpecs         — the entity images for the body slides, with the reserved
 //                       cover entity held back so it never appears on both.
+//
+// The engagement slide is excluded from entity photos: its MCQ is drawn from a
+// DIFFERENT (previous) story, so a current-story entity photo would visually
+// assert an entity unrelated to the question. It keeps the neutral gradient floor
+// (it is not sized an illustration either — see plannedIllustrationCount).
 function planEntityImagery(story, contentKinds) {
   const hasCover = contentKinds.includes("cover");
   const coverSpec = hasCover ? leadPersonImage(story) : null;
   const coverFallbackSpec = (hasCover && !coverSpec) ? leadOrgPlaceImage(story) : null;
   const reservedName = coverSpec?.name || coverFallbackSpec?.name;
   const bodyKinds = contentKinds.filter((k) => k !== "cover");
-  const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, bodyKinds.length);
-  return { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs };
+  const photoBodyKinds = bodyKinds.filter((k) => k !== "engagement");
+  const bodySpecs = entityImages(story).filter((s) => s.name !== reservedName).slice(0, photoBodyKinds.length);
+  return { hasCover, coverSpec, coverFallbackSpec, bodyKinds, photoBodyKinds, bodySpecs };
 }
 
-// How many editorial illustrations the carousel needs — one for every content
-// slide (cover / what / key points / [why]) that won't be backed by a usable
-// PHOTO under the sourcing rules in planEntityImagery. The cover is photo-backed
-// ONLY by a lead PERSON image; org logos / place flags never pre-empt an
-// illustration on the cover (so it never falls back to a "dumb" logo/flag or the
-// gradient when an illustration is possible). The generator generates exactly this
-// many, and renderCarouselSlides routes them to precisely those photo-less slides.
-export function plannedIllustrationCount(story, { whyItMatters = [] } = {}) {
+// Canonical, ORDER-PRESERVING list of the news slide kinds that carry a full-bleed
+// background image (photo → generated illustration → gradient floor). Used to
+// derive both the generator's illustration sizing (plannedIllustrationCount) and
+// the renderer's imagery allocation from a slide list, so the two can't drift.
+const IMAGE_SLIDE_KINDS = ["cover", "what", "numbers", "keypoints", "why", "engagement", "cta"];
+const imageSlideKinds = (slideList) => IMAGE_SLIDE_KINDS.filter((k) => slideList.includes(k));
+
+// Whether a story has usable sourced figures for the "By the numbers" slide.
+function storyHasNumbers(story) {
+  return !!selectStoryNumbers(story);
+}
+
+// The ORDERED content-slide kinds that need an editorial illustration — every
+// DETERMINISTIC content slide (cover / what / [numbers] / key points / [why]) that
+// won't be backed by a usable PHOTO under planEntityImagery, in slide order. The
+// cover is photo-backed ONLY by a lead PERSON image; org logos / place flags never
+// pre-empt an illustration on the cover. engagement/cta are intentionally excluded
+// (they sit at the tail of the slide list and fall back to the gradient floor when
+// no illustration is routed). The generator generates exactly these, IN ORDER, and
+// renderCarouselSlides routes them positionally to the photo-less slots — so the
+// KINDS (not just the count) must be passed to the scene writer, otherwise a
+// cover-hook scene lands on a body slide whenever the cover is photo-backed.
+export function plannedIllustrationKinds(story, { whyItMatters = [] } = {}) {
   const hasWhy = Array.isArray(whyItMatters) && whyItMatters.filter(Boolean).length > 0;
-  const contentKinds = ["cover", "what", "keypoints", ...(hasWhy ? ["why"] : [])];
-  const { coverSpec, bodySpecs } = planEntityImagery(story, contentKinds);
-  const coverPhoto = coverSpec ? 1 : 0;
-  return Math.max(0, contentKinds.length - coverPhoto - bodySpecs.length);
+  const contentKinds = ["cover", "what", ...(storyHasNumbers(story) ? ["numbers"] : []), "keypoints", ...(hasWhy ? ["why"] : [])];
+  const { coverSpec, photoBodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
+  // The body kinds that get a photo are the first bodySpecs.length of the
+  // photo-eligible body kinds (planEntityImagery assigns bodySpecs by position).
+  const photoed = new Set(photoBodyKinds.slice(0, bodySpecs.length));
+  if (coverSpec) photoed.add("cover");
+  return contentKinds.filter((k) => !photoed.has(k));
+}
+
+// How many illustrations the carousel needs — the length of the gap-kind list.
+export function plannedIllustrationCount(story, opts = {}) {
+  return plannedIllustrationKinds(story, opts).length;
 }
 
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or
@@ -572,6 +682,7 @@ function eyebrow(text, accent, size) {
     style: {
       display: "flex", fontSize: Math.round(size * 0.03), fontWeight: 700,
       color: accent, letterSpacing: 2, textTransform: "uppercase", marginBottom: 24,
+      textShadow: THEME.textShadow,
     },
   }, text);
 }
@@ -584,7 +695,7 @@ function bulletRow(text, accent, size, fontPx = Math.round(size * 0.038)) {
         backgroundColor: accent, marginTop: Math.round(fontPx * 0.5), marginRight: 22, flexShrink: 0,
       },
     }, []),
-    el("div", { style: { display: "flex", fontSize: fontPx, color: FG, lineHeight: BULLET_LINE_H } }, text),
+    el("div", { style: { display: "flex", fontSize: fontPx, color: FG, lineHeight: BULLET_LINE_H, textShadow: THEME.textShadow } }, text),
   ]);
 }
 
@@ -645,7 +756,7 @@ function optionRow(letter, text, accent, size) {
         marginRight: 22, flexShrink: 0,
       },
     }, letter),
-    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.036), color: FG, lineHeight: 1.25 } }, text),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.036), color: FG, lineHeight: 1.25, textShadow: THEME.textShadow } }, text),
   ]);
 }
 
@@ -681,18 +792,21 @@ function highlightWordIndices(words, highlight) {
 // naturally while the highlight hugs only its words. Falls back to a single plain
 // text node when there is nothing to highlight (the pre-highlight layout).
 function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, accent = FG } = {}) {
-  const fontSize = Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? 0.058 : 0.072));
+  // The bold condensed display face (Anton) for the cover hook — the @wealth
+  // scroll-stopping title look. Tight leading; sourced from THEME so the whole
+  // set stays consistent.
+  const fontSize = Math.round(size * (headline.length > HEADLINE_COMPACT_CHARS ? THEME.scale.coverHookLong : THEME.scale.coverHook));
   const words = headline.split(/\s+/).filter(Boolean);
   const hi = highlightWordIndices(words, highlight);
 
   if (!hi.size) {
-    return el("div", { style: { display: "flex", color: FG, fontWeight: 700, fontSize, lineHeight: 1.15 } }, headline);
+    return el("div", { style: { display: "flex", fontFamily: THEME.display, color: FG, fontWeight: 700, fontSize, lineHeight: 1.06, textShadow: THEME.textShadowHero } }, headline);
   }
 
   const gap = Math.round(fontSize * 0.26);     // inter-word space
-  const rowGap = Math.round(fontSize * 0.2);   // line spacing between wrapped rows
+  const rowGap = Math.round(fontSize * 0.16);  // line spacing between wrapped rows
   const padX = Math.round(fontSize * 0.14);
-  const base = { display: "flex", fontWeight: 700, fontSize, lineHeight: 1.15, marginRight: gap, marginBottom: rowGap };
+  const base = { display: "flex", fontFamily: THEME.display, fontWeight: 700, fontSize, lineHeight: 1.06, marginRight: gap, marginBottom: rowGap, textShadow: THEME.textShadowHero };
 
   // The highlight span is contiguous, so render it as ONE block (a single
   // continuous marker box / accent run) rather than a box per word. As an
@@ -708,7 +822,7 @@ function coverHeadline(headline, size, { highlight = "", mode = HIGHLIGHT_MODE, 
       const phrase = words.slice(hiStart, hiEnd + 1).join(" ");
       children.push(mode === "accent"
         ? el("div", { style: { ...base, color: accent } }, phrase)
-        : el("div", { style: { ...base, color: BG, backgroundColor: HIGHLIGHT_MARKER, paddingLeft: padX, paddingRight: padX, borderRadius: Math.round(fontSize * 0.09) } }, phrase));
+        : el("div", { style: { ...base, color: BG, textShadow: "none", backgroundColor: HIGHLIGHT_MARKER, paddingLeft: padX, paddingRight: padX, borderRadius: Math.round(fontSize * 0.09) } }, phrase));
     } // words strictly inside (hiStart, hiEnd] are folded into the phrase above
   }
   return el("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "flex-start" } }, children);
@@ -726,6 +840,7 @@ function coverDateRow(story, size) {
     style: {
       display: "flex", fontSize: Math.round(size * 0.026), fontWeight: 700,
       color: "rgba(255,255,255,0.82)", letterSpacing: 1, marginBottom: Math.round(size * 0.035),
+      textShadow: THEME.textShadow,
     },
   }, text);
 }
@@ -792,81 +907,173 @@ function slideBackground({ image, accent, size, height, photoPosition = "center 
   ];
 }
 
-// Legibility scrim for the text-heavy body slides (what / key points / why):
-// near-transparent at the top so the image reads, ramping to almost-opaque BG in
-// the bottom half where the eyebrow + bullets sit. Heavier than the cover scrim
-// because body slides carry more text over the image.
+// Legibility scrim for the text-heavy news body slides — the SINGLE, luminance-
+// aware ramp from THEME.bodyScrim: near-transparent at the top so the image
+// reads, ramping to almost-opaque BG in the lower half where the eyebrow + text
+// sit. One ramp for the whole news set (what / numbers / key points / why /
+// engagement / cta) so the carousel reads as ONE designed template.
 function contentScrim(size, height) {
   return el("div", {
     style: {
       position: "absolute", top: 0, left: 0, display: "flex", width: size, height,
-      backgroundImage: "linear-gradient(180deg, rgba(11,15,26,0.10) 0%, rgba(11,15,26,0.28) 34%, rgba(11,15,26,0.80) 58%, rgba(11,15,26,0.96) 100%)",
+      backgroundImage: THEME.bodyScrim,
     },
   }, []);
 }
 
-// Build the inner body for the TEXT-ONLY utility slides (engagement / cta). The
-// image-led slides (cover / what / key points / why) have their own full-bleed
-// layout (coverTree / contentSlideTree), so this only ever sees engagement & cta.
-// `question` (engagement only) is the MCQ { question, options, correctIndex }.
-function slideBody({ kind, accent, size, question }) {
-  if (kind === "engagement") {
-    // The MCQ drawn from the PREVIOUS post's story. Poses the question + 4
-    // lettered options and invites a reply with the reader's pick. The correct
-    // answer is NEVER shown here — it is revealed in a comment 12h later.
-    const q = oneLine(question?.question) || "Today's quiz question";
-    const options = (Array.isArray(question?.options) ? question.options : []).slice(0, 4);
-    const letters = ["A", "B", "C", "D"];
-    return el("div", { style: { display: "flex", flexDirection: "column" } }, [
-      eyebrow("Knowledge test", accent, size),
-      el("div", {
-        style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.046), lineHeight: 1.25, marginBottom: Math.round(size * 0.05) },
-      }, q),
-      ...options.map((opt, i) => optionRow(letters[i], oneLine(opt), accent, size)),
-      el("div", {
-        style: { display: "flex", fontSize: Math.round(size * 0.032), color: MUTED, lineHeight: 1.3, marginTop: Math.round(size * 0.03) },
-      }, "Reply with your pick in the comments"),
-    ]);
+// ── "By the numbers" data slide ──────────────────────────────────────────────
+//
+// Cap a stat LABEL (the structured-number `role`) so a long role string
+// ("gain from previous close to 52-week high") stays on one/two lines.
+function statLabel(role) {
+  const s = oneLine(role);
+  return s.length > 42 ? `${s.slice(0, 41).trimEnd()}…` : s;
+}
+
+// Select the figures for the "By the numbers" slide from story.structured_numbers
+// (shape: { money[], percentages[], counts[], casualties[], magnitudes[] }, each
+// item { role, value, display }). Returns { hero, rows } or null when there is
+// nothing usable. The HERO is the punchiest percentage (largest |value|) — the
+// aha number that pays off the cover — else the first money/count figure; the
+// rows are the next few figures (percentages first, then money) as supporting
+// stats. Every value is a SOURCED display string — we never compute or invent a
+// figure here (factual-safety: render only what the pipeline extracted).
+function selectStoryNumbers(story) {
+  const sn = story?.structured_numbers;
+  if (!sn || typeof sn !== "object") return null;
+  const clean = (arr) => (Array.isArray(arr) ? arr : []).filter((n) => n && oneLine(n.display));
+  const pct = clean(sn.percentages);
+  const money = clean(sn.money);
+  const counts = [...clean(sn.counts), ...clean(sn.magnitudes), ...clean(sn.casualties)];
+  const byMag = (a, b) => Math.abs(Number(b.value) || 0) - Math.abs(Number(a.value) || 0);
+  const pctSorted = [...pct].sort(byMag);
+  // Hero: the biggest percentage move (most scroll-stopping); fall back to the
+  // first money figure, then the first count. Everything else becomes a row.
+  const pool = [...pctSorted, ...money, ...counts];
+  if (!pool.length) return null;
+  const hero = pool[0];
+  const rows = pool.slice(1, 4).map((n) => ({ display: oneLine(n.display), label: statLabel(n.role) }));
+  return { hero: { display: oneLine(hero.display), label: statLabel(hero.role) }, rows };
+}
+
+// One supporting stat row on the numbers slide: an accent tick + the value in the
+// condensed display face (tabular, per the visual system) + the label.
+function statRow(value, label, accent, size) {
+  return el("div", { style: { display: "flex", alignItems: "center", marginBottom: Math.round(size * 0.024) } }, [
+    el("div", { style: { display: "flex", width: Math.round(size * 0.012), height: Math.round(size * 0.052), backgroundColor: accent, marginRight: Math.round(size * 0.022), borderRadius: 2, flexShrink: 0 } }, []),
+    el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: Math.round(size * THEME.scale.stat), color: FG, width: Math.round(size * 0.28), flexShrink: 0, textShadow: THEME.textShadow } }, value),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * THEME.scale.statLabel), color: "rgba(255,255,255,0.82)", lineHeight: 1.15, textShadow: THEME.textShadow } }, label),
+  ]);
+}
+
+// ── "By the numbers" auto-fit ────────────────────────────────────────────────
+//
+// The hero display is NOT always a short "226%": the enrichment schema permits
+// multi-word values ("$8 billion", "at least 17 dead"), which wrap to two or
+// three lines at the top hero size and, stacked with the label + supporting rows
+// + source, overflow the FIXED slide height and clip the lower rows / footer
+// (Satori has no overflow). So — like the bullet slides (fitBulletSlide) — fit
+// the whole stack to a vertical budget: shrink the hero first (keep every
+// supporting figure), and only as a last resort drop trailing rows.
+const NUMBERS_HERO_LEVELS = [0.2, 0.165, 0.135, 0.11]; // fractions of width, densest → smallest
+const ANTON_AVG_CHAR_EM = 0.48; // Anton is condensed, so a tighter advance than Lato's 0.52
+
+function fitNumbersStack(picked, size, budgetPx) {
+  const colW = size * (1 - 2 * PAD_X_RATIO);
+  // Conservative per-part height estimates (err toward NOT clipping): a label or
+  // a row label may wrap to two lines, so the row estimate carries slack.
+  const eyebrowH = Math.round(size * 0.03 * 1.2) + 24;
+  const labelH = picked.hero.label ? Math.round(size * THEME.scale.body * 1.3) + Math.round(size * 0.042) : 0;
+  const sourceH = Math.round(size * 0.02 * 1.2) + Math.round(size * 0.03);
+  const rowH = Math.round(size * THEME.scale.stat) + Math.round(size * 0.024) + Math.round(size * 0.03);
+  const heroLines = (heroPx) => {
+    const cpl = Math.max(1, colW / (heroPx * ANTON_AVG_CHAR_EM));
+    return Math.max(1, Math.ceil(picked.hero.display.length / cpl));
+  };
+  const fixed = eyebrowH + labelH + sourceH;
+  // Prefer keeping ALL rows: step the hero size down until the full stack fits.
+  for (const level of NUMBERS_HERO_LEVELS) {
+    const heroPx = Math.round(size * level);
+    if (fixed + heroLines(heroPx) * heroPx + picked.rows.length * rowH <= budgetPx) {
+      return { heroPx, rows: picked.rows };
+    }
   }
+  // Even the smallest hero with every row overflows → smallest hero, then drop
+  // trailing rows until it fits (a pathological long hero can end with 0 rows).
+  const heroPx = Math.round(size * NUMBERS_HERO_LEVELS[NUMBERS_HERO_LEVELS.length - 1]);
+  const heroH = heroLines(heroPx) * heroPx;
+  let rows = picked.rows.length;
+  while (rows > 0 && fixed + heroH + rows * rowH > budgetPx) rows -= 1;
+  return { heroPx, rows: picked.rows.slice(0, rows) };
+}
 
-  // cta — a pure follow ask. The handle is the hero; the supporting line is a
-  // CONTENT promise, not the quiz (we no longer funnel IG traffic to the quiz).
+// The "By the numbers" body: a BIG Anton hero numeral + its label, then up to
+// three supporting stat rows. Mirrors the football stat-insights primitive (a
+// hero line + grounded rows) but for news structured numbers. The hero size and
+// row count are fitted to the slide height so a long multi-word value can't push
+// the stack off the card.
+function numbersBody({ story, accent, size, height, source }) {
+  const picked = selectStoryNumbers(story);
+  const children = [eyebrow("By the numbers", accent, size)];
+  if (picked) {
+    // Budget = slide height minus the top/bottom padding and the header+footer
+    // chrome (which the body must never grow into).
+    const budget = height - 2 * Math.round(size * THEME.padYRatio) - Math.round(size * 0.22);
+    const fit = fitNumbersStack(picked, size, budget);
+    children.push(el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: fit.heroPx, color: FG, lineHeight: 1, letterSpacing: 1, textShadow: THEME.textShadowHero } }, picked.hero.display));
+    if (picked.hero.label) {
+      children.push(el("div", { style: { display: "flex", fontSize: Math.round(size * THEME.scale.body), color: "rgba(255,255,255,0.86)", lineHeight: 1.2, marginBottom: Math.round(size * 0.036), marginTop: Math.round(size * 0.006), textShadow: THEME.textShadow } }, picked.hero.label));
+    }
+    fit.rows.forEach((r) => children.push(statRow(r.display, r.label, accent, size)));
+  } else {
+    children.push(el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: Math.round(size * 0.06), color: FG, lineHeight: 1.08, textShadow: THEME.textShadowHero } }, "The numbers behind the story."));
+  }
+  if (source) {
+    children.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.02), color: MUTED, marginTop: Math.round(size * 0.03) } }, `Source: ${source}`));
+  }
+  return el("div", { style: { display: "flex", flexDirection: "column" } }, children);
+}
+
+// The engagement MCQ body (full-bleed variant): the question + 4 lettered options
+// over the slide image. The correct answer is NEVER shown here — it is revealed in
+// a comment 12h later.
+function engagementBody({ accent, size, question }) {
+  const q = oneLine(question?.question) || "Today's quiz question";
+  const options = (Array.isArray(question?.options) ? question.options : []).slice(0, 4);
+  const letters = ["A", "B", "C", "D"];
   return el("div", { style: { display: "flex", flexDirection: "column" } }, [
-    el("div", {
-      style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.058), lineHeight: 1.15, marginBottom: Math.round(size * 0.016) },
-    }, "Follow for tomorrow's brief"),
-    el("div", {
-      style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.056), lineHeight: 1.2, marginBottom: Math.round(size * 0.04) },
-    }, QUYDLY_IG_HANDLE()),
-    el("div", {
-      style: { display: "flex", fontSize: Math.round(size * 0.04), color: MUTED, lineHeight: 1.35 },
-    }, "The day's biggest stories, decoded."),
+    eyebrow("Knowledge test", accent, size),
+    el("div", { style: { display: "flex", color: FG, fontWeight: 700, fontSize: Math.round(size * 0.046), lineHeight: 1.25, marginBottom: Math.round(size * 0.04), textShadow: THEME.textShadow } }, q),
+    ...options.map((opt, i) => optionRow(letters[i], oneLine(opt), accent, size)),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.03), color: "rgba(255,255,255,0.82)", lineHeight: 1.3, marginTop: Math.round(size * 0.024), textShadow: THEME.textShadow } }, "Reply with your pick in the comments"),
   ]);
 }
 
-// The padded text body slides (engagement / cta) — solid-BG cards with no image.
-// The image-led slides have their own full-bleed layout, so this only ever sees
-// the text-only utility kinds.
-function slideTree({ kind, accent, category, index, total, size, height, question }) {
-  const padX = Math.round(size * PAD_X_RATIO);
-  const padY = Math.round(size * PAD_Y_RATIO);
-  const hint = kind === "engagement" ? "Tap to comment →" : "";
-  return el("div", {
-    style: {
-      width: size, height, display: "flex", flexDirection: "column",
-      justifyContent: "space-between", backgroundColor: BG,
-      padding: `${padY}px ${padX}px`, fontFamily: "Lato",
-    },
-  }, [
-    slideHeader({ category, accent, size }),
-    el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "center" } }, [
-      slideBody({ kind, accent, size, question }),
-    ]),
-    slideFooter({ accent, size, index, total, hint }),
+// The CTA body (full-bleed variant): a Save-first ask (the retention signal),
+// then the follow handle. Anton for the hook line, matching the news set's look.
+function ctaBody({ accent, size }) {
+  return el("div", { style: { display: "flex", flexDirection: "column" } }, [
+    el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: Math.round(size * 0.07), color: FG, letterSpacing: 1, lineHeight: 1.02, marginBottom: Math.round(size * 0.018), textShadow: THEME.textShadowHero } }, "SAVE THIS FOR LATER"),
+    el("div", { style: { display: "flex", fontSize: Math.round(size * 0.036), color: "rgba(255,255,255,0.86)", lineHeight: 1.35, marginBottom: Math.round(size * 0.036), textShadow: THEME.textShadow } }, "Tap save, then follow for tomorrow's brief — the day's biggest stories, decoded."),
+    el("div", { style: { display: "flex", color: accent, fontWeight: 700, fontSize: Math.round(size * 0.052), textShadow: THEME.textShadow } }, QUYDLY_IG_HANDLE()),
   ]);
 }
 
-// ── Image-led body slides (what / key points / why) ──────────────────────────
+// Deterministic open-loop teaser for the footer of each non-final NEWS slide (the
+// @thevikasroy retention pattern). Templated from the slide list — never an LLM
+// line that could overclaim.
+function newsTeaser(nextKind) {
+  switch (nextKind) {
+    case "what": return "Next: what happened →";
+    case "numbers": return "Next: the numbers →";
+    case "keypoints": return "Next: the key facts →";
+    case "why": return "Next: why it matters →";
+    case "engagement": return "Next: test yourself →";
+    default: return "";
+  }
+}
+
+// ── Image-led body slides (what / numbers / key points / why / engagement / cta) ──
 
 // Fraction of the slide height reserved for the text block at the bottom — the
 // heavily-scrimmed zone where the eyebrow + bullets stay legible over the image.
@@ -878,8 +1085,15 @@ const CONTENT_TEXT_ZONE = 0.46;
 // "Brownstone Productions") plus a "Photo: …" credit. Attribution is mandatory
 // (never show a licensed photo without crediting it), and the name gives the
 // otherwise-unlabelled logo/photo context.
-function contentBody({ kind, story, accent, size, height, whyItMatters, imageName, credit }) {
+function contentBody({ kind, story, accent, size, height, whyItMatters, question, source, imageName, credit }) {
   const headline = oneLine(story?.headline) || "Today's news quiz";
+  // The image-backed utility slides (numbers / engagement / cta) carry no photo
+  // caption (their imagery is a generated illustration / generic stock, not a
+  // licensed entity photo) and have their own layout.
+  if (kind === "numbers") return numbersBody({ story, accent, size, height, source });
+  if (kind === "engagement") return engagementBody({ accent, size, question });
+  if (kind === "cta") return ctaBody({ accent, size });
+
   const captionLines = [];
   if (imageName) {
     captionLines.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: FG, marginTop: Math.round(size * 0.022) } }, imageName));
@@ -896,16 +1110,17 @@ function contentBody({ kind, story, accent, size, height, whyItMatters, imageNam
     const summary = firstSentences(story?.summary, 1) || headline;
     return wrap([
       eyebrow("What happened", accent, size),
-      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4 } }, summary),
+      el("div", { style: { display: "flex", fontSize: Math.round(size * 0.052), color: FG, lineHeight: 1.4, textShadow: THEME.textShadow } }, summary),
     ]);
   }
 
-  // "Key points" (today's key_points) and "Why it matters" (historical points
-  // passed in via whyItMatters) share one bullet layout, with a summary fallback.
+  // "Key points" (today's key_points, ordered on-topic by relevance to the
+  // headline entity) and "Why it matters" (historical points passed in via
+  // whyItMatters) share one bullet layout, with a summary fallback.
   const label = kind === "why" ? "Why it matters" : "Key points";
   const points = (kind === "why"
     ? (Array.isArray(whyItMatters) ? whyItMatters.filter(Boolean) : [])
-    : keyPoints(story)).slice(0, 3);
+    : orderedKeyPoints(story)).slice(0, 3);
   if (!points.length) {
     return wrap([
       eyebrow(label, accent, size),
@@ -918,35 +1133,42 @@ function contentBody({ kind, story, accent, size, height, whyItMatters, imageNam
   return wrap([eyebrow(label, accent, size), ...fit.points.map((p) => bulletRow(p, accent, size, fit.fontPx))]);
 }
 
-// An image-led body slide: the same FULL-BLEED treatment as the cover — a photo
-// covers the frame (logo contained on the gradient floor, gradient alone when
-// there's no image) under a legibility scrim, with the brand chrome on top, the
-// text anchored low in the scrimmed zone, and the page indicator in the footer.
-function contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage, whyItMatters }) {
-  const padX = Math.round(size * PAD_X_RATIO);
-  const padY = Math.round(size * PAD_Y_RATIO);
+// The UNIFIED news body scaffold: every non-cover news slide (what / numbers /
+// key points / why / engagement / cta) renders through this ONE full-bleed
+// treatment — a photo covers the frame (logo contained on the gradient floor,
+// gradient alone when there's no image) under the single THEME luminance-aware
+// scrim, with the brand chrome pinned top, the body anchored low in the scrimmed
+// zone, and an open-loop teaser + page indicator in the footer. The football
+// carousel keeps its own scaffold (fullBleedSlideTree); this is the news seed of
+// the gold-standard template.
+function contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage, whyItMatters, question, source, nextKind }) {
+  const padX = Math.round(size * THEME.padXRatio);
+  const padY = Math.round(size * THEME.padYRatio);
   // Illustrations carry no name/credit (not a licensed photo); entity photos do.
   const credit = oneLine(slideImage?.credit);
   const imageName = oneLine(slideImage?.name);
+  // Open-loop teaser threads the narrative arc; engagement keeps its comment nudge.
+  const hint = kind === "engagement" ? "Tap to comment →" : newsTeaser(nextKind);
   const foreground = el("div", {
     style: {
       position: "relative", width: size, height, display: "flex", flexDirection: "column",
-      justifyContent: "space-between", padding: `${padY}px ${padX}px`, fontFamily: "Lato",
+      justifyContent: "space-between", padding: `${padY}px ${padX}px`, fontFamily: THEME.body,
     },
   }, [
     slideHeader({ category, accent, size }),
     el("div", { style: { display: "flex", flexGrow: 1, flexDirection: "column", justifyContent: "flex-end" } }, [
-      contentBody({ kind, story, accent, size, height, whyItMatters, imageName, credit }),
+      contentBody({ kind, story, accent, size, height, whyItMatters, question, source, imageName, credit }),
     ]),
-    slideFooter({ accent, size, index, total, hint: "" }),
+    slideFooter({ accent, size, index, total, hint }),
   ]);
   return el("div", {
-    style: { position: "relative", display: "flex", width: size, height, backgroundColor: BG, fontFamily: "Lato" },
+    style: { position: "relative", display: "flex", width: size, height, backgroundColor: THEME.bg, fontFamily: THEME.body },
   }, [...slideBackground({ image: slideImage, accent, size, height }), contentScrim(size, height), foreground]);
 }
 
-// The cover slide — its own FULL-BLEED layout (vs slideTree's padded card). The
-// editorial image fills the frame; a bottom-weighted scrim guarantees the hook
+// The cover slide — its own FULL-BLEED layout (the body slides use the unified
+// contentSlideTree scaffold). The editorial image fills the frame; a bottom-
+// weighted scrim guarantees the hook
 // reads over any image; the bold, keyword-highlighted hook is anchored at the
 // bottom with the brand wordmark/category on top and a source line — matching
 // the craft of top faceless-news carousels (e.g. @vesting). `portrait` is the
@@ -993,8 +1215,8 @@ function coverTree({ story, accent, category, size, height, portrait, coverHook,
   if (dateRow) bottomChildren.push(dateRow);
   bottomChildren.push(coverHeadline(cover, size, { highlight: hookText ? coverHighlight : "", mode: highlightMode, accent }));
   const metaRow = [];
-  if (attribution) metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: MUTED, letterSpacing: 1 } }, attribution));
-  metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), color: FG, marginLeft: "auto" } }, "Swipe to read →"));
+  if (attribution) metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.024), fontWeight: 700, color: MUTED, letterSpacing: 1, textShadow: THEME.textShadow } }, attribution));
+  metaRow.push(el("div", { style: { display: "flex", fontSize: Math.round(size * 0.026), color: FG, marginLeft: "auto", textShadow: THEME.textShadow } }, "Swipe to read →"));
   bottomChildren.push(el("div", {
     style: { display: "flex", alignItems: "center", width: "100%", marginTop: Math.round(size * 0.03) },
   }, metaRow));
@@ -1395,7 +1617,7 @@ function footballSlideTree({ kind, football, accent, category, index, total, siz
 // lead entity (person, else org/place) with a credit. Resolving the image is
 // best-effort and happens once up front; any failure leaves the cover text-only.
 // `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", shape = "portrait", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], football = null, fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", shape = "portrait", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], illustrationKinds = [], football = null, fetchImpl } = {}) {
   const { width, height } = SHAPES[shape] || SHAPES.portrait;
   const size = width; // scaling base for typography/padding; height adds 4:5 (or 9:16) room
   // For a resolved football match the chrome accent is the home team's color and
@@ -1406,8 +1628,10 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
   // A resolved football match selects the football slide set (cover + scoreboard
   // /table/form/stat-insights + cta); otherwise the standard set. An explicit
   // `slides` wins over both.
-  const slideList = slides || footballSlidesFor(football) || carouselSlidesFor(whyItMatters, question);
+  const slideList = slides || footballSlidesFor(football) || carouselSlidesFor(whyItMatters, question, storyHasNumbers(story));
   const total = slideList.length;
+  // Highest-authority source issuer — footer attribution on the numbers slide.
+  const source = coverSource(story);
 
   // Football imagery: the two crests, the competition emblem, and a generic
   // full-bleed background by result mood. All best-effort (raster only — SVG
@@ -1453,16 +1677,21 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
   // imagery is disabled (withPortrait off) — then the generator never gates on it.
   let coverImagery;
   if (withPortrait || football) {
-    const contentKinds = ["cover", "what", "keypoints", "why"].filter((k) => slideList.includes(k));
+    // Every news slide carries a full-bleed image (photo → illustration → gradient
+    // floor), including numbers / engagement / cta — derived from the slide list in
+    // canonical order so it aligns with the generator's plannedIllustrationCount.
+    const contentKinds = imageSlideKinds(slideList);
     // planEntityImagery is the single source of truth for cover/body sourcing —
     // shared with plannedIllustrationCount so the generated illustration count can't
     // drift from this allocation. The cover photo is a lead PERSON only; the lead
     // org/place is reserved as the cover's last resort (Pass 3) and kept off the
     // body slides so the same logo never appears on both.
-    const { hasCover, coverSpec, coverFallbackSpec, bodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
+    const { hasCover, coverSpec, coverFallbackSpec, photoBodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
     const specByKind = {};
     if (hasCover) specByKind.cover = coverSpec;
-    bodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
+    // engagement is intentionally absent from photoBodyKinds (cross-story MCQ), so
+    // it never claims a current-story entity photo — it keeps the gradient floor.
+    photoBodyKinds.forEach((k, i) => { specByKind[k] = bodySpecs[i] || null; });
 
     // Pass 1 — resolve the licensed photo for each slide (best-effort, parallel).
     const photoByKind = {};
@@ -1471,16 +1700,29 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
       if (photo) photoByKind[k] = photo;
     }));
 
-    // Pass 2 — route the supplied illustrations to the photo-less slides, in slide
-    // order. The cover is first, so it claims an illustration BEFORE any org/place
-    // fallback. The generator sizes the set (plannedIllustrationCount) so every
-    // gap — the cover included when it has no person photo — gets a distinct one.
-    const ill = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean);
+    // Pass 2 — route the supplied illustrations to the photo-less slides. Each
+    // illustration was generated FOR a specific slide (illustration.js frames the
+    // scene per kind, scene 0 echoes the cover hook only when the cover is a slot).
+    //
+    // Route by EXPLICIT KIND when the caller supplies illustrationKinds (the kinds
+    // the URLs were generated for, index-aligned): illustrationUrls[i] belongs to
+    // illustrationKinds[i], and is placed on that slide ONLY if the slide didn't
+    // resolve a real photo. This is robust to a PLANNED photo that fails to fetch
+    // at render time — the newly-bare slide simply gets no illustration (it wasn't
+    // generated one) instead of stealing a body scene by position. A per-image
+    // failure leaves a null at its slot and that kind falls to the gradient floor.
+    //
+    // Fallback (no kinds supplied — legacy/tests): position-align to the gap list.
+    const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
+    const illKinds = Array.isArray(illustrationKinds) ? illustrationKinds : [];
     const gapKinds = contentKinds.filter((k) => !photoByKind[k]);
+    const routing = illKinds.length
+      ? illKinds.map((k, i) => [k, ill[i]])
+      : gapKinds.map((k, i) => [k, ill[i]]);
     const illByKind = {};
-    await Promise.all(gapKinds.map(async (k, i) => {
-      if (!ill[i]) return;
-      const dataUri = await fetchImageDataUri(ill[i], fetchImpl ? { fetchImpl } : {});
+    await Promise.all(routing.map(async ([k, url]) => {
+      if (!url || photoByKind[k]) return; // no scene for this kind, or the slide got a real photo
+      const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
       if (dataUri) illByKind[k] = { dataUri }; // illustration — no caption (not a photo)
     }));
 
@@ -1510,15 +1752,14 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
   const out = [];
   for (let index = 0; index < slideList.length; index++) {
     const kind = slideList[index];
-    // The cover gets its own full-bleed layout; every other slide is a padded
-    // text card via slideTree.
+    // The cover gets its own full-bleed layout; football body slides use the
+    // football scaffold; every other news slide (what / numbers / key points / why
+    // / engagement / cta) renders through the ONE unified full-bleed scaffold.
     const tree = kind === "cover"
       ? coverTree({ story, accent, category, size, height, portrait, coverHook, coverHighlight, highlightMode })
       : football
         ? footballSlideTree({ kind, football, accent, category, index, total, size, height, img: fbImg, nextKind: slideList[index + 1] })
-        : (kind === "what" || kind === "keypoints" || kind === "why")
-          ? contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters })
-          : slideTree({ kind, accent, category, index, total, size, height, question: kind === "engagement" ? question : null });
+        : contentSlideTree({ kind, story, accent, category, index, total, size, height, slideImage: bodyImageByKind[kind] || null, whyItMatters, question: kind === "engagement" ? question : null, source, nextKind: slideList[index + 1] });
     const svg = await satori(tree, { width, height, fonts });
     const { buffer, contentType } = rasterize(svg, { width, format });
     out.push({ buffer, contentType, width, height, slideType: kind, index, ...(kind === "cover" ? { coverImagery } : {}) });
