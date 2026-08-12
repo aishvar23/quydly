@@ -767,6 +767,21 @@ test("cardService.getCarouselSlideUrls: same hook, different highlight ⇒ disti
   assert.notEqual(a[0].url, b[0].url);
 });
 
+test("cardService.getCarouselSlideUrls: same illustration count, different kinds ⇒ distinct storage paths", async () => {
+  const mock = makeStorageMock();
+  const svc = createCardService({ supabase: mock.supabase, env: {} });
+  const urls = ["https://cdn.test/ill-a.png", "https://cdn.test/ill-b.png"];
+  // Same URLs and count, but a DIFFERENT ordered kinds routing (which artwork lands
+  // on which slide) → the carousel variant (memo key + storage path) must differ,
+  // else the second render would collide with / overwrite the first even though the
+  // artwork-to-slide mapping changed. (The bogus URLs fail to fetch → gradient; the
+  // storage PATH is deterministic from the inputs regardless.)
+  const s1 = await svc.getCarouselSlideUrls({ story: STORY, illustrationUrls: urls, illustrationKinds: ["cover", "what"] });
+  const s2 = await svc.getCarouselSlideUrls({ story: STORY, illustrationUrls: urls, illustrationKinds: ["what", "keypoints"] });
+  assert.notEqual(s1[0].url, s2[0].url);
+  assert.match(s1[0].url, /-ill[0-9a-f]{10}-nofb\//); // routing fingerprinted, not "noill"
+});
+
 test("cardService.getIllustrationUrls: [] when OPENAI_API_KEY is absent (Tier-2 disabled)", async () => {
   const mock = makeStorageMock();
   const svc = createCardService({ supabase: mock.supabase, env: {} }); // no OPENAI_API_KEY

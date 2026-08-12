@@ -59,6 +59,19 @@ function kindsFingerprint(kinds) {
   return createHash("sha1").update(list.join(",")).digest("hex").slice(0, 8);
 }
 
+// The illustrations PLACED on the carousel change its slide bytes, so the carousel
+// variant must fingerprint the whole ROUTING — the ordered (kind, url) slots — not
+// just the count: two renders with the same illustration count but a different
+// ordered kinds list (which artwork lands on which slide) or different URLs produce
+// different slides and must NOT share a memo entry or storage path. Returns "noill"
+// when nothing is placed, keeping the pre-illustration variant string stable.
+function illustrationFingerprint(kinds, urls) {
+  const u = Array.isArray(urls) ? urls : [];
+  if (!u.some((x) => x)) return "noill";
+  const k = Array.isArray(kinds) ? kinds : [];
+  return `ill${createHash("sha1").update(JSON.stringify([k, u])).digest("hex").slice(0, 10)}`;
+}
+
 // A resolved football match drives the whole slide set (score/table/form), so it
 // is part of the slide bytes — fingerprint the match id + score + competition so
 // a corrected score re-renders to a FRESH path (never serves stale slides).
@@ -225,10 +238,12 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], illustrationKinds = [], football = null }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
-      // distinct (whyItMatters, question, coverHook+highlight, #illustrations,
-      // football match) variant never overwrites another's bytes.
-      const illCount = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean).length;
-      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illCount ? `ill${illCount}` : "noill"}-${footballFingerprint(football)}`;
+      // distinct (whyItMatters, question, coverHook+highlight, illustration routing,
+      // football match) variant never overwrites another's bytes. The illustration
+      // segment fingerprints the ordered (kind, url) slots — not just the count —
+      // so a different routing over the same count gets its own path.
+      const illFp = illustrationFingerprint(illustrationKinds, illustrationUrls);
+      const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illFp}-${footballFingerprint(football)}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
       const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football, variant }).catch((err) => {
