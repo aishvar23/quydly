@@ -3,6 +3,11 @@
 
 const path = require('path');
 const { runPipeline } = require('../pipeline/orchestrator');
+// Same resolver the integration uses, so what preflight accepts is exactly what
+// the AI stages can run with. See scripts/lib/video-anthropic-key.cjs.
+const {
+  hasVideoAnthropicKey, DEDICATED_VAR, SHARED_VAR, OVERRIDE_VAR,
+} = require('../../../scripts/lib/video-anthropic-key.cjs');
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -42,9 +47,16 @@ async function main() {
 }
 
 function preflightEnv(args) {
-  // Required: --use-ai needs ANTHROPIC_API_KEY (no graceful path).
-  if (args['use-ai'] && !process.env.ANTHROPIC_API_KEY) {
-    console.error('error: --use-ai requires ANTHROPIC_API_KEY in .env or process.env');
+  // Required: --use-ai needs a key the video gate actually accepts (no graceful
+  // path). Checking process.env.ANTHROPIC_API_KEY directly would disagree with
+  // the integration in both directions: a dedicated-key-only setup would be
+  // rejected here despite working, and an ungated shared key would pass here
+  // and then silently skip every AI stage.
+  if (args['use-ai'] && !hasVideoAnthropicKey()) {
+    console.error(
+      `error: --use-ai requires ${DEDICATED_VAR} in .env or process.env ` +
+      `(or ${OVERRIDE_VAR}=1 to bill the shared ${SHARED_VAR})`,
+    );
     return false;
   }
 

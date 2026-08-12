@@ -252,7 +252,8 @@ Required env:
 Recommended env:
   MAPBOX_AUTO_GEOCODE=true   so off-gazetteer places resolve via Mapbox API
   ELEVENLABS_API_KEY          real TTS (else synthetic timing fallback)
-  ANTHROPIC_API_KEY           required for --use-ai
+  ANTHROPIC_API_KEY_VIDEO     required for --use-ai (or VIDEO_ALLOW_SHARED_KEY=1
+                              to bill the shared ANTHROPIC_API_KEY)
   MAPBOX_TOKEN                map module rendering
 `);
 }

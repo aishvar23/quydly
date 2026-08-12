@@ -107,7 +107,7 @@ async function main() {
   }
 
   if (!hasAnthropic()) {
-    console.error('error: ANTHROPIC_API_KEY missing — author-fixture requires Claude.');
+    console.error('error: no Anthropic key — author-fixture requires Claude. Set ANTHROPIC_API_KEY_VIDEO (or VIDEO_ALLOW_SHARED_KEY=1 to bill the shared ANTHROPIC_API_KEY).');
     process.exit(1);
   }
 

@@ -42,7 +42,7 @@ const argv = yargs(hideBin(process.argv))
   .option('use-ai', {
     type: 'boolean',
     default: false,
-    describe: 'Use Anthropic for audit/script stages when ANTHROPIC_API_KEY is present',
+    describe: 'Use Anthropic for audit/script stages when ANTHROPIC_API_KEY_VIDEO is present (or VIDEO_ALLOW_SHARED_KEY=1)',
   })
   .check((args) => {
     if (!args.storyId && !args.storyFile) {
