@@ -948,18 +948,65 @@ function statRow(value, label, accent, size) {
   ]);
 }
 
+// ── "By the numbers" auto-fit ────────────────────────────────────────────────
+//
+// The hero display is NOT always a short "226%": the enrichment schema permits
+// multi-word values ("$8 billion", "at least 17 dead"), which wrap to two or
+// three lines at the top hero size and, stacked with the label + supporting rows
+// + source, overflow the FIXED slide height and clip the lower rows / footer
+// (Satori has no overflow). So — like the bullet slides (fitBulletSlide) — fit
+// the whole stack to a vertical budget: shrink the hero first (keep every
+// supporting figure), and only as a last resort drop trailing rows.
+const NUMBERS_HERO_LEVELS = [0.2, 0.165, 0.135, 0.11]; // fractions of width, densest → smallest
+const ANTON_AVG_CHAR_EM = 0.48; // Anton is condensed, so a tighter advance than Lato's 0.52
+
+function fitNumbersStack(picked, size, budgetPx) {
+  const colW = size * (1 - 2 * PAD_X_RATIO);
+  // Conservative per-part height estimates (err toward NOT clipping): a label or
+  // a row label may wrap to two lines, so the row estimate carries slack.
+  const eyebrowH = Math.round(size * 0.03 * 1.2) + 24;
+  const labelH = picked.hero.label ? Math.round(size * THEME.scale.body * 1.3) + Math.round(size * 0.042) : 0;
+  const sourceH = Math.round(size * 0.02 * 1.2) + Math.round(size * 0.03);
+  const rowH = Math.round(size * THEME.scale.stat) + Math.round(size * 0.024) + Math.round(size * 0.03);
+  const heroLines = (heroPx) => {
+    const cpl = Math.max(1, colW / (heroPx * ANTON_AVG_CHAR_EM));
+    return Math.max(1, Math.ceil(picked.hero.display.length / cpl));
+  };
+  const fixed = eyebrowH + labelH + sourceH;
+  // Prefer keeping ALL rows: step the hero size down until the full stack fits.
+  for (const level of NUMBERS_HERO_LEVELS) {
+    const heroPx = Math.round(size * level);
+    if (fixed + heroLines(heroPx) * heroPx + picked.rows.length * rowH <= budgetPx) {
+      return { heroPx, rows: picked.rows };
+    }
+  }
+  // Even the smallest hero with every row overflows → smallest hero, then drop
+  // trailing rows until it fits (a pathological long hero can end with 0 rows).
+  const heroPx = Math.round(size * NUMBERS_HERO_LEVELS[NUMBERS_HERO_LEVELS.length - 1]);
+  const heroH = heroLines(heroPx) * heroPx;
+  let rows = picked.rows.length;
+  while (rows > 0 && fixed + heroH + rows * rowH > budgetPx) rows -= 1;
+  return { heroPx, rows: picked.rows.slice(0, rows) };
+}
+
 // The "By the numbers" body: a BIG Anton hero numeral + its label, then up to
 // three supporting stat rows. Mirrors the football stat-insights primitive (a
-// hero line + grounded rows) but for news structured numbers.
-function numbersBody({ story, accent, size, source }) {
+// hero line + grounded rows) but for news structured numbers. The hero size and
+// row count are fitted to the slide height so a long multi-word value can't push
+// the stack off the card.
+function numbersBody({ story, accent, size, height, source }) {
   const picked = selectStoryNumbers(story);
   const children = [eyebrow("By the numbers", accent, size)];
   if (picked) {
-    children.push(el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: Math.round(size * THEME.scale.statHero), color: FG, lineHeight: 1, letterSpacing: 1, textShadow: THEME.textShadowHero } }, picked.hero.display));
+    // Budget = slide height minus the top/bottom padding and the header+footer
+    // chrome (which the body must never grow into).
+    const budget = height - 2 * Math.round(size * THEME.padYRatio) - Math.round(size * 0.22);
+    const fit = fitNumbersStack(picked, size, budget);
+    children.push(el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: fit.heroPx, color: FG, lineHeight: 1, letterSpacing: 1, textShadow: THEME.textShadowHero } }, picked.hero.display));
     if (picked.hero.label) {
       children.push(el("div", { style: { display: "flex", fontSize: Math.round(size * THEME.scale.body), color: "rgba(255,255,255,0.86)", lineHeight: 1.2, marginBottom: Math.round(size * 0.036), marginTop: Math.round(size * 0.006), textShadow: THEME.textShadow } }, picked.hero.label));
     }
-    picked.rows.forEach((r) => children.push(statRow(r.display, r.label, accent, size)));
+    fit.rows.forEach((r) => children.push(statRow(r.display, r.label, accent, size)));
   } else {
     children.push(el("div", { style: { display: "flex", fontFamily: THEME.display, fontSize: Math.round(size * 0.06), color: FG, lineHeight: 1.08, textShadow: THEME.textShadowHero } }, "The numbers behind the story."));
   }
@@ -1025,7 +1072,7 @@ function contentBody({ kind, story, accent, size, height, whyItMatters, question
   // The image-backed utility slides (numbers / engagement / cta) carry no photo
   // caption (their imagery is a generated illustration / generic stock, not a
   // licensed entity photo) and have their own layout.
-  if (kind === "numbers") return numbersBody({ story, accent, size, source });
+  if (kind === "numbers") return numbersBody({ story, accent, size, height, source });
   if (kind === "engagement") return engagementBody({ accent, size, question });
   if (kind === "cta") return ctaBody({ accent, size });
 
