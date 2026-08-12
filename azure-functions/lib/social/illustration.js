@@ -159,7 +159,10 @@ async function writeScenes({ anthropic, story, kinds, hook = "", logger }) {
     });
     logLlmUsage(logger, "social.illustration_scenes", msg, { story_id: story?.id, scene_count: count });
     const scenes = parseJSONFromLLM(msg?.content?.[0]?.text)?.scenes;
-    return Array.isArray(scenes) ? scenes.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()) : [];
+    // Preserve POSITION: scene i is for kinds[i]. A malformed/empty element must
+    // stay an empty slot ("") rather than be compacted out, otherwise every later
+    // role-specific scene shifts onto the wrong slide (the caller maps by index).
+    return Array.isArray(scenes) ? scenes.map((s) => (typeof s === "string" ? s.trim() : "")) : [];
   } catch (err) {
     logger?.warn?.(JSON.stringify({ event: "illustration_scenes_failed", story_id: story?.id, error: err.message }));
     return [];
@@ -178,8 +181,13 @@ export async function generateIllustrations({ anthropic, openaiKey, story, kinds
   const slotKinds = Array.isArray(kinds) && kinds.length ? kinds : Array.from({ length: Math.max(0, count) }, () => "content");
   if (!anthropic || !openaiKey || !story || !slotKinds.length) return [];
   const scenes = (await writeScenes({ anthropic, story, kinds: slotKinds, hook, logger })).slice(0, slotKinds.length);
-  if (!scenes.length) return [];
-  return Promise.all(scenes.map(async (scene) => {
+  if (!scenes.some(Boolean)) return []; // no usable scene at any slot
+  // Iterate by SLOT so the result length always equals slotKinds.length and index
+  // i stays aligned to slotKinds[i]: an empty/malformed scene → a null placeholder
+  // (never an image call), so a later role-specific scene can't shift onto its slot.
+  return Promise.all(slotKinds.map(async (_kind, i) => {
+    const scene = scenes[i];
+    if (!scene) return null;
     const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });
     return buffer ? { buffer, contentType: "image/png", scene } : null;
   }));

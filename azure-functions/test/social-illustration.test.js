@@ -61,6 +61,19 @@ test("generateIllustrations: a single image failure nulls only that slot", async
   assert.equal(out[1], null);
 });
 
+test("generateIllustrations: a malformed scene slot stays null and does NOT shift later scenes", async () => {
+  // Claude returns an empty element mid-array. The valid key-points scene must
+  // stay at slot 2 (aligned to kinds[2]="keypoints"), NOT compact onto slot 1.
+  const out = await generateIllustrations({
+    anthropic: anthropicScenes(["cover art", "", "key-points art"]),
+    openaiKey: "sk", story: STORY, kinds: ["cover", "what", "keypoints"], fetchImpl: openaiOk(),
+  });
+  assert.equal(out.length, 3);
+  assert.equal(out[1], null);              // malformed slot preserved as null (what → gradient)
+  assert.equal(out[0].scene, "cover art");
+  assert.equal(out[2].scene, "key-points art"); // did NOT shift to slot 1
+});
+
 test("generateIllustrations: no scenes → [] (no image calls)", async () => {
   let called = false;
   const fetchImpl = async () => { called = true; return { ok: true, json: async () => ({}) }; };
