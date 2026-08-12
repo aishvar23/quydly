@@ -1617,7 +1617,7 @@ function footballSlideTree({ kind, football, accent, category, index, total, siz
 // lead entity (person, else org/place) with a credit. Resolving the image is
 // best-effort and happens once up front; any failure leaves the cover text-only.
 // `fetchImpl` is injectable for tests.
-export async function renderCarouselSlides(story, { format = "jpeg", shape = "portrait", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], football = null, fetchImpl } = {}) {
+export async function renderCarouselSlides(story, { format = "jpeg", shape = "portrait", slides, withPortrait = false, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, highlightMode = HIGHLIGHT_MODE, illustrationUrls = [], illustrationKinds = [], football = null, fetchImpl } = {}) {
   const { width, height } = SHAPES[shape] || SHAPES.portrait;
   const size = width; // scaling base for typography/padding; height adds 4:5 (or 9:16) room
   // For a resolved football match the chrome accent is the home team's color and
@@ -1700,23 +1700,29 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
       if (photo) photoByKind[k] = photo;
     }));
 
-    // Pass 2 — route the supplied illustrations to the photo-less slides, in slide
-    // order. The cover is first, so it claims an illustration BEFORE any org/place
-    // fallback. The generator sizes the set (plannedIllustrationCount) so every
-    // gap — the cover included when it has no person photo — gets a distinct one.
+    // Pass 2 — route the supplied illustrations to the photo-less slides. Each
+    // illustration was generated FOR a specific slide (illustration.js frames the
+    // scene per kind, scene 0 echoes the cover hook only when the cover is a slot).
     //
-    // illustrationUrls is POSITIONALLY aligned to the gap slots: illustration.js
-    // writes one scene per gap in order (scene 0 echoes the cover hook), and a
-    // per-image failure leaves a `null` at that slot. So DO NOT compact it — a
-    // leading/middle null would otherwise shift every later scene onto the wrong
-    // slide (e.g. the cover would inherit slide 2's scene). Keep the slots as-is
-    // and let the null-guard drop the failed one to the gradient floor.
+    // Route by EXPLICIT KIND when the caller supplies illustrationKinds (the kinds
+    // the URLs were generated for, index-aligned): illustrationUrls[i] belongs to
+    // illustrationKinds[i], and is placed on that slide ONLY if the slide didn't
+    // resolve a real photo. This is robust to a PLANNED photo that fails to fetch
+    // at render time — the newly-bare slide simply gets no illustration (it wasn't
+    // generated one) instead of stealing a body scene by position. A per-image
+    // failure leaves a null at its slot and that kind falls to the gradient floor.
+    //
+    // Fallback (no kinds supplied — legacy/tests): position-align to the gap list.
     const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
+    const illKinds = Array.isArray(illustrationKinds) ? illustrationKinds : [];
     const gapKinds = contentKinds.filter((k) => !photoByKind[k]);
+    const routing = illKinds.length
+      ? illKinds.map((k, i) => [k, ill[i]])
+      : gapKinds.map((k, i) => [k, ill[i]]);
     const illByKind = {};
-    await Promise.all(gapKinds.map(async (k, i) => {
-      if (!ill[i]) return; // no scene for this slot (never generated, or it failed) → gradient floor
-      const dataUri = await fetchImageDataUri(ill[i], fetchImpl ? { fetchImpl } : {});
+    await Promise.all(routing.map(async ([k, url]) => {
+      if (!url || photoByKind[k]) return; // no scene for this kind, or the slide got a real photo
+      const dataUri = await fetchImageDataUri(url, fetchImpl ? { fetchImpl } : {});
       if (dataUri) illByKind[k] = { dataUri }; // illustration — no caption (not a photo)
     }));
 

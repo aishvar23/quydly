@@ -240,6 +240,26 @@ test("renderCarouselSlides: a failed illustration slot does NOT shift a later sc
   assert.ok(calls.includes("https://cdn.test/ill-1.png"));
 });
 
+test("renderCarouselSlides: a planned cover photo that fails to fetch does NOT pull a body scene onto the cover", async () => {
+  // STORY_PERSON's cover is planned photo-backed, so illustrationKinds omits it
+  // (only ["what"] is generated). If the person photo then FAILS to fetch, the
+  // cover becomes bare — but it must NOT inherit the "what" scene by position.
+  // Kind-routing places ill-what on the WHAT slide only; the cover stays "none".
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("jane.png")) return { ok: false, status: 404, headers: { get: () => null } }; // cover photo fails
+    return imgResponse();
+  };
+  const slides = await renderCarouselSlides(STORY_PERSON, {
+    slides: ["cover", "what"], withPortrait: true,
+    illustrationKinds: ["what"], illustrationUrls: ["https://cdn.test/ill-what.png"], fetchImpl,
+  });
+  assert.equal(slides[0].coverImagery, "none"); // NOT "illustration" — the what-scene never landed on the cover
+  assert.ok(calls.includes("https://cdn.test/ill-what.png")); // it rendered on the WHAT slide instead
+});
+
 test("renderCarouselSlides: cover falls back to a CONTAINED org image only when no illustration", async () => {
   // Same org-only story but NO illustration supplied: the org image is the last
   // resort and IS fetched (better than the gradient), rendered contained.

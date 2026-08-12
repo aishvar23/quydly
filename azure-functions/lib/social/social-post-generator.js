@@ -175,6 +175,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       // slides = cover + what + key points (+ why when present). The renderer
       // routes these to exactly the photo-less slides (gap-fill).
       let illustrationUrls = [];
+      let illustrationKinds = [];
       if (anthropic && cardService.getIllustrationUrls) {
         // Lazy import: plannedIllustrationKinds lives in card-renderer (which pulls
         // satori/resvg), so import it only here — inside the cards-enabled branch,
@@ -190,6 +191,11 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         const illKinds = plannedIllustrationKinds(story, { whyItMatters });
         if (illKinds.length > 0) {
           illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, kinds: illKinds, hook: coverHook });
+          // Carry the kinds alongside the URLs so the renderer routes each
+          // illustration to its EXPLICIT slide (by kind), not by gap position —
+          // otherwise a planned photo that fails to fetch at render time shifts a
+          // body scene onto another slot.
+          illustrationKinds = illKinds;
         }
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
@@ -229,7 +235,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
         }
       }
       if (!draft.reelUrl) {
-        const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, football });
+        const slides = await cardService.getCarouselSlideUrls({ story, whyItMatters, question: engagementQuestion, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football });
         if (slides && slides.length) {
           draft.carouselSlides = slides;
           draft.mediaUrl = slides[0].url;

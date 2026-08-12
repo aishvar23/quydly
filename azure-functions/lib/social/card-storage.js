@@ -118,8 +118,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // Keying only on story.id let a later render upsert-overwrite an earlier post's
   // slide, so that post could publish the wrong engagement question while its
   // social_post_engagement row still held the original Q&A (wrong 12h answer).
-  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], football = null, variant }) {
-    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, football }); // JPEG (Instagram requires it)
+  async function buildCarousel({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], illustrationKinds = [], football = null, variant }) {
+    const slides = await renderCarouselSlides(story, { withPortrait: igPortrait, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football }); // JPEG (Instagram requires it)
     const out = [];
     for (const s of slides) {
       const path = `cards/${story.id}/carousel/${variant}/${s.index}-${s.slideType}.jpg`;
@@ -209,7 +209,7 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // Returns the ordered carousel slide descriptors, or null on any failure
     // (caller proceeds without media — Instagram stays media-gated). Memoised
     // per story for the service's lifetime.
-    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], football = null }) {
+    async getCarouselSlideUrls({ story, whyItMatters = [], question = null, coverHook = null, coverHighlight = null, illustrationUrls = [], illustrationKinds = [], football = null }) {
       if (!story || story.id == null) return null;
       // One fingerprint drives BOTH the memo key and the storage object path, so a
       // distinct (whyItMatters, question, coverHook+highlight, #illustrations,
@@ -218,7 +218,7 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
       const variant = `${whyFingerprint(whyItMatters)}-${questionFingerprint(question)}-${hookFingerprint(coverHook, coverHighlight)}-${illCount ? `ill${illCount}` : "noill"}-${footballFingerprint(football)}`;
       const key = `${story.id}:carousel:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, football, variant }).catch((err) => {
+      const p = buildCarousel({ story, whyItMatters, question, coverHook, coverHighlight, illustrationUrls, illustrationKinds, football, variant }).catch((err) => {
         logger.warn(JSON.stringify({
           event: "social_carousel_failed", story_id: story.id, error: err.message,
         }));
