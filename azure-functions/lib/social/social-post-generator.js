@@ -16,6 +16,8 @@ import { appendHashtags } from "./platforms/_hashtags.js";
 import { appendSourceLinks } from "./platforms/_sources.js";
 import { notifyCoverHeldForReview } from "./review-notify.js";
 import { parseJSONFromLLM } from "./mcq.js";
+import { MODEL_EDITORIAL } from "../models.js";
+import { logLlmUsage } from "../llmUsage.js";
 
 // A carousel cover with no real photo and no editorial illustration — only a
 // contained logo/flag ("logo") or the bare gradient ("none") — is too weak to
@@ -25,7 +27,9 @@ function coverImageryWeak(post) {
 }
 
 const PLATFORMS = PLATFORM_MODULES;
-const MODEL = "claude-sonnet-4-6";
+// Every call in this file writes copy a follower reads — post text, the
+// "why it matters" points, the carousel cover hook. Editorial tier.
+const MODEL = MODEL_EDITORIAL;
 
 const STORY_COLUMNS =
   "id, headline, summary, category_id, story_type, key_points, source_count, story_score, confidence_score, primary_entities, primary_entities_enriched, published_at, why_it_matters, related_stories, timeline_events, source_documents, structured_numbers, primary_geos";
@@ -40,11 +44,14 @@ const IG_CAPTION_MAX_HASHTAGS = 3;
 const noopLogger = Object.assign(() => {}, { warn: () => {}, error: () => {} });
 
 // Ask Claude for native copy. Returns the post text, or throws on any problem.
-async function generateWithClaude(anthropic, platform, story, audienceGeo) {
+async function generateWithClaude(anthropic, platform, story, audienceGeo, logger) {
   const msg = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 512,
     messages: [{ role: "user", content: platform.buildPrompt(story, audienceGeo) }],
+  });
+  logLlmUsage(logger, "social.post_copy", msg, {
+    platform: platform.PLATFORM, story_id: story?.id, audience_geo: audienceGeo,
   });
 
   // Tolerant parse (shared with the MCQ/engagement sites): survives the model
@@ -68,6 +75,9 @@ async function generateWhyItMatters(anthropic, platform, story, logger) {
       max_tokens: 256,
       system: platform.WHY_IT_MATTERS_SYSTEM,
       messages: [{ role: "user", content: platform.buildWhyItMattersPrompt(story) }],
+    });
+    logLlmUsage(logger, "social.why_it_matters", msg, {
+      platform: platform.PLATFORM, story_id: story?.id,
     });
 
     const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
@@ -100,6 +110,9 @@ async function generateCoverHook(anthropic, platform, story, logger) {
       max_tokens: 160,
       system: platform.HOOK_SYSTEM,
       messages: [{ role: "user", content: platform.buildHookPrompt(story) }],
+    });
+    logLlmUsage(logger, "social.cover_hook", msg, {
+      platform: platform.PLATFORM, story_id: story?.id,
     });
 
     const parsed = parseJSONFromLLM(msg?.content?.[0]?.text);
@@ -256,7 +269,7 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
 
   if (anthropic) {
     try {
-      const llmText = await generateWithClaude(anthropic, platform, story, audienceGeo);
+      const llmText = await generateWithClaude(anthropic, platform, story, audienceGeo, logger);
       const { valid, errors } = validatePost({
         platform: platform.PLATFORM,
         text: llmText,

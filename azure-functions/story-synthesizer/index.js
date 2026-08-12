@@ -27,8 +27,9 @@ import { computeSourceDiversity } from "../lib/sourceDiversity.js";
 import { computeVideoEligibility } from "../lib/videoEligibility.js";
 import { computeStoryDecayAt } from "../lib/freshness.js";
 import { aggregateArticleLanguages } from "../lib/languageDetection.js";
+import { MODEL_EDITORIAL, MODEL_EXTRACTION } from "../lib/models.js";
+import { logLlmUsage } from "../lib/llmUsage.js";
 
-const MODEL             = "claude-sonnet-4-6";
 const MAX_RETRIES       = 2;
 const CONTENT_TRUNCATE  = 500;
 const RIVER_WINDOW_MS   = 24 * 60 * 60 * 1000;
@@ -71,10 +72,13 @@ function getAnthropic() {
   return _anthropic;
 }
 
-// ── Claude passes (identical prompts to backend/engine/synthesizer.js) ────────
+// ── Claude passes ─────────────────────────────────────────────────────────────
 
-async function extractFacts(ai, articles) {
-  const articleBlocks = articles
+// Render the cluster's articles for an LLM prompt. Every pass that needs the
+// article bodies uses this, so the model sees byte-identical context and we
+// only pay for one copy per synthesis.
+function buildArticleBlocks(articles) {
+  return articles
     .map((a, i) => {
       const body = [a.title, a.description, a.content ? a.content.slice(0, CONTENT_TRUNCATE) : null]
         .filter(Boolean)
@@ -82,43 +86,87 @@ async function extractFacts(ai, articles) {
       return `[Article ${i + 1} — ${a.domain}]\n${body}`;
     })
     .join("\n\n");
+}
 
-  const prompt = `You are a fact extractor for a news synthesis engine.
+// Pass 1 — facts AND verbatim quotes, in one call.
+//
+// These were two separate calls until 2026-08-11. Both sent the same ~900-token
+// article blob and both are extraction (not composition), so the second call
+// was paying for a duplicate copy of the sources to do the same kind of work.
+// Merging them removes a whole request and one full copy of the articles per
+// synthesis; the quote-verification guarantees are unchanged because they were
+// never enforced by the prompt — `verifyQuotes` below does that work locally.
+//
+// Failure policy is asymmetric, matching what each output is worth:
+//   facts  — required. A bad parse throws, so the caller's retry loop reruns it.
+//   quotes — best-effort. A malformed or missing quotes array degrades to []
+//            (QuoteCard simply won't fire) rather than killing the synthesis.
+export async function extractFactsAndQuotes(ai, articles, { logger, cluster_id } = {}) {
+  const articleBlocks = buildArticleBlocks(articles);
 
-Extract key facts from these ${articles.length} articles about the same story.
-For each fact, count how many articles mention or imply it (source_count).
+  const prompt = `You are an extraction pass for a news synthesis engine.
+
+From these ${articles.length} articles about the same story, extract (a) the key
+facts and (b) up to ${QUOTE_MAX_PER_STORY} verbatim quotes.
 
 ${articleBlocks}
 
-Respond ONLY with a valid JSON array, no markdown fences:
-[
-  { "fact": "...", "type": "event|statistic|quote|background", "source_count": <number> },
-  ...
-]
+Respond ONLY with a valid JSON object, no markdown fences:
+{
+  "facts": [
+    { "fact": "...", "type": "event|statistic|quote|background", "source_count": <number> }
+  ],
+  "quotes": [
+    { "source_index": <1-based article number>, "text": "verbatim quote here", "speaker": "Name", "role": "their title or affiliation, or null" }
+  ]
+}
 
-Rules:
+Rules for "facts":
 - Extract 5–15 facts.
 - type values: "event" (something happened), "statistic" (number/data point), "quote" (attributed statement), "background" (context).
-- source_count = number of the above articles that mention or imply this fact.`;
+- source_count = number of the above articles that mention or imply this fact.
+
+Rules for "quotes":
+- Each quote MUST appear word-for-word in the article body — do not paraphrase,
+  do not combine sentences, do not translate.
+- Prefer quotes attributed to a named person; skip wire-attribution boilerplate
+  ("officials said").
+- text: the quoted statement only. Do not include surrounding narrative.
+- text MUST be a complete utterance — end in terminal punctuation (. ! ? " ') or
+  at least at a word that doesn't leave the sentence dangling. Do not emit a
+  fragment that ends in "and", "but", "the", "of", "to", "is", "was", etc.
+  If the article was truncated mid-sentence, skip that quote rather than
+  emitting the leading fragment.
+- text length: between ${QUOTE_MIN_WORDS} words and ${QUOTE_MAX_CHARS} characters.
+- speaker: required. If the article does not name a speaker, omit that quote.
+- role: optional; null if not stated in the article.
+- Empty array if no quotable statements exist. Never invent one to fill the slot.`;
 
   const msg = await ai.messages.create({
-    model:      MODEL,
-    max_tokens: 1024,
+    model:      MODEL_EXTRACTION,
+    max_tokens: 1536,
     messages:   [{ role: "user", content: prompt }],
   });
+  logLlmUsage(logger, "synthesizer.extract_facts_quotes", msg, { cluster_id });
 
   const raw = msg.content[0].text.trim();
-  let facts;
+  let parsed;
   try {
-    facts = JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch {
     throw new Error(`Pass 1 invalid JSON: ${raw.slice(0, 200)}`);
   }
-  if (!Array.isArray(facts)) throw new Error("Pass 1: expected a JSON array of facts");
-  return facts;
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.facts)) {
+    throw new Error("Pass 1: expected a JSON object with a `facts` array");
+  }
+
+  return {
+    facts:  parsed.facts,
+    quotes: verifyQuotes(parsed.quotes, articles),
+  };
 }
 
-async function generateNarrative(ai, cluster, facts) {
+async function generateNarrative(ai, cluster, facts, { logger, cluster_id } = {}) {
   const factsText = facts
     .map(f => `- [${f.type}] ${f.fact}  (sources: ${f.source_count})`)
     .join("\n");
@@ -146,11 +194,14 @@ Rules:
 - key_points: exactly 3–5 strings, each one crisp takeaway from this story.
 - confidence_score: 1 = speculation / single source, 10 = confirmed by multiple independent sources.`;
 
+  // Editorial tier: this is the one pass whose output IS the reader-facing
+  // voice (headline, summary, key points). It stays on Sonnet.
   const msg = await ai.messages.create({
-    model:      MODEL,
+    model:      MODEL_EDITORIAL,
     max_tokens: 1024,
     messages:   [{ role: "user", content: prompt }],
   });
+  logLlmUsage(logger, "synthesizer.generate_narrative", msg, { cluster_id });
 
   const raw = msg.content[0].text.trim();
   let result;
@@ -172,12 +223,16 @@ Rules:
   return result;
 }
 
-// ── Verbatim quote extraction (P0-2) ──────────────────────────────────────────
-// Pass 3 of the synthesizer. Pulls 0-3 quotable statements from the article
-// bodies, then verifies each is present *verbatim* in its claimed source
-// article before we let it through. The video pipeline never invents quotes —
-// paraphrasing real people is a trust violation — so support has to come from
-// here or QuoteCard never fires.
+// ── Verbatim quote verification (P0-2) ────────────────────────────────────────
+// The quote CANDIDATES come from the pass-1 extraction call above; this section
+// is the gate they have to clear. Each candidate is checked against the article
+// it claims to come from and admitted only if it is present *verbatim*. The
+// video pipeline never invents quotes — paraphrasing real people is a trust
+// violation — so support has to come from here or QuoteCard never fires.
+//
+// This is deliberately local, not prompt-enforced: the prompt asks for verbatim
+// quotes, but only `verifyQuotes` can prove it. That is also why the extraction
+// call can safely run on the cheaper model tier — the guarantee lives here.
 
 const QUOTE_MAX_PER_STORY = 3;
 const QUOTE_MIN_WORDS     = 4;
@@ -255,60 +310,18 @@ function articleBodyText(a) {
   return [a.title, a.description, a.content].filter(Boolean).join(" ");
 }
 
-export async function extractQuotes(ai, articles) {
-  if (!articles || articles.length === 0) return [];
-
-  const articleBlocks = articles
-    .map((a, i) => {
-      const body = [a.title, a.description, a.content ? a.content.slice(0, CONTENT_TRUNCATE) : null]
-        .filter(Boolean)
-        .join(" ");
-      return `[Article ${i + 1} — ${a.domain}]\n${body}`;
-    })
-    .join("\n\n");
-
-  const prompt = `You are a quote extractor for a news synthesis engine.
-
-From these ${articles.length} articles, extract up to ${QUOTE_MAX_PER_STORY} verbatim
-quotes. Each quote MUST appear word-for-word in the article body — do not
-paraphrase, do not combine sentences, do not translate. Prefer quotes attributed
-to a named person; skip wire-attribution boilerplate ("officials said").
-
-${articleBlocks}
-
-Respond ONLY with a valid JSON array, no markdown fences. Empty array if no
-quotable statements exist:
-[
-  { "source_index": <1-based article number>, "text": "verbatim quote here", "speaker": "Name", "role": "their title or affiliation, or null" },
-  ...
-]
-
-Rules:
-- text: the quoted statement only. Do not include surrounding narrative.
-- text MUST be a complete utterance — end in terminal punctuation (. ! ? " ') or
-  at least at a word that doesn't leave the sentence dangling. Do not emit a
-  fragment that ends in "and", "but", "the", "of", "to", "is", "was", etc.
-  If the article was truncated mid-sentence, skip that quote rather than
-  emitting the leading fragment.
-- text length: between ${QUOTE_MIN_WORDS} words and ${QUOTE_MAX_CHARS} characters.
-- speaker: required. If the article does not name a speaker, omit that quote.
-- role: optional; null if not stated in the article.`;
-
-  const msg = await ai.messages.create({
-    model:      MODEL,
-    max_tokens: 768,
-    messages:   [{ role: "user", content: prompt }],
-  });
-
-  const raw = msg.content[0].text.trim();
-  let candidates;
-  try {
-    candidates = JSON.parse(raw);
-  } catch {
-    // Quote extraction is non-essential — never fail synthesis on a bad parse.
-    return [];
-  }
-  if (!Array.isArray(candidates)) return [];
+/**
+ * Admit only the quote candidates that are provably verbatim in the article
+ * they claim. Pure — no network, no throw. Anything malformed is dropped
+ * silently, because a dropped quote costs one card and an unverified quote
+ * costs the reader's trust.
+ *
+ * @param {unknown} candidates  raw `quotes` array from the extraction call
+ * @param {Array<{id, title, description?, content?}>} articles  this cluster's articles
+ * @returns {Array<{source_id, text, speaker, role}>}
+ */
+export function verifyQuotes(candidates, articles) {
+  if (!Array.isArray(candidates) || !articles || articles.length === 0) return [];
 
   const verified = [];
   for (const c of candidates) {
@@ -1091,12 +1104,15 @@ export async function run(context, message) {
   }
 
   // ── 4a. Phase A: Claude API calls (with retry) ────────────────────────────
-  let facts, narrative, lastErr;
+  // Two calls, not three: pass 1 returns facts AND verified verbatim quotes
+  // (P0-2) from a single request over the article bodies.
+  let facts, verbatimQuotes = [], narrative, lastErr;
+  const llmMeta = { logger: context.log, cluster_id };
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      facts     = await extractFacts(ai, articles);
-      narrative = await generateNarrative(ai, cluster, facts);
+      ({ facts, quotes: verbatimQuotes } = await extractFactsAndQuotes(ai, articles, llmMeta));
+      narrative = await generateNarrative(ai, cluster, facts, llmMeta);
       lastErr   = null;
       break;
     } catch (err) {
@@ -1120,19 +1136,14 @@ export async function run(context, message) {
     throw lastErr;
   }
 
-  // P0-2: verbatim quote extraction. Non-essential pass — if Claude fails or
-  // the response can't be verified, we proceed with no quotes rather than
-  // killing the synthesis. QuoteCard simply won't fire for this story.
-  let verbatimQuotes = [];
-  try {
-    verbatimQuotes = await extractQuotes(ai, articles);
-  } catch (err) {
-    context.log.warn(JSON.stringify({
-      event:      "quote_extraction_failed",
-      cluster_id,
-      error:      err.message,
-    }));
-  }
+  // P0-2 telemetry: verbatim quotes now arrive with the facts (pass 1) and are
+  // verified locally by `verifyQuotes`, so there is no separate call to fail.
+  // A story with zero surviving quotes is normal — QuoteCard just won't fire.
+  context.log(JSON.stringify({
+    event:        "quotes_verified",
+    cluster_id,
+    quotes_count: verbatimQuotes.length,
+  }));
 
   // P0-5 + P1 batch: enrichment pass produces story_type / editorial_posture /
   // hook_sentence / why_it_matters / structured_numbers / timeline_events /
@@ -1140,7 +1151,7 @@ export async function run(context, message) {
   // to an empty enrichment shape so the story still writes.
   let enrichment = emptyEnrichment();
   try {
-    enrichment = await enrichNarrative(ai, cluster, articles, narrative);
+    enrichment = await enrichNarrative(ai, cluster, articles, narrative, llmMeta);
   } catch (err) {
     context.log.warn(JSON.stringify({
       event:      "enrichment_failed",
@@ -1630,6 +1641,7 @@ export async function run(context, message) {
         source_count,
       },
       facts,
+      { ...llmMeta, story_id },
     );
     await persistAudit(supabase, story_id, auditResult, now);
     context.log(JSON.stringify({

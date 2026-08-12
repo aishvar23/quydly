@@ -10,6 +10,8 @@ import {
   QUYDLY_URL, QUYDLY_IG_HANDLE, keyPointStrings, firstSentences, truncate, bullets, assemble, entityNames,
 } from "./_shared.js";
 import { validateMCQ, parseJSONFromLLM } from "../mcq.js";
+import { MODEL_EDITORIAL } from "../../models.js";
+import { logLlmUsage } from "../../llmUsage.js";
 
 export const PLATFORM = "instagram";
 
@@ -242,7 +244,7 @@ Write the cover hook now.`;
 // → returns null. The renderer then drops the engagement slide entirely (silent
 // fallback to the current carousel), so this can never make a post worse.
 
-const ENGAGEMENT_QUESTION_MODEL = "claude-sonnet-4-6";
+const ENGAGEMENT_QUESTION_MODEL = MODEL_EDITORIAL;
 
 // Columns the engagement MCQ prompt needs from the previous post's story, plus
 // the entity columns used to gate topical relevance (see previousPostedStory).
@@ -364,6 +366,9 @@ export async function generateEngagementQuestion({ anthropic, supabase, story, a
       model: ENGAGEMENT_QUESTION_MODEL,
       max_tokens: 512,
       messages: [{ role: "user", content: buildEngagementPrompt(prev.story, audienceGeo) }],
+    });
+    logLlmUsage(logger, "social.ig_engagement_question", msg, {
+      platform: "instagram", story_id: story?.id, source_story_id: prev.story?.id,
     });
 
     const q = parseJSONFromLLM(msg?.content?.[0]?.text);

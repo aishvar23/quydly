@@ -1,13 +1,19 @@
 'use strict';
 
 const Anthropic = require('@anthropic-ai/sdk');
+// Spend gate — this pipeline bills to its own key, not the production one.
+// See scripts/lib/video-anthropic-key.cjs.
+const { requireVideoAnthropicKey } = require('../../scripts/lib/video-anthropic-key.cjs');
 
+// NOTE: claude-sonnet-4-20250514 reached end-of-life on 2026-06-15 and now
+// returns 404. This client cannot succeed as written; left in place because
+// fixing the model choice is a separate decision from the spend gate.
 const MODEL = 'claude-sonnet-4-20250514';
 let _client = null;
 
 function getClient() {
   if (!_client) {
-    _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    _client = new Anthropic({ apiKey: requireVideoAnthropicKey('video-pipeline') });
   }
   return _client;
 }
