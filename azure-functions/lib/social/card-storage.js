@@ -150,12 +150,16 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // slots (null where a scene/image/upload failed). Best-effort: the renderer
   // falls back to the brand-graphic floor for any null slot. Memoised so the
   // expensive generation runs at most once per (story, count).
-  async function buildIllustrations({ story, anthropic, count, hook }) {
+  async function buildIllustrations({ story, anthropic, count, hook, hookFp }) {
     const results = await generateIllustrations({ anthropic, openaiKey, story, count, hook, logger });
     return Promise.all(results.map(async (r, i) => {
       if (!r) return null;
       try {
-        return await upload({ path: `cards/${story.id}/illustration-${i}.png`, buffer: r.buffer, contentType: r.contentType });
+        // The hook drives the generated scene (illustration.js keys concept +
+        // scenes off it), so it is part of the artwork identity: fingerprint it
+        // into the object path so a revised hook's art can't upsert-overwrite an
+        // earlier hook's assets (same discipline as the carousel `variant` path).
+        return await upload({ path: `cards/${story.id}/illustration/${hookFp}/${i}.png`, buffer: r.buffer, contentType: r.contentType });
       } catch (err) {
         logger.warn(JSON.stringify({ event: "social_illustration_upload_failed", story_id: story.id, index: i, error: err.message }));
         return null;
@@ -168,9 +172,13 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
     // or [] when disabled / no client / generation fails.
     async getIllustrationUrls({ story, anthropic, count = 1, hook = "" } = {}) {
       if (!igIllustration || !anthropic || !story || story.id == null || count < 1) return [];
-      const key = `${story.id}:illustrations:${count}`;
+      // The hook changes the generated artwork, so it is part of the cache
+      // identity: without it, a second call for the same (story, count) with a
+      // revised hook would return the first hook's art. Mirrors the carousel memo.
+      const hookFp = hookFingerprint(hook);
+      const key = `${story.id}:illustrations:${count}:${hookFp}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildIllustrations({ story, anthropic, count, hook }).catch((err) => {
+      const p = buildIllustrations({ story, anthropic, count, hook, hookFp }).catch((err) => {
         logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
         return [];
       });
