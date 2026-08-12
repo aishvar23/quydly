@@ -112,24 +112,50 @@ RULES (apply to EVERY scene)
 
 Respond ONLY with JSON, no markdown: { "scenes": ["...", "..."] }`;
 
-export function buildScenesPrompt(story, count, hook = "") {
+// Human label for each carousel slide an illustration can back — so the scene
+// writer knows WHICH section each scene is for (they map positionally to the
+// photo-less slots, which may SKIP the cover when it has a photo).
+const SCENE_ROLE = {
+  cover: "the opening / headline moment",
+  what: "what happened",
+  numbers: "the key numbers behind the story",
+  keypoints: "the key facts",
+  why: "why it matters",
+  content: "the story",
+};
+
+// `kinds` is the ORDERED list of slide roles the scenes will back (from
+// plannedIllustrationKinds) — NOT necessarily slide 1..N, since photo-backed
+// slides are skipped. Each scene is described against its real role, and ONLY the
+// cover scene (when present) is told to echo the hook; when the cover is
+// photo-backed it is absent from `kinds`, so no body scene is mis-framed as it.
+export function buildScenesPrompt(story, kinds, hook = "") {
   const facts = keyPointStrings(story).slice(0, 2).map((k) => `- ${k}`).join("\n") || "(none)";
-  const hookLine = hook ? `Cover hook (slide 1's angle — the FIRST scene should echo it): ${hook}\n` : "";
-  return `Produce exactly ${count} distinct scenes, one per carousel slide in order.
-${hookLine}Headline: ${story?.headline}
+  const list = kinds.map((k, i) => {
+    const role = SCENE_ROLE[k] || SCENE_ROLE.content;
+    const echo = k === "cover" && hook ? ` — this scene MUST echo the cover hook: "${hook}"` : "";
+    return `${i + 1}. ${role}${echo}`;
+  }).join("\n");
+  // When the cover isn't among the slots, the hook is still the story's angle —
+  // keep every scene consistent with it, but don't force one to be a cover shot.
+  const angle = hook && !kinds.includes("cover") ? `Overall story angle to stay consistent with: ${hook}\n` : "";
+  return `Produce exactly ${kinds.length} distinct scenes — one for each carousel slide below, IN THIS ORDER:
+${list}
+${angle}Headline: ${story?.headline}
 Summary: ${story?.summary}
 Supporting context:
 ${facts}
 
-Write the ${count} scenes now.`;
+Write the ${kinds.length} scenes now.`;
 }
 
-async function writeScenes({ anthropic, story, count, hook = "", logger }) {
+async function writeScenes({ anthropic, story, kinds, hook = "", logger }) {
   try {
+    const count = kinds.length;
     const msg = await anthropic.messages.create({
       model: CONCEPT_MODEL, max_tokens: 80 + count * 60,
       system: ILLUSTRATION_SCENES_SYSTEM,
-      messages: [{ role: "user", content: buildScenesPrompt(story, count, hook) }],
+      messages: [{ role: "user", content: buildScenesPrompt(story, kinds, hook) }],
     });
     logLlmUsage(logger, "social.illustration_scenes", msg, { story_id: story?.id, scene_count: count });
     const scenes = parseJSONFromLLM(msg?.content?.[0]?.text)?.scenes;
@@ -140,13 +166,18 @@ async function writeScenes({ anthropic, story, count, hook = "", logger }) {
   }
 }
 
-// Generate up to `count` distinct illustrations → array aligned to the scenes,
-// each { buffer, contentType, scene } or null (a per-image failure doesn't sink
-// the others). Returns [] when disabled or the scene write fails. Images render
+// Generate one distinct illustration per slot → array aligned to the scenes, each
+// { buffer, contentType, scene } or null (a per-image failure doesn't sink the
+// others). Slots come from `kinds` (the ordered photo-less slide roles) so each
+// scene is framed for its real slide; `count` is a legacy fallback that makes N
+// generic slots. Returns [] when disabled or the scene write fails. Images render
 // in parallel.
-export async function generateIllustrations({ anthropic, openaiKey, story, count = 1, hook = "", fetchImpl, logger } = {}) {
-  if (!anthropic || !openaiKey || !story || count < 1) return [];
-  const scenes = (await writeScenes({ anthropic, story, count, hook, logger })).slice(0, count);
+export async function generateIllustrations({ anthropic, openaiKey, story, kinds = null, count = 1, hook = "", fetchImpl, logger } = {}) {
+  // Prefer explicit slide KINDS (so each scene is framed for its real slot); fall
+  // back to N generic "content" slots when only a count is supplied (legacy path).
+  const slotKinds = Array.isArray(kinds) && kinds.length ? kinds : Array.from({ length: Math.max(0, count) }, () => "content");
+  if (!anthropic || !openaiKey || !story || !slotKinds.length) return [];
+  const scenes = (await writeScenes({ anthropic, story, kinds: slotKinds, hook, logger })).slice(0, slotKinds.length);
   if (!scenes.length) return [];
   return Promise.all(scenes.map(async (scene) => {
     const buffer = await renderImage({ openaiKey, prompt: buildImagePrompt(scene), fetchImpl, logger });

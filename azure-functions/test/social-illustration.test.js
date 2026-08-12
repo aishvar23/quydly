@@ -3,7 +3,7 @@
 // Usage: node --test test/social-illustration.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { generateIllustration, generateIllustrations, buildImagePrompt } from "../lib/social/illustration.js";
+import { generateIllustration, generateIllustrations, buildImagePrompt, buildScenesPrompt } from "../lib/social/illustration.js";
 
 const STORY = { id: 5, headline: "Exam glitch strands students", summary: "A technical fault disrupted a national entrance exam.", key_points: ["Servers failed", "Students stranded"] };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -66,6 +66,23 @@ test("generateIllustrations: no scenes → [] (no image calls)", async () => {
   const fetchImpl = async () => { called = true; return { ok: true, json: async () => ({}) }; };
   assert.deepEqual(await generateIllustrations({ anthropic: anthropicScenes([]), openaiKey: "sk", story: STORY, count: 3, fetchImpl }), []);
   assert.equal(called, false);
+});
+
+test("buildScenesPrompt: only the cover scene echoes the hook, and only when the cover is a slot", () => {
+  // Cover IS a slot (no cover photo): scene 1 is the cover and must echo the hook.
+  const withCover = buildScenesPrompt(STORY, ["cover", "what", "keypoints"], "Why did the stock fall?");
+  assert.match(withCover, /1\. the opening \/ headline moment — this scene MUST echo the cover hook: "Why did the stock fall\?"/);
+  assert.match(withCover, /2\. what happened/);
+  assert.match(withCover, /3\. the key facts/);
+
+  // Cover is photo-backed → absent from kinds: NO scene may be framed as the cover,
+  // and none must be told to echo the hook (the off-by-photo-slide bug). The hook
+  // survives only as the general story angle.
+  const noCover = buildScenesPrompt(STORY, ["what", "keypoints"], "Why did the stock fall?");
+  assert.doesNotMatch(noCover, /echo the cover hook/);
+  assert.doesNotMatch(noCover, /the opening \/ headline moment/);
+  assert.match(noCover, /1\. what happened/);
+  assert.match(noCover, /Overall story angle to stay consistent with: Why did the stock fall\?/);
 });
 
 test("buildImagePrompt: locks the house style and bans real faces/text", () => {

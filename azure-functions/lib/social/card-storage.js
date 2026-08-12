@@ -150,8 +150,8 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // slots (null where a scene/image/upload failed). Best-effort: the renderer
   // falls back to the brand-graphic floor for any null slot. Memoised so the
   // expensive generation runs at most once per (story, count).
-  async function buildIllustrations({ story, anthropic, count, hook, hookFp }) {
-    const results = await generateIllustrations({ anthropic, openaiKey, story, count, hook, logger });
+  async function buildIllustrations({ story, anthropic, kinds, count, hook, hookFp }) {
+    const results = await generateIllustrations({ anthropic, openaiKey, story, kinds, count, hook, logger });
     return Promise.all(results.map(async (r, i) => {
       if (!r) return null;
       try {
@@ -170,15 +170,19 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   return {
     // Returns an array of up to `count` illustration URLs (null per failed slot),
     // or [] when disabled / no client / generation fails.
-    async getIllustrationUrls({ story, anthropic, count = 1, hook = "" } = {}) {
-      if (!igIllustration || !anthropic || !story || story.id == null || count < 1) return [];
+    async getIllustrationUrls({ story, anthropic, kinds = null, count = 1, hook = "" } = {}) {
+      // `kinds` (the ordered photo-less slide roles) is authoritative when given;
+      // count is the legacy fallback. n = how many illustrations to generate.
+      const slotKinds = Array.isArray(kinds) ? kinds : [];
+      const n = slotKinds.length || count;
+      if (!igIllustration || !anthropic || !story || story.id == null || n < 1) return [];
       // The hook changes the generated artwork, so it is part of the cache
       // identity: without it, a second call for the same (story, count) with a
       // revised hook would return the first hook's art. Mirrors the carousel memo.
       const hookFp = hookFingerprint(hook);
-      const key = `${story.id}:illustrations:${count}:${hookFp}`;
+      const key = `${story.id}:illustrations:${n}:${hookFp}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildIllustrations({ story, anthropic, count, hook, hookFp }).catch((err) => {
+      const p = buildIllustrations({ story, anthropic, kinds: slotKinds, count: n, hook, hookFp }).catch((err) => {
         logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
         return [];
       });

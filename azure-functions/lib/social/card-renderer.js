@@ -479,20 +479,30 @@ function storyHasNumbers(story) {
   return !!selectStoryNumbers(story);
 }
 
-// How many editorial illustrations the carousel needs — one for every DETERMINISTIC
-// content slide (cover / what / [numbers] / key points / [why]) that won't be
-// backed by a usable PHOTO under planEntityImagery. The cover is photo-backed ONLY
-// by a lead PERSON image; org logos / place flags never pre-empt an illustration on
-// the cover. engagement/cta are intentionally excluded (they sit at the tail of the
-// slide list and are unknown at generation time; they fall back to the gradient
-// floor when no illustration is routed). The generator generates exactly this many,
-// and renderCarouselSlides routes them, in slide order, to the photo-less slides.
-export function plannedIllustrationCount(story, { whyItMatters = [] } = {}) {
+// The ORDERED content-slide kinds that need an editorial illustration — every
+// DETERMINISTIC content slide (cover / what / [numbers] / key points / [why]) that
+// won't be backed by a usable PHOTO under planEntityImagery, in slide order. The
+// cover is photo-backed ONLY by a lead PERSON image; org logos / place flags never
+// pre-empt an illustration on the cover. engagement/cta are intentionally excluded
+// (they sit at the tail of the slide list and fall back to the gradient floor when
+// no illustration is routed). The generator generates exactly these, IN ORDER, and
+// renderCarouselSlides routes them positionally to the photo-less slots — so the
+// KINDS (not just the count) must be passed to the scene writer, otherwise a
+// cover-hook scene lands on a body slide whenever the cover is photo-backed.
+export function plannedIllustrationKinds(story, { whyItMatters = [] } = {}) {
   const hasWhy = Array.isArray(whyItMatters) && whyItMatters.filter(Boolean).length > 0;
   const contentKinds = ["cover", "what", ...(storyHasNumbers(story) ? ["numbers"] : []), "keypoints", ...(hasWhy ? ["why"] : [])];
-  const { coverSpec, bodySpecs } = planEntityImagery(story, contentKinds);
-  const coverPhoto = coverSpec ? 1 : 0;
-  return Math.max(0, contentKinds.length - coverPhoto - bodySpecs.length);
+  const { coverSpec, photoBodyKinds, bodySpecs } = planEntityImagery(story, contentKinds);
+  // The body kinds that get a photo are the first bodySpecs.length of the
+  // photo-eligible body kinds (planEntityImagery assigns bodySpecs by position).
+  const photoed = new Set(photoBodyKinds.slice(0, bodySpecs.length));
+  if (coverSpec) photoed.add("cover");
+  return contentKinds.filter((k) => !photoed.has(k));
+}
+
+// How many illustrations the carousel needs — the length of the gap-kind list.
+export function plannedIllustrationCount(story, opts = {}) {
+  return plannedIllustrationKinds(story, opts).length;
 }
 
 // Fetch the first of an image spec's candidate URLs that yields a data URI (or

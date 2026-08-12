@@ -176,19 +176,20 @@ export async function generatePlatformPost({ platform, story, audienceGeo, anthr
       // routes these to exactly the photo-less slides (gap-fill).
       let illustrationUrls = [];
       if (anthropic && cardService.getIllustrationUrls) {
-        // Lazy import: plannedIllustrationCount lives in card-renderer (which pulls
+        // Lazy import: plannedIllustrationKinds lives in card-renderer (which pulls
         // satori/resvg), so import it only here — inside the cards-enabled branch,
         // where the renderer is already loaded — never at module load (that would
-        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js). It counts
+        // defeat the SOCIAL_CARDS_ENABLED lazy-load guard in index.js). It lists
         // the photo-less content slides under the cover/body sourcing rules — the
         // cover included whenever it has no lead PERSON photo — so an org logo or a
         // place flag never starves the cover of an illustration.
-        const { plannedIllustrationCount } = await import("./card-renderer.js");
-        const gaps = plannedIllustrationCount(story, { whyItMatters });
-        if (gaps > 0) {
-          // Key the illustrations off the cover hook (the swipe-earning angle),
-          // so the generated slide art echoes the cover copy.
-          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, count: gaps, hook: coverHook });
+        const { plannedIllustrationKinds } = await import("./card-renderer.js");
+        // The ORDERED photo-less slide kinds (cover may be absent when it has a
+        // photo). Passing the kinds — not just a count — lets the scene writer
+        // frame each scene for its real slot and echo the hook only on the cover.
+        const illKinds = plannedIllustrationKinds(story, { whyItMatters });
+        if (illKinds.length > 0) {
+          illustrationUrls = await cardService.getIllustrationUrls({ story, anthropic, kinds: illKinds, hook: coverHook });
         }
       }
       // Engagement slide (SOCIAL_IG_ENGAGEMENT_ENABLED): an MCQ drawn from the
