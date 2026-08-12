@@ -223,6 +223,23 @@ test("renderCarouselSlides: cover prefers an illustration over an org logo/place
   assert.ok(!calls.includes("https://upload.wikimedia.org/acme.png")); // org logo NOT used on the cover
 });
 
+test("renderCarouselSlides: a failed illustration slot does NOT shift a later scene onto the cover", async () => {
+  // illustrationUrls is positionally aligned to the gap slots (scene 0 = cover).
+  // When the cover's illustration failed (null slot 0) but slide 2's succeeded,
+  // the cover must NOT inherit slide 2's scene — its null slot is preserved and
+  // the cover stays on the gradient floor ("none"). Guards the no-compaction fix.
+  const story = { ...STORY, primary_entities_enriched: [] }; // no photos → cover + what are gaps
+  const calls = [];
+  const fetchImpl = async (url) => { calls.push(String(url)); return imgResponse(); };
+  const slides = await renderCarouselSlides(story, {
+    slides: ["cover", "what"], withPortrait: true,
+    illustrationUrls: [null, "https://cdn.test/ill-1.png"], fetchImpl,
+  });
+  assert.equal(slides[0].coverImagery, "none"); // cover kept its null slot (NOT backfilled with ill-1)
+  // ill-1 belongs to slide 2 ("what"), so it IS still fetched — just never for the cover.
+  assert.ok(calls.includes("https://cdn.test/ill-1.png"));
+});
+
 test("renderCarouselSlides: cover falls back to a CONTAINED org image only when no illustration", async () => {
   // Same org-only story but NO illustration supplied: the org image is the last
   // resort and IS fetched (better than the gradient), rendered contained.

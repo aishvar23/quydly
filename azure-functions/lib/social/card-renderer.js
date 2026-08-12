@@ -1694,11 +1694,18 @@ export async function renderCarouselSlides(story, { format = "jpeg", shape = "po
     // order. The cover is first, so it claims an illustration BEFORE any org/place
     // fallback. The generator sizes the set (plannedIllustrationCount) so every
     // gap — the cover included when it has no person photo — gets a distinct one.
-    const ill = (Array.isArray(illustrationUrls) ? illustrationUrls : []).filter(Boolean);
+    //
+    // illustrationUrls is POSITIONALLY aligned to the gap slots: illustration.js
+    // writes one scene per gap in order (scene 0 echoes the cover hook), and a
+    // per-image failure leaves a `null` at that slot. So DO NOT compact it — a
+    // leading/middle null would otherwise shift every later scene onto the wrong
+    // slide (e.g. the cover would inherit slide 2's scene). Keep the slots as-is
+    // and let the null-guard drop the failed one to the gradient floor.
+    const ill = Array.isArray(illustrationUrls) ? illustrationUrls : [];
     const gapKinds = contentKinds.filter((k) => !photoByKind[k]);
     const illByKind = {};
     await Promise.all(gapKinds.map(async (k, i) => {
-      if (!ill[i]) return;
+      if (!ill[i]) return; // no scene for this slot (never generated, or it failed) → gradient floor
       const dataUri = await fetchImageDataUri(ill[i], fetchImpl ? { fetchImpl } : {});
       if (dataUri) illByKind[k] = { dataUri }; // illustration — no caption (not a photo)
     }));
