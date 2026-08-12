@@ -48,6 +48,17 @@ function hookFingerprint(coverHook, coverHighlight) {
   return createHash("sha1").update(`${h.length}:${h}:${hl}`).digest("hex").slice(0, 12);
 }
 
+// Each illustration scene is now framed for a SPECIFIC slide kind, so the ORDERED
+// kinds list is part of the artwork identity: two calls for the same (story, hook)
+// with a different ordered kinds list of the same length (e.g. ['cover','what'] vs
+// ['what','keypoints']) produce different art and must NOT share a memo entry or
+// storage path. "nokinds" for the legacy count-only path (no per-kind framing).
+function kindsFingerprint(kinds) {
+  const list = Array.isArray(kinds) ? kinds.filter((k) => typeof k === "string") : [];
+  if (!list.length) return "nokinds";
+  return createHash("sha1").update(list.join(",")).digest("hex").slice(0, 8);
+}
+
 // A resolved football match drives the whole slide set (score/table/form), so it
 // is part of the slide bytes — fingerprint the match id + score + competition so
 // a corrected score re-renders to a FRESH path (never serves stale slides).
@@ -150,16 +161,17 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
   // slots (null where a scene/image/upload failed). Best-effort: the renderer
   // falls back to the brand-graphic floor for any null slot. Memoised so the
   // expensive generation runs at most once per (story, count).
-  async function buildIllustrations({ story, anthropic, kinds, count, hook, hookFp }) {
+  async function buildIllustrations({ story, anthropic, kinds, count, hook, variant }) {
     const results = await generateIllustrations({ anthropic, openaiKey, story, kinds, count, hook, logger });
     return Promise.all(results.map(async (r, i) => {
       if (!r) return null;
       try {
-        // The hook drives the generated scene (illustration.js keys concept +
-        // scenes off it), so it is part of the artwork identity: fingerprint it
-        // into the object path so a revised hook's art can't upsert-overwrite an
-        // earlier hook's assets (same discipline as the carousel `variant` path).
-        return await upload({ path: `cards/${story.id}/illustration/${hookFp}/${i}.png`, buffer: r.buffer, contentType: r.contentType });
+        // The hook AND the ordered slide kinds drive the generated scene
+        // (illustration.js frames each scene per kind and echoes the hook on the
+        // cover), so both are part of the artwork identity: fingerprint them into
+        // the object path so a different hook/kinds variant can't upsert-overwrite
+        // an earlier one's assets (same discipline as the carousel `variant` path).
+        return await upload({ path: `cards/${story.id}/illustration/${variant}/${i}.png`, buffer: r.buffer, contentType: r.contentType });
       } catch (err) {
         logger.warn(JSON.stringify({ event: "social_illustration_upload_failed", story_id: story.id, index: i, error: err.message }));
         return null;
@@ -176,13 +188,14 @@ export function createCardService({ supabase, env = process.env, logger = noopLo
       const slotKinds = Array.isArray(kinds) ? kinds : [];
       const n = slotKinds.length || count;
       if (!igIllustration || !anthropic || !story || story.id == null || n < 1) return [];
-      // The hook changes the generated artwork, so it is part of the cache
-      // identity: without it, a second call for the same (story, count) with a
-      // revised hook would return the first hook's art. Mirrors the carousel memo.
-      const hookFp = hookFingerprint(hook);
-      const key = `${story.id}:illustrations:${n}:${hookFp}`;
+      // The hook AND the ordered kinds change the generated artwork, so both are
+      // part of the cache identity: without them, a second call for the same
+      // (story, count) with a revised hook or a different ordered kinds list would
+      // return the first call's art. Mirrors the carousel memo/path discipline.
+      const variant = `${hookFingerprint(hook)}-${kindsFingerprint(slotKinds)}`;
+      const key = `${story.id}:illustrations:${n}:${variant}`;
       if (cache.has(key)) return cache.get(key);
-      const p = buildIllustrations({ story, anthropic, kinds: slotKinds, count: n, hook, hookFp }).catch((err) => {
+      const p = buildIllustrations({ story, anthropic, kinds: slotKinds, count: n, hook, variant }).catch((err) => {
         logger.warn(JSON.stringify({ event: "social_illustration_failed", story_id: story.id, error: err.message }));
         return [];
       });
