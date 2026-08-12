@@ -27,8 +27,28 @@
 //   - The enrichment result is intentionally storage-shaped: every value can
 //     be persisted as-is to the corresponding story column.
 
-const MODEL          = "claude-sonnet-4-6";
-const ENRICH_TOKENS  = 2048;
+import { MODEL_EDITORIAL } from "./models.js";
+import { logLlmUsage } from "./llmUsage.js";
+
+// Editorial tier: hook_sentence and why_it_matters are written for a viewer to
+// hear, and story_type / editorial_posture drive how the renderer frames the
+// whole video. This is composition, not extraction — it stays on Sonnet.
+const MODEL          = MODEL_EDITORIAL;
+
+// Output cap. This is the most expensive call in a synthesis (~42% of per-story
+// cost) and output bills at 5x input, so the cap is worth tuning — but it is a
+// HARD cut, not a nudge: a truncated response fails JSON.parse and the whole
+// enrichment degrades to emptyEnrichment(), losing every field on the row.
+//
+// Measured output on real stories averages ~1000 tokens, so the 1024 that the
+// 2026-08-11 cost review proposed would truncate roughly half of all stories —
+// a data-quality regression worth more than the tokens it saves. 1536 keeps
+// ~50% headroom over the average while still cutting 25% off the old 2048.
+//
+// To tighten further, first read the `llm_usage` telemetry: group op
+// "enrichment.enrich_narrative" by stop_reason and set the cap above the
+// output_tokens p99, not above the mean.
+const ENRICH_TOKENS  = 1536;
 const HOOK_MIN_WORDS = 8;
 const HOOK_MAX_WORDS = 22;
 // Match story-synthesizer/index.js CONTENT_TRUNCATE — both trim article bodies
@@ -127,14 +147,15 @@ export function emptyEnrichment() {
  * @param {{ category_id?: string, primary_entities?: string[] }} cluster
  * @param {Array<{ id, title, description?, content?, domain, canonical_url?, published_at? }>} articles
  * @param {{ headline: string, summary: string, key_points: string[] }} narrative
+ * @param {{ logger?: Function, cluster_id?: number }} [opts]  telemetry passthrough
  * @returns {Promise<ReturnType<typeof emptyEnrichment>>}
  */
-export async function enrichNarrative(ai, cluster, articles, narrative) {
+export async function enrichNarrative(ai, cluster, articles, narrative, opts = {}) {
   if (!ai || !articles?.length) return emptyEnrichment();
 
   let raw;
   try {
-    raw = await callEnrichmentLLM(ai, cluster, articles, narrative);
+    raw = await callEnrichmentLLM(ai, cluster, articles, narrative, opts);
   } catch {
     return emptyEnrichment();
   }
@@ -167,36 +188,30 @@ function markOk(result) {
 
 // ── LLM call ──────────────────────────────────────────────────────────────────
 
-async function callEnrichmentLLM(ai, cluster, articles, narrative) {
-  const articleBlocks = articles
-    .map((a, i) => {
-      const body = [
-        a.title,
-        a.description,
-        a.content ? a.content.slice(0, CONTENT_TRUNCATE_FOR_PROMPTS) : null,
-      ].filter(Boolean).join(" ");
-      return `[Article ${i + 1} — id=${a.id} — ${a.domain ?? "unknown"}]\n${body}`;
-    })
-    .join("\n\n");
-
-  const entityHints = Array.isArray(cluster?.primary_entities)
-    ? cluster.primary_entities.filter(Boolean).join(", ")
-    : "";
-
-  const prompt = `You are an enrichment pass for a news video pipeline. The story has already been
+// The instruction half of the prompt: role, response schema, and rules. Every
+// byte of it is derived from module constants, so it is IDENTICAL on every
+// synthesis — which is the whole point.
+//
+// Prompt caching is a PREFIX match: the cache key covers everything up to the
+// breakpoint, so anything that varies per story has to come after it. Until
+// 2026-08-11 this block sat *below* the article bodies in a single user
+// message, meaning the volatile part came first and none of it could ever
+// cache. It now goes in `system` (which renders before `messages`) with a
+// cache_control breakpoint, and the per-story content stays in the user turn.
+//
+// Built once at module load — a template literal rebuilt per call would produce
+// the same bytes, but computing it once makes the "this never varies" contract
+// explicit and impossible to break by accident with an interpolated value.
+//
+// If `llm_usage` shows cache_read_input_tokens stuck at 0 for this op, either
+// something volatile leaked into this string or it is under the model's
+// minimum cacheable prefix — in which case nothing is cached and nothing is
+// charged for caching either, so the failure mode is neutral, not costly.
+const ENRICHMENT_SPEC = `You are an enrichment pass for a news video pipeline. The story has already been
 synthesised; your job is to project structured fields the renderer needs.
 
-Synthesised story:
-- Headline: ${narrative.headline}
-- Summary:  ${narrative.summary}
-- Key points:
-${narrative.key_points.map((p, i) => `  ${i + 1}. ${p}`).join("\n")}
-
-Topic entities (hints, may be partial / messy): ${entityHints || "(none)"}
-Category: ${cluster?.category_id ?? "(unknown)"}
-
-Source articles:
-${articleBlocks}
+You will be given the synthesised story, topic-entity hints, a category, and the
+source articles.
 
 Respond ONLY with a single JSON object — no markdown fences, no preamble. Use this shape:
 {
@@ -250,11 +265,46 @@ Rules:
 - entity phonetic: only emit for non-English names or names where the spelling misleads English TTS (e.g. "Lula" → "LOO-lah", "Xi Jinping" → "SHEE jin-PING"). Use simple hyphenated syllables in caps for stressed parts. Omit for names that English TTS will read correctly.
 - Every field is required. If you have nothing for a field, emit the empty default (\`null\`, \`[]\`, or \`{...empty arrays...}\`).`;
 
+async function callEnrichmentLLM(ai, cluster, articles, narrative, { logger, cluster_id } = {}) {
+  const articleBlocks = articles
+    .map((a, i) => {
+      const body = [
+        a.title,
+        a.description,
+        a.content ? a.content.slice(0, CONTENT_TRUNCATE_FOR_PROMPTS) : null,
+      ].filter(Boolean).join(" ");
+      return `[Article ${i + 1} — id=${a.id} — ${a.domain ?? "unknown"}]\n${body}`;
+    })
+    .join("\n\n");
+
+  const entityHints = Array.isArray(cluster?.primary_entities)
+    ? cluster.primary_entities.filter(Boolean).join(", ")
+    : "";
+
+  // Everything below varies per story, so it all lives after the cache
+  // breakpoint. Adding anything story-specific to ENRICHMENT_SPEC above would
+  // silently disable caching for every synthesis.
+  const storyContext = `Synthesised story:
+- Headline: ${narrative.headline}
+- Summary:  ${narrative.summary}
+- Key points:
+${narrative.key_points.map((p, i) => `  ${i + 1}. ${p}`).join("\n")}
+
+Topic entities (hints, may be partial / messy): ${entityHints || "(none)"}
+Category: ${cluster?.category_id ?? "(unknown)"}
+
+Source articles:
+${articleBlocks}
+
+Emit the JSON object now.`;
+
   const msg = await ai.messages.create({
     model:      MODEL,
     max_tokens: ENRICH_TOKENS,
-    messages:   [{ role: "user", content: prompt }],
+    system:     [{ type: "text", text: ENRICHMENT_SPEC, cache_control: { type: "ephemeral" } }],
+    messages:   [{ role: "user", content: storyContext }],
   });
+  logLlmUsage(logger, "enrichment.enrich_narrative", msg, { cluster_id });
   return msg?.content?.[0]?.text?.trim() ?? "";
 }
 

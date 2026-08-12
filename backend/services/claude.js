@@ -1,6 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
+// Shared telemetry helper. azure-functions/lib is the repo's canonical shared-utils
+// home and is already imported across the app boundary by api/social-review.js,
+// so this resolves in the Vercel build the same way that one does.
+import { logLlmUsage } from "../../azure-functions/lib/llmUsage.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Deliberately NOT azure-functions/lib/models.js MODEL_EDITORIAL: the daily quiz
+// is the product surface, and it should not change tier because someone flipped
+// a pipeline app setting during a cost experiment.
 const MODEL  = "claude-sonnet-4-6";
 
 const REQUIRED_KEYS  = ["question", "options", "correctIndex", "tldr", "categoryId"];
@@ -92,6 +99,7 @@ Respond ONLY with valid JSON, no markdown:
     max_tokens: 768,
     messages:   [{ role: "user", content: prompt }],
   });
+  logLlmUsage(null, "quiz.generate_question", message, { category_id: categoryId });
 
   const raw = message.content[0].text.trim();
   let parsed;
@@ -168,6 +176,7 @@ Respond ONLY with valid JSON, no markdown:
     max_tokens: 256,
     messages:   [{ role: "user", content: prompt }],
   });
+  logLlmUsage(null, "quiz.critique_question", message, { category_id: generated.categoryId });
 
   const raw = message.content[0].text.trim();
   let critique;

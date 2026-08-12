@@ -11,6 +11,8 @@ import {
 import { cashtagsFor } from "./_cashtags.js";
 import { buildAuthHeader } from "../x-oauth1.js";
 import { validateMCQ, parseJSONFromLLM } from "../mcq.js";
+import { MODEL_EDITORIAL } from "../../models.js";
+import { logLlmUsage } from "../../llmUsage.js";
 
 export const PLATFORM = "x";
 
@@ -240,7 +242,7 @@ Respond ONLY with JSON, no markdown: { "post_text": "..." }`;
 
 // ── Structured quiz question (for the shareable answer page) ────────────────────
 // Model kept in sync with the daily-quiz generator (backend/services/claude.js).
-const QUESTION_MODEL = "claude-sonnet-4-6";
+const QUESTION_MODEL = MODEL_EDITORIAL;
 
 function buildQuestionPrompt(story, audienceGeo) {
   const facts = keyPointStrings(story).map((k, i) => `${i + 1}. ${k}`).join("\n") || "(none)";
@@ -282,6 +284,9 @@ export async function generateQuizQuestion({ anthropic, story, audienceGeo, logg
       model: QUESTION_MODEL,
       max_tokens: 768,
       messages: [{ role: "user", content: buildQuestionPrompt(story, audienceGeo) }],
+    });
+    logLlmUsage(logger, "social.x_quiz_question", msg, {
+      platform: "x", story_id: story?.id, audience_geo: audienceGeo,
     });
 
     const q = parseJSONFromLLM(msg?.content?.[0]?.text);

@@ -13,7 +13,8 @@ import assert from "node:assert/strict";
 import {
   buildSourceDocuments,
   mergeSourceDocuments,
-  extractQuotes,
+  extractFactsAndQuotes,
+  verifyQuotes,
   attachWikipediaToEntities,
   quoteHasCompleteTail,
   mergeEntityAndClusterGeos,
@@ -288,17 +289,35 @@ test("P1-8 merged-source diversity reflects the union, not just the new pickup",
     `pre-fix score ${incomingOnly.score} should be below merged ${mergedDiversity.score}`);
 });
 
-// ── P0-2: extractQuotes verbatim verification ─────────────────────────────────
+// ── P0-2: verbatim quote verification ─────────────────────────────────────────
+//
+// Quote candidates arrive inside the pass-1 extraction response (see
+// extractFactsAndQuotes); `verifyQuotes` is the gate they have to clear. These
+// cases drive the verifier directly on the parsed candidate array — same inputs
+// and same assertions as when they ran through a stubbed LLM call, minus a stub
+// that was only ever standing in for JSON.parse.
 
 function makeStubAi(text) {
   return {
     messages: {
-      create: async () => ({ content: [{ text }] }),
+      create: async () => ({ content: [{ text }], model: "stub", usage: {} }),
     },
   };
 }
 
-test("P0-2 extractQuotes accepts quotes that appear verbatim in their claimed source", async () => {
+// Mirror the caller's parse-then-verify path, including its tolerance of a
+// response body that isn't JSON at all.
+function verifyQuotesFromLlm(text, articles) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
+  }
+  return verifyQuotes(parsed, articles);
+}
+
+test("P0-2 verifyQuotes accepts quotes that appear verbatim in their claimed source", async () => {
   const articles = makeArticles();
   const llmResponse = JSON.stringify([
     {
@@ -308,14 +327,14 @@ test("P0-2 extractQuotes accepts quotes that appear verbatim in their claimed so
       role: "judge",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 1);
   assert.equal(verified[0].source_id, 10);
   assert.equal(verified[0].speaker, "Lewis Kaplan");
   assert.equal(verified[0].role, "judge");
 });
 
-test("P0-2 extractQuotes rejects paraphrased quotes that do not appear verbatim", async () => {
+test("P0-2 verifyQuotes rejects paraphrased quotes that do not appear verbatim", async () => {
   const articles = makeArticles();
   const llmResponse = JSON.stringify([
     {
@@ -325,11 +344,11 @@ test("P0-2 extractQuotes rejects paraphrased quotes that do not appear verbatim"
       role: "judge",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 0, "paraphrased quote must not pass the verbatim guard");
 });
 
-test("P0-2 extractQuotes verbatim check tolerates curly-quote and whitespace drift", async () => {
+test("P0-2 verifyQuotes verbatim check tolerates curly-quote and whitespace drift", async () => {
   const articles = [
     {
       id: 7,
@@ -345,31 +364,95 @@ test("P0-2 extractQuotes verbatim check tolerates curly-quote and whitespace dri
       speaker: "She",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 1, "smart quotes in source must not block a straight-quote LLM response");
 });
 
-test("P0-2 extractQuotes rejects out-of-range source_index values", async () => {
+test("P0-2 verifyQuotes rejects out-of-range source_index values", async () => {
   const articles = makeArticles();
   const llmResponse = JSON.stringify([
     { source_index: 99, text: "anything", speaker: "x" },
     { source_index: 0,  text: "anything", speaker: "x" },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 0);
 });
 
-test("P0-2 extractQuotes returns [] on malformed LLM JSON without throwing", async () => {
-  const verified = await extractQuotes(makeStubAi("not json"), makeArticles());
+test("P0-2 verifyQuotes returns [] on malformed LLM JSON without throwing", async () => {
+  const verified = verifyQuotesFromLlm("not json", makeArticles());
   assert.deepEqual(verified, []);
 });
 
-test("P0-2 extractQuotes drops too-short quotes", async () => {
+// ── Pass 1: facts and quotes come from ONE call, with asymmetric failure policy ─
+//
+// Facts are load-bearing (they feed the narrative and the quality audit), so a
+// bad response has to throw and let the caller's retry loop rerun it. Quotes are
+// decoration — a missing or malformed quotes array must never cost us the story.
+
+test("pass 1 returns facts and verified quotes from a single Anthropic call", async () => {
+  const articles = makeArticles();
+  let calls = 0;
+  const ai = {
+    messages: {
+      create: async () => {
+        calls++;
+        return {
+          model: "stub",
+          usage: {},
+          content: [{ text: JSON.stringify({
+            facts: [{ fact: "A thing happened", type: "event", source_count: 2 }],
+            quotes: [{
+              source_index: 1,
+              text: articles[0].content.match(/"([^"]+)"/)?.[1] ?? articles[0].content,
+              speaker: "Speaker",
+            }],
+          }) }],
+        };
+      },
+    },
+  };
+
+  const { facts, quotes } = await extractFactsAndQuotes(ai, articles);
+  assert.equal(calls, 1, "facts and quotes must not cost two requests");
+  assert.equal(facts.length, 1);
+  assert.ok(Array.isArray(quotes));
+});
+
+test("pass 1 throws when `facts` is missing so the caller's retry loop reruns it", async () => {
+  await assert.rejects(
+    () => extractFactsAndQuotes(makeStubAi(JSON.stringify({ quotes: [] })), makeArticles()),
+    /expected a JSON object with a `facts` array/,
+  );
+});
+
+test("pass 1 throws on a non-JSON response", async () => {
+  await assert.rejects(
+    () => extractFactsAndQuotes(makeStubAi("not json"), makeArticles()),
+    /Pass 1 invalid JSON/,
+  );
+});
+
+test("pass 1 degrades to zero quotes rather than failing when `quotes` is malformed", async () => {
+  for (const badQuotes of ['"not an array"', "null", "{}"]) {
+    const body = `{"facts":[{"fact":"f","type":"event","source_count":1}],"quotes":${badQuotes}}`;
+    const { facts, quotes } = await extractFactsAndQuotes(makeStubAi(body), makeArticles());
+    assert.equal(facts.length, 1, `facts should survive quotes=${badQuotes}`);
+    assert.deepEqual(quotes, [], `quotes should degrade to [] for quotes=${badQuotes}`);
+  }
+});
+
+test("pass 1 degrades to zero quotes when `quotes` is absent entirely", async () => {
+  const body = JSON.stringify({ facts: [{ fact: "f", type: "event", source_count: 1 }] });
+  const { quotes } = await extractFactsAndQuotes(makeStubAi(body), makeArticles());
+  assert.deepEqual(quotes, []);
+});
+
+test("P0-2 verifyQuotes drops too-short quotes", async () => {
   const articles = [{ id: 1, title: "ok ok ok", content: "ok yes", domain: "x.com" }];
   const llmResponse = JSON.stringify([
     { source_index: 1, text: "ok yes", speaker: "Speaker" },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 0, "below-minimum-words quotes filtered out");
 });
 
@@ -377,7 +460,7 @@ test("P0-2 extractQuotes drops too-short quotes", async () => {
 // to "well", which would let a paraphrased quote slip past the verbatim
 // guard. The normaliser must keep apostrophes intact and only fold curly /
 // straight typography drift.
-test("P0-2 extractQuotes preserves apostrophes — paraphrase that drops a contraction must reject", async () => {
+test("P0-2 verifyQuotes preserves apostrophes — paraphrase that drops a contraction must reject", async () => {
   const articles = [
     { id: 1, title: "t", content: "We'll meet at the courthouse on Monday morning at nine.", domain: "x.com" },
   ];
@@ -388,11 +471,11 @@ test("P0-2 extractQuotes preserves apostrophes — paraphrase that drops a contr
       speaker: "Counsel",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 0, "dropping the apostrophe in 'we'll' must not be treated as verbatim");
 });
 
-test("P0-2 extractQuotes tolerates curly→straight apostrophe drift in contractions", async () => {
+test("P0-2 verifyQuotes tolerates curly→straight apostrophe drift in contractions", async () => {
   const articles = [
     // Article uses curly U+2019; LLM returns straight apostrophe.
     { id: 1, title: "t", content: "He said, “We’ll meet at the courthouse on Monday morning.”", domain: "x.com" },
@@ -404,7 +487,7 @@ test("P0-2 extractQuotes tolerates curly→straight apostrophe drift in contract
       speaker: "He",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 1, "curly apostrophe in source must accept matching straight-apostrophe LLM output");
 });
 
@@ -741,7 +824,7 @@ test("P3-2 quoteHasCompleteTail is case-insensitive on the last word", () => {
   assert.equal(quoteHasCompleteTail("The Verdict Is"), false);
 });
 
-test("P3-2 extractQuotes integrates the tail validator — rejects trailing 'and'", async () => {
+test("P3-2 verifyQuotes integrates the tail validator — rejects trailing 'and'", async () => {
   // Reuses makeArticles() / makeStubAi from earlier in this file.
   const articles = makeArticles();
   // Build an article whose body ends mid-sentence on 'and' — mirrors what
@@ -762,12 +845,12 @@ test("P3-2 extractQuotes integrates the tail validator — rejects trailing 'and
       role: "Iran's parliament speaker",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 0,
     "P3-2 must reject the truncated quote even though it's verbatim");
 });
 
-test("P3-2 extractQuotes still accepts complete quotes after the new gate", async () => {
+test("P3-2 verifyQuotes still accepts complete quotes after the new gate", async () => {
   const articles = makeArticles();
   const llmResponse = JSON.stringify([
     {
@@ -777,7 +860,7 @@ test("P3-2 extractQuotes still accepts complete quotes after the new gate", asyn
       role: "judge",
     },
   ]);
-  const verified = await extractQuotes(makeStubAi(llmResponse), articles);
+  const verified = verifyQuotesFromLlm(llmResponse, articles);
   assert.equal(verified.length, 1, "complete-tail quote must still pass");
 });
 

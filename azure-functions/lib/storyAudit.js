@@ -5,6 +5,8 @@
 // persistAudit(supabase, story_id, auditResult, now) → writes to stories + story_quality_audits
 
 import Anthropic from "@anthropic-ai/sdk";
+import { MODEL_EXTRACTION } from "./models.js";
+import { logLlmUsage } from "./llmUsage.js";
 
 let _anthropic = null;
 function getAnthropic() {
@@ -12,7 +14,10 @@ function getAnthropic() {
   return _anthropic;
 }
 
-const MODEL = "claude-sonnet-4-6";
+// Extraction tier: this pass scores a fixed rubric into four numeric fields and
+// a closed flag vocabulary, and the decision is made by the THRESHOLDS below,
+// not by the model's prose. The judgement that matters is local.
+const MODEL = MODEL_EXTRACTION;
 
 const THRESHOLDS = {
   specificity_score: 0.6,
@@ -27,15 +32,20 @@ const BLOCKING_FLAGS = ["HOLLOW_STORY", "MIXED_STORY", "UNSUPPORTED_FACTS"];
  * Score a story for quiz-generation suitability.
  * @param {{ headline, summary, key_points, confidence_score, source_count }} story
  * @param {Array<{ fact, type, source_count }>} facts  — pass1 extracted facts (optional)
- * @param {{ backfillMode?: boolean }} opts
+ * @param {{ backfillMode?: boolean, logger?: Function, cluster_id?: number, story_id?: number }} opts
  *   backfillMode: true when auditing pre-existing stories without stored extracted facts.
  *   In this mode the support_score threshold is not enforced and the prompt makes clear
  *   that extracted facts are unavailable, so Claude grades on internal consistency only.
  *   Scores are still stored and comparable for quiz-pool ranking.
+ *   logger / cluster_id / story_id: passed through to the llm_usage telemetry line.
  * @returns {Promise<{ specificity_score, coherence_score, support_score, quizability_score,
  *                     quality_flags, quiz_candidate, decision, reason }>}
  */
-export async function auditStory(story, facts = [], { backfillMode = false } = {}) {
+export async function auditStory(
+  story,
+  facts = [],
+  { backfillMode = false, logger, cluster_id, story_id } = {},
+) {
   const ai = getAnthropic();
 
   const factsSection = facts.length > 0
@@ -108,6 +118,7 @@ Respond ONLY with valid JSON, no markdown:
     max_tokens: 512,
     messages:   [{ role: "user", content: prompt }],
   });
+  logLlmUsage(logger, "story_audit.audit_story", msg, { cluster_id, story_id, backfill: backfillMode });
 
   const raw = msg.content[0].text.trim();
   let scores;

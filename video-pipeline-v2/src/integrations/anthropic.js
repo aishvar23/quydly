@@ -1,19 +1,24 @@
 'use strict';
 
 const Anthropic = require('@anthropic-ai/sdk');
+// Spend gate — this pipeline bills to its own key, not the production one.
+// See scripts/lib/video-anthropic-key.cjs.
+const {
+  hasVideoAnthropicKey, requireVideoAnthropicKey,
+} = require('../../../scripts/lib/video-anthropic-key.cjs');
 
 // Sonnet 4.6 — capable + fast for structured editorial generation.
 const DEFAULT_MODEL = 'claude-sonnet-4-5';
 let cachedClient = null;
 
 function hasAnthropic() {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+  return hasVideoAnthropicKey();
 }
 
 function getClient() {
   if (!cachedClient) {
     const Ctor = Anthropic.default || Anthropic;
-    cachedClient = new Ctor({ apiKey: process.env.ANTHROPIC_API_KEY });
+    cachedClient = new Ctor({ apiKey: requireVideoAnthropicKey('video-pipeline-v2') });
   }
   return cachedClient;
 }
@@ -22,7 +27,7 @@ function getClient() {
 // 1024-token threshold (or grows in future slices), Anthropic will cache it.
 async function completeJSON({ system, prompt, maxTokens = 1800 }) {
   if (!hasAnthropic()) {
-    throw new Error('ANTHROPIC_API_KEY not set');
+    requireVideoAnthropicKey('video-pipeline-v2'); // throws with the remediation
   }
   const client = getClient();
   const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;

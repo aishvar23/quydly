@@ -10,8 +10,10 @@
 // likeness, so it is editorial illustration, not a misinformation/defamation risk.
 
 import { keyPointStrings } from "./platforms/_shared.js";
+import { MODEL_EDITORIAL } from "../models.js";
+import { logLlmUsage } from "../llmUsage.js";
 
-const CONCEPT_MODEL = "claude-sonnet-4-6";
+const CONCEPT_MODEL = MODEL_EDITORIAL;
 const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
 // 3:2 landscape suits the full-width cover hero; objectFit:cover handles the rest.
 const IMAGE_SIZE = "1536x1024";
@@ -48,6 +50,7 @@ async function writeScene({ anthropic, story, logger }) {
       system: ILLUSTRATION_CONCEPT_SYSTEM,
       messages: [{ role: "user", content: buildConceptPrompt(story) }],
     });
+    logLlmUsage(logger, "social.illustration_scene", msg, { story_id: story?.id });
     const raw = String(msg?.content?.[0]?.text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
     const scene = JSON.parse(raw)?.scene;
     return typeof scene === "string" ? scene.trim() : "";
@@ -120,6 +123,7 @@ async function writeScenes({ anthropic, story, count, logger }) {
       system: ILLUSTRATION_SCENES_SYSTEM,
       messages: [{ role: "user", content: buildScenesPrompt(story, count) }],
     });
+    logLlmUsage(logger, "social.illustration_scenes", msg, { story_id: story?.id, scene_count: count });
     const raw = String(msg?.content?.[0]?.text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
     const scenes = JSON.parse(raw)?.scenes;
     return Array.isArray(scenes) ? scenes.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()) : [];

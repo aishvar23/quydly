@@ -3,19 +3,21 @@
 const AnthropicModule = require('@anthropic-ai/sdk');
 
 const Anthropic = AnthropicModule.default || AnthropicModule;
+// Spend gate — this pipeline bills to its own key, not the production one.
+// See scripts/lib/video-anthropic-key.cjs.
+const {
+  hasVideoAnthropicKey, requireVideoAnthropicKey,
+} = require('../../../scripts/lib/video-anthropic-key.cjs');
 
 let client = null;
 
 function hasAnthropic() {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+  return hasVideoAnthropicKey();
 }
 
 function getClient() {
-  if (!hasAnthropic()) {
-    throw new Error('ANTHROPIC_API_KEY is required for AI generation');
-  }
   if (!client) {
-    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    client = new Anthropic({ apiKey: requireVideoAnthropicKey('evidence-first-video-pipeline') });
   }
   return client;
 }
